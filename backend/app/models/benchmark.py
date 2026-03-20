@@ -1,0 +1,65 @@
+from __future__ import annotations
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional, Literal
+
+
+class BenchmarkJobRequest(BaseModel):
+    # Videa lze zadat buď přes video_ids z knihovny, nebo přímo přes URLs/cesty
+    video_ids: Optional[list[str]] = Field(default=None, description="Video IDs z knihovny")
+    sources: Optional[list[str]] = Field(default=None, description="Přímé YouTube URLs nebo lokální cesty")
+
+    model_ids: Optional[list[str]] = None      # None = all default models
+    setting_ids: Optional[list[str]] = None    # None = all default settings
+    sample_seconds: int = 120                  # default 120s dle specifikace
+    evaluation_mode: Literal["real", "synthetic"] = "real"
+    clip_strategy: Literal["random", "uniform"] = "random"
+    clip_seed: Optional[int] = None
+    label: Optional[str] = None
+    scenario_id: Optional[str] = None         # reference na uložený scénář
+
+    @model_validator(mode="after")
+    def check_sources(self) -> "BenchmarkJobRequest":
+        if not self.video_ids and not self.sources:
+            raise ValueError("Zadej buď video_ids (z knihovny) nebo sources (přímé URLs)")
+        return self
+
+
+class BenchmarkJobStatus(BaseModel):
+    job_id: str
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    label: Optional[str] = None
+    created_at: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    progress_message: Optional[str] = None
+    error: Optional[str] = None
+    run_id: Optional[str] = None
+    result_url: Optional[str] = None
+    conditions_clean: Optional[bool] = None   # HW podmínky byly čisté?
+    video_ids: Optional[list[str]] = None     # videa z requestu (pro live embed)
+
+
+class Scenario(BaseModel):
+    scenario_id: str
+    description: Optional[str] = None
+    clip_seconds: int = 120
+    clip_seed: Optional[int] = None
+    model_ids: list[str] = []
+    setting_ids: list[str] = []
+    video_ids: list[str] = []
+    created_at: Optional[str] = None
+
+
+class JobListResponse(BaseModel):
+    jobs: list[BenchmarkJobStatus]
+
+
+class LiveJobProgress(BaseModel):
+    """Live data z running jobu: progress + HW série pro grafy."""
+    job_id: str
+    status: str
+    percent: int = 0
+    message: str = ""
+    updated_at: Optional[str] = None
+    # Série HW vzorků [{cpu: float, ram_mb: float}, ...] — posledních 120 (60s)
+    hw_series: list[dict] = []

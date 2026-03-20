@@ -1,0 +1,201 @@
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../api/client'
+import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem } from '../types'
+import { StatusBadge } from '../components/StatusBadge'
+import { LiveJobPanel } from '../components/LiveJobPanel'
+
+export function BenchmarkPage() {
+  const [options, setOptions] = useState<BenchmarkOptions | null>(null)
+  const [library, setLibrary] = useState<LibraryItem[]>([])
+  const [selectedVideos, setSelectedVideos] = useState<string[]>([])
+  const [selectedModels, setSelectedModels] = useState<string[]>(['whisper_cpp_small'])
+  const [selectedSettings, setSelectedSettings] = useState<string[]>(['balanced'])
+  const [clipSeconds, setClipSeconds] = useState(120)
+  const [clipSeed, setClipSeed] = useState<number | ''>('')
+  const [label, setLabel] = useState('')
+  const [jobs, setJobs] = useState<BenchmarkJobStatus[]>([])
+  const [msg, setMsg] = useState('')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    Promise.all([api.benchmark.options(), api.library.list()])
+      .then(([opts, lib]) => { setOptions(opts); setLibrary(lib) })
+    loadJobs()
+  }, [])
+
+  async function loadJobs() {
+    const { jobs } = await api.benchmark.listJobs()
+    setJobs(jobs)
+    // Poll pokud běží job
+    const running = jobs.some(j => j.status === 'pending' || j.status === 'running')
+    if (running && !pollRef.current) {
+      pollRef.current = setInterval(async () => {
+        const { jobs: fresh } = await api.benchmark.listJobs()
+        setJobs(fresh)
+        if (!fresh.some(j => j.status === 'pending' || j.status === 'running')) {
+          clearInterval(pollRef.current!); pollRef.current = null
+        }
+      }, 2000)
+    }
+  }
+
+  function toggleItem<T>(arr: T[], item: T): T[] {
+    return arr.includes(item) ? arr.filter(x => x !== item) : [...arr, item]
+  }
+
+  async function startBenchmark() {
+    if (!selectedVideos.length) { setMsg('Vyber alespoň jedno video.'); return }
+    if (!selectedModels.length) { setMsg('Vyber alespoň jeden model.'); return }
+    setMsg('')
+    try {
+      await api.benchmark.createJob({
+        video_ids: selectedVideos,
+        model_ids: selectedModels,
+        setting_ids: selectedSettings,
+        sample_seconds: clipSeconds,
+        clip_seed: clipSeed === '' ? undefined : clipSeed,
+        label: label || undefined,
+      })
+      await loadJobs()
+    } catch (e: any) { setMsg(`Chyba: ${e.message}`) }
+  }
+
+  async function cancelJob(id: string) {
+    await api.benchmark.cancelJob(id)
+    await loadJobs()
+  }
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-xl font-bold">Benchmark</h1>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Výběr videí */}
+        <div className="bg-white rounded border border-gray-200 p-4">
+          <h2 className="font-semibold text-sm mb-3 text-gray-700">Videa</h2>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {library.map(item => (
+              <label key={item.video_id} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={selectedVideos.includes(item.video_id)}
+                  onChange={() => setSelectedVideos(v => toggleItem(v, item.video_id))} />
+                <span className="truncate" title={item.title}>
+                  {item.title}
+                  {!item.subtitles_local && <span className="text-orange-400 ml-1 text-xs">(bez titulků)</span>}
+                </span>
+              </label>
+            ))}
+            {library.length === 0 && <span className="text-gray-400 text-xs">Knihovna prázdná.</span>}
+          </div>
+        </div>
+
+        {/* Modely */}
+        <div className="bg-white rounded border border-gray-200 p-4">
+          <h2 className="font-semibold text-sm mb-3 text-gray-700">Modely</h2>
+          <div className="space-y-1">
+            {options?.models.map(m => (
+              <label key={m.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={selectedModels.includes(m.id)}
+                  onChange={() => setSelectedModels(v => toggleItem(v, m.id))} />
+                <span>{m.label}</span>
+              </label>
+            ))}
+          </div>
+          <h2 className="font-semibold text-sm mt-4 mb-2 text-gray-700">Nastavení</h2>
+          <div className="space-y-1">
+            {options?.settings.map(s => (
+              <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={selectedSettings.includes(s.id)}
+                  onChange={() => setSelectedSettings(v => toggleItem(v, s.id))} />
+                <span>{s.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Parametry */}
+        <div className="bg-white rounded border border-gray-200 p-4 space-y-3">
+          <h2 className="font-semibold text-sm mb-1 text-gray-700">Parametry</h2>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Délka klipu (s)</label>
+            <input type="number" value={clipSeconds} onChange={e => setClipSeconds(+e.target.value)}
+              className="border rounded px-2 py-1 text-sm w-24" min={10} max={3600} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Seed (prázdné = náhodný)</label>
+            <input type="number" value={clipSeed} onChange={e => setClipSeed(e.target.value === '' ? '' : +e.target.value)}
+              placeholder="42" className="border rounded px-2 py-1 text-sm w-24" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Popis runu</label>
+            <input value={label} onChange={e => setLabel(e.target.value)}
+              placeholder="volitelný popis" className="border rounded px-2 py-1 text-sm" />
+          </div>
+          <button onClick={startBenchmark}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded text-sm font-medium mt-2">
+            Spustit benchmark
+          </button>
+          {msg && <p className="text-sm text-red-600">{msg}</p>}
+        </div>
+      </div>
+
+      {/* Live panel pro právě běžící job */}
+      {jobs.filter(j => j.status === 'running' || j.status === 'pending').map(j => (
+        <LiveJobPanel key={j.job_id} job={j} />
+      ))}
+
+      {/* Seznam jobů */}
+      <div className="bg-white rounded border border-gray-200">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="font-semibold text-sm text-gray-700">Joby</h2>
+          <button onClick={loadJobs} className="text-xs text-blue-600 hover:underline">Obnovit</button>
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
+            <tr>
+              <th className="px-4 py-2 text-left">Job ID</th>
+              <th className="px-4 py-2 text-left">Popis</th>
+              <th className="px-4 py-2 text-left">Stav</th>
+              <th className="px-4 py-2 text-left">Podmínky HW</th>
+              <th className="px-4 py-2 text-left">Zpráva</th>
+              <th className="px-4 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.map(job => (
+              <tr key={job.job_id} className="border-t border-gray-100">
+                <td className="px-4 py-2 font-mono text-xs text-gray-500">{job.job_id.slice(-8)}</td>
+                <td className="px-4 py-2 text-gray-700">{job.label || '–'}</td>
+                <td className="px-4 py-2"><StatusBadge status={job.status} /></td>
+                <td className="px-4 py-2 text-xs">
+                  {job.conditions_clean == null ? '–'
+                    : job.conditions_clean
+                    ? <span className="text-green-600">OK</span>
+                    : <span className="text-orange-500">Zatizeny system</span>}
+                </td>
+                <td className="px-4 py-2 text-xs text-gray-500 max-w-xs truncate">
+                  {job.error
+                    ? <span className="text-red-500">{job.error.slice(0, 80)}</span>
+                    : job.progress_message || '–'}
+                </td>
+                <td className="px-4 py-2">
+                  {(job.status === 'pending' || job.status === 'running') && (
+                    <button onClick={() => cancelJob(job.job_id)}
+                      className="text-xs text-red-500 hover:underline">Zrušit</button>
+                  )}
+                  {job.status === 'completed' && job.run_id && (
+                    <a href={`/results?run=${job.run_id}`} className="text-xs text-blue-600 hover:underline">
+                      Výsledky
+                    </a>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {jobs.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400 text-sm">Zatím žádné joby.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
