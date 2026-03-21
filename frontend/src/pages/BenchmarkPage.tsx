@@ -4,6 +4,7 @@ import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor
 import { StatusBadge } from '../components/StatusBadge'
 import { LiveJobPanel } from '../components/LiveJobPanel'
 import { MicSession } from '../components/MicSession'
+import { ModelParamsForm } from '../components/ModelParamsForm'
 
 type Tab = 'benchmark' | 'mic'
 type EvalMode = 'synthetic' | 'streaming' | 'real'
@@ -20,6 +21,7 @@ export function BenchmarkPage() {
   const [clipSeed, setClipSeed] = useState<number | ''>('')
   const [label, setLabel] = useState('')
   const [evalMode, setEvalMode] = useState<EvalMode>('synthetic')
+  const [perModelParams, setPerModelParams] = useState<Record<string, Record<string, unknown>>>({})
   const [jobs, setJobs] = useState<BenchmarkJobStatus[]>([])
   const [msg, setMsg] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -65,6 +67,7 @@ export function BenchmarkPage() {
         clip_seed: clipSeed === '' ? undefined : clipSeed,
         label: label || undefined,
         evaluation_mode: evalMode,
+        model_params: Object.keys(perModelParams).length > 0 ? perModelParams : undefined,
       })
       await loadJobs()
     } catch (e: any) { setMsg(`Chyba: ${e.message}`) }
@@ -179,8 +182,26 @@ export function BenchmarkPage() {
         </div>
       </div>
 
-      {/* Live panel pro právě běžící job */}
-      {jobs.filter(j => j.status === 'running' || j.status === 'pending').map(j => (
+      {/* Req 6: Per-model params */}
+      {registry.filter(d => selectedModels.includes(d.model_id) && d.params.length > 0).map(d => (
+        <details key={d.model_id} className="bg-gray-800 rounded border border-gray-700 text-sm">
+          <summary className="cursor-pointer px-4 py-2 text-gray-300 hover:text-white select-none font-medium">
+            ⚙ Parametry: {d.label}
+          </summary>
+          <div className="px-4 pb-3 pt-2">
+            <ModelParamsForm
+              modelId={d.model_id}
+              params={d.params}
+              values={perModelParams[d.model_id] ?? {}}
+              onChange={vals => setPerModelParams(prev => ({ ...prev, [d.model_id]: vals }))}
+              compact={false}
+            />
+          </div>
+        </details>
+      ))}
+
+      {/* Live panel pro běžící i dokončené joby (Req 1: panel se nezavírá) */}
+      {jobs.filter(j => ['running', 'pending', 'completed', 'failed'].includes(j.status)).slice(0, 3).map(j => (
         <LiveJobPanel key={j.job_id} job={j} />
       ))}
 

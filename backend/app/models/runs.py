@@ -24,6 +24,7 @@ class SourceMetric(BaseModel):
     cer: Optional[float] = None
     latency_ms: Optional[float] = None
     rtf: Optional[float] = None
+    engine_elapsed_seconds: Optional[float] = None  # Req 7: doba přepisu
     model_runtime_config: Optional[dict[str, Any]] = None
 
 

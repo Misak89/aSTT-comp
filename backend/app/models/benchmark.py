@@ -63,6 +63,10 @@ class LiveJobProgress(BaseModel):
     status: str
     percent: int = 0
     message: str = ""
+    message_log: list[str] = []        # Req 1: historie všech zpráv (nemaže se)
     updated_at: Optional[str] = None
-    # Série HW vzorků [{cpu: float, ram_mb: float}, ...] — posledních 120 (60s)
-    hw_series: list[dict] = []
+    hw_series: list[dict] = []         # Série HW vzorků — posledních 120 (60s)
+    transcript: str = ""               # Req 2: poslední transkript (live nebo finální)
+    pre_cpu: Optional[float] = None    # Req 3: CPU% před spuštěním benchmarku
+    pre_ram_mb: Optional[float] = None # Req 3: RAM MB před spuštěním benchmarku
+    model_params_used: dict = {}       # Req 4: přesné nastavení modelu

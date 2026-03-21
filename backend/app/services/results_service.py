@@ -54,6 +54,7 @@ def get_run(run_id: str) -> Optional[RunDetail]:
                     cer=sm.get("cer"),
                     latency_ms=sm.get("latency_ms"),
                     rtf=sm.get("rtf"),
+                    engine_elapsed_seconds=sm.get("engine_elapsed_seconds"),
                     model_runtime_config=sm.get("model_runtime_config"),
                 )
                 for sm in r.get("source_metrics", [])

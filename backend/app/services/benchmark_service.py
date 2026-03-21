@@ -37,6 +37,10 @@ _lock = threading.Lock()
 _job_hw_series: dict[str, list[dict]] = {}
 _MAX_HW_SERIES = 120
 
+# Historie progress zpráv per job (req 1: zprávy nesmí zmizet)
+_job_message_log: dict[str, list[str]] = {}
+_MAX_LOG = 100
+
 _WORKER = Path(__file__).parent.parent.parent.parent / "scripts" / "benchmark_worker.py"
 
 DEFAULT_MODELS = [
@@ -81,6 +85,9 @@ def create_job(req: BenchmarkJobRequest) -> BenchmarkJobStatus:
         "result_url": None,
         "conditions_clean": None,
         "video_ids": req.video_ids,
+        "model_params_used": req.model_params or {},
+        "pre_cpu": None,
+        "pre_ram_mb": None,
         "request": req.model_dump(),
     }
     with _lock:
@@ -102,7 +109,7 @@ def get_job(job_id: str) -> Optional[BenchmarkJobStatus]:
 
 
 def get_live_progress(job_id: str) -> Optional[LiveJobProgress]:
-    """Vrátí live data z running jobu: progress.json + aktuální HW série."""
+    """Vrátí live data z running jobu: progress.json + aktuální HW série + transcript."""
     with _lock:
         job = _jobs.get(job_id)
     if not job:
@@ -111,6 +118,7 @@ def get_live_progress(job_id: str) -> Optional[LiveJobProgress]:
     percent = 0
     message = job.get("progress_message") or ""
     updated_at = None
+    transcript = ""
     progress_file = JOBS_ROOT / job_id / "progress.json"
     try:
         if progress_file.exists():
@@ -118,19 +126,38 @@ def get_live_progress(job_id: str) -> Optional[LiveJobProgress]:
             percent = data.get("percent", 0)
             message = data.get("message", message)
             updated_at = data.get("updated_at")
+            transcript = data.get("transcript", "")
     except Exception:
         pass
 
+    # Po dokončení: přečti transcript z worker_result.json (req 2)
+    if not transcript and job.get("status") == "completed":
+        try:
+            result_file = JOBS_ROOT / job_id / "worker_result.json"
+            if result_file.exists():
+                rdata = json.loads(result_file.read_text(encoding="utf-8"))
+                results = rdata.get("payload", {}).get("results", [])
+                parts = [r.get("transcript_text", "") for r in results if r.get("transcript_text")]
+                transcript = "\n\n---\n\n".join(parts)
+        except Exception:
+            pass
+
     with _lock:
         hw_series = list(_job_hw_series.get(job_id, []))
+        message_log = list(_job_message_log.get(job_id, []))
 
     return LiveJobProgress(
         job_id=job_id,
         status=job["status"],
         percent=percent,
         message=message,
+        message_log=message_log,
         updated_at=updated_at,
         hw_series=hw_series,
+        transcript=transcript,
+        pre_cpu=job.get("pre_cpu"),
+        pre_ram_mb=job.get("pre_ram_mb"),
+        model_params_used=job.get("model_params_used") or {},
     )
 
 
@@ -185,14 +212,19 @@ def run_job(job_id: str) -> None:
             "runs_root": str(RUNS_ROOT),
             "subtitles_root": str(SUBTITLES_ROOT),
             "model_store_root": str(MODEL_STORE_ROOT),
+            "model_params": req_data.get("model_params") or {},
         }
+        # Inicializuj message log pro tento job (req 1)
+        with _lock:
+            _job_message_log[job_id] = []
         (job_dir / "config.json").write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        # Preflight — HW podmínky
-        conditions_clean = _check_conditions_clean()
-        _update_job(job_id, conditions_clean=conditions_clean)
+        # Preflight — HW podmínky + pre-sample (req 3)
+        conditions_clean, pre_cpu, pre_ram_mb = _check_conditions_and_sample()
+        _update_job(job_id, conditions_clean=conditions_clean,
+                    pre_cpu=pre_cpu, pre_ram_mb=pre_ram_mb)
 
         # Spusť subprocess
         proc = subprocess.Popen(
@@ -273,14 +305,16 @@ def _resolve_sources(req_data: dict) -> list[str]:
     return req_data.get("sources") or []
 
 
-def _check_conditions_clean() -> bool:
+def _check_conditions_and_sample() -> tuple[bool, Optional[float], Optional[float]]:
+    """Vrátí (conditions_clean, pre_cpu%, pre_ram_mb) před startem benchmarku."""
     if not HAS_PSUTIL:
-        return True
+        return True, None, None
     try:
         cpu = psutil.cpu_percent(interval=1.0)
-        return cpu < 20.0
+        ram_mb = psutil.virtual_memory().used / 1024 / 1024
+        return cpu < 20.0, round(cpu, 1), round(ram_mb, 1)
     except Exception:
-        return True
+        return True, None, None
 
 
 def _sample_hw(pid: int) -> dict:
@@ -312,7 +346,16 @@ def _poll_progress(job_id: str, progress_file: Path) -> None:
     try:
         if progress_file.exists():
             data = json.loads(progress_file.read_text(encoding="utf-8"))
-            _update_job(job_id, progress_message=data.get("message"))
+            msg = data.get("message")
+            if msg:
+                _update_job(job_id, progress_message=msg)
+                # Req 1: přidej zprávu do logu (deduplikuj po sobě jdoucí)
+                with _lock:
+                    log = _job_message_log.setdefault(job_id, [])
+                    if not log or log[-1] != msg:
+                        log.append(msg)
+                        if len(log) > _MAX_LOG:
+                            log.pop(0)
     except Exception:
         pass
 

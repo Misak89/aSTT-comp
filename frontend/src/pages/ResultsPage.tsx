@@ -162,10 +162,27 @@ function ResultsTable({ results }: { results: RunResult[] }) {
                   s.transcript && s.reference_text ? (
                     <tr key={`${key}-diff-${si}`} className="border-t border-blue-50 bg-blue-50/30">
                       <td colSpan={9} className="px-4 py-3">
-                        <p className="text-xs text-gray-500 mb-1 font-medium">
-                          Zdroj {si + 1}{s.video_id ? ` — ${s.video_id}` : ''}
-                          {s.clip_start_seconds != null ? ` @ ${s.clip_start_seconds}s` : ''}
-                        </p>
+                        <div className="flex items-center gap-4 text-xs text-gray-500 mb-2 font-medium flex-wrap">
+                          <span>
+                            Zdroj {si + 1}{s.video_id ? ` — ${s.video_id}` : ''}
+                            {s.clip_start_seconds != null ? ` @ ${s.clip_start_seconds}s` : ''}
+                          </span>
+                          {/* Req 7: doba přepisu vs délka audia */}
+                          {(s.engine_elapsed_seconds != null || s.clip_seconds != null) && (
+                            <span className="bg-white border border-gray-200 rounded px-2 py-0.5 font-mono">
+                              {s.engine_elapsed_seconds != null
+                                ? `přepis ${s.engine_elapsed_seconds.toFixed(1)}s`
+                                : ''}
+                              {s.engine_elapsed_seconds != null && s.clip_seconds != null ? ' / ' : ''}
+                              {s.clip_seconds != null ? `audio ${s.clip_seconds.toFixed(0)}s` : ''}
+                              {s.rtf != null && (
+                                <span className={`ml-1 font-bold ${s.rtf > 1 ? 'text-red-500' : 'text-green-600'}`}>
+                                  RTF {s.rtf.toFixed(2)}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
                         <WerDiff
                           reference={s.reference_text}
                           transcript={s.transcript}

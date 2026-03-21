@@ -142,6 +142,7 @@ export interface SourceMetric {
   cer: number | null
   latency_ms: number | null
   rtf: number | null
+  engine_elapsed_seconds: number | null
 }
 
 export interface RunResult {
@@ -173,8 +174,13 @@ export interface LiveJobProgress {
   status: string
   percent: number
   message: string
+  message_log: string[]
   updated_at: string | null
   hw_series: HwSample[]
+  transcript: string
+  pre_cpu: number | null
+  pre_ram_mb: number | null
+  model_params_used: Record<string, unknown>
 }
 
 // Modely — install/uninstall log
