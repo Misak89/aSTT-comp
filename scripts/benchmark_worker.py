@@ -95,7 +95,7 @@ def main() -> int:
 
         _write_progress(progress_file, "Načítám runner...", 10)
 
-            evaluation_mode = config.get("evaluation_mode", "synthetic")
+        evaluation_mode = config.get("evaluation_mode", "synthetic")
 
         if evaluation_mode == "streaming":
             matrix_payload = _run_streaming_matrix(

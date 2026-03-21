@@ -4,8 +4,8 @@ Automaticky aktualizováno cron monitorem každých 10 minut.
 
 ## Poslední úspěšný test run
 
-- Datum: 2026-03-21 13:03 UTC
-- Python: 3.11.9 (aSTT-comparison .venv)
+- Datum: 2026-03-21 13:50 UTC
+- Python: 3.13.2 (aSTT-comp .venv)
 - Testy: 19/19 PASSED
 - Backend: UP (port 8012)
 
@@ -13,6 +13,8 @@ Automaticky aktualizováno cron monitorem každých 10 minut.
 
 | Datum | Výsledek | Poznámka |
 |-------|----------|----------|
+| 2026-03-21 13:50 | 19/19 PASS | streaming benchmark OK: RTF=0.472, CPU=32%, whisper_cpp_small, 30s clip R3BsjbDtWrY |
+| 2026-03-21 13:15 | 19/19 PASS | testy OK; backend UP |
 | 2026-03-21 13:03 | 19/19 PASS | testy OK; backend UP |
 | 2026-03-21 11:41 | 19/19 PASS | testy OK; backend UP |
 | 2026-03-21 11:40 | 19/19 PASS | testy OK; backend UP |

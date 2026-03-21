@@ -1,25 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem } from '../types'
+import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor } from '../types'
 import { StatusBadge } from '../components/StatusBadge'
 import { LiveJobPanel } from '../components/LiveJobPanel'
+import { MicSession } from '../components/MicSession'
+
+type Tab = 'benchmark' | 'mic'
+type EvalMode = 'synthetic' | 'streaming' | 'real'
 
 export function BenchmarkPage() {
+  const [tab, setTab] = useState<Tab>('benchmark')
   const [options, setOptions] = useState<BenchmarkOptions | null>(null)
   const [library, setLibrary] = useState<LibraryItem[]>([])
+  const [registry, setRegistry] = useState<ModelDescriptor[]>([])
   const [selectedVideos, setSelectedVideos] = useState<string[]>([])
   const [selectedModels, setSelectedModels] = useState<string[]>(['whisper_cpp_small'])
   const [selectedSettings, setSelectedSettings] = useState<string[]>(['balanced'])
   const [clipSeconds, setClipSeconds] = useState(120)
   const [clipSeed, setClipSeed] = useState<number | ''>('')
   const [label, setLabel] = useState('')
+  const [evalMode, setEvalMode] = useState<EvalMode>('synthetic')
   const [jobs, setJobs] = useState<BenchmarkJobStatus[]>([])
   const [msg, setMsg] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  const micModels = registry.filter(m => m.supports_microphone)
+
   useEffect(() => {
-    Promise.all([api.benchmark.options(), api.library.list()])
-      .then(([opts, lib]) => { setOptions(opts); setLibrary(lib) })
+    Promise.all([api.benchmark.options(), api.library.list(), api.models.registry()])
+      .then(([opts, lib, reg]) => { setOptions(opts); setLibrary(lib); setRegistry(reg) })
     loadJobs()
   }, [])
 
@@ -55,6 +64,7 @@ export function BenchmarkPage() {
         sample_seconds: clipSeconds,
         clip_seed: clipSeed === '' ? undefined : clipSeed,
         label: label || undefined,
+        evaluation_mode: evalMode,
       })
       await loadJobs()
     } catch (e: any) { setMsg(`Chyba: ${e.message}`) }
@@ -67,9 +77,31 @@ export function BenchmarkPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">Benchmark</h1>
+      <div className="flex items-center gap-4">
+        <h1 className="text-xl font-bold">Benchmark</h1>
+        <div className="flex gap-1 bg-gray-100 rounded p-1 text-sm">
+          <button
+            onClick={() => setTab('benchmark')}
+            className={`px-3 py-1 rounded ${tab === 'benchmark' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            Benchmark
+          </button>
+          <button
+            onClick={() => setTab('mic')}
+            className={`px-3 py-1 rounded ${tab === 'mic' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            Mikrofon
+          </button>
+        </div>
+      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {tab === 'mic' && (
+        micModels.length > 0
+          ? <MicSession availableModels={micModels} />
+          : <p className="text-sm text-gray-500">Žádný model nepodporuje mikrofon.</p>
+      )}
+
+      {tab === 'benchmark' && <><div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Výběr videí */}
         <div className="bg-white rounded border border-gray-200 p-4">
           <h2 className="font-semibold text-sm mb-3 text-gray-700">Videa</h2>
@@ -115,6 +147,15 @@ export function BenchmarkPage() {
         {/* Parametry */}
         <div className="bg-white rounded border border-gray-200 p-4 space-y-3">
           <h2 className="font-semibold text-sm mb-1 text-gray-700">Parametry</h2>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Mód evaluace</label>
+            <select value={evalMode} onChange={e => setEvalMode(e.target.value as EvalMode)}
+              className="border rounded px-2 py-1 text-sm">
+              <option value="synthetic">Syntetický (rychlý)</option>
+              <option value="streaming">Streaming (yt-dlp pipe)</option>
+              <option value="real">Real (lokální soubor)</option>
+            </select>
+          </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-500">Délka klipu (s)</label>
             <input type="number" value={clipSeconds} onChange={e => setClipSeconds(+e.target.value)}
@@ -196,6 +237,7 @@ export function BenchmarkPage() {
           </tbody>
         </table>
       </div>
+      </>}
     </div>
   )
 }

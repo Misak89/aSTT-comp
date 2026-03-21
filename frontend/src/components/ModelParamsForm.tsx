@@ -22,7 +22,7 @@ export function ModelParamsForm({ modelId, params, values, onChange, compact = f
   }
 
   function current(p: ParamSpec): unknown {
-    return name in values ? values[p.name] : p.default
+    return p.name in values ? values[p.name] : p.default
   }
 
   return (
