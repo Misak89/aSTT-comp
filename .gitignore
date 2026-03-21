@@ -17,6 +17,7 @@ frontend/tsconfig.tsbuildinfo
 # IDE
 .vscode/
 .cursor/
+.claude/
 *.swp
 
 # OS

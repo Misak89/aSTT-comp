@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..config import JOBS_ROOT, RUNS_ROOT, SUBTITLES_ROOT, SCENARIOS_ROOT
+from ..config import JOBS_ROOT, RUNS_ROOT, SUBTITLES_ROOT, SCENARIOS_ROOT, MODEL_STORE_ROOT
 from ..models.benchmark import BenchmarkJobRequest, BenchmarkJobStatus, LiveJobProgress
 from . import library_service
 
@@ -179,11 +179,12 @@ def run_job(job_id: str) -> None:
             "model_ids": model_ids,
             "setting_ids": setting_ids,
             "sample_seconds": req_data.get("sample_seconds", 120),
-            "evaluation_mode": req_data.get("evaluation_mode", "real"),
+            "evaluation_mode": req_data.get("evaluation_mode", "synthetic"),
             "clip_strategy": req_data.get("clip_strategy", "random"),
             "clip_seed": req_data.get("clip_seed"),
             "runs_root": str(RUNS_ROOT),
             "subtitles_root": str(SUBTITLES_ROOT),
+            "model_store_root": str(MODEL_STORE_ROOT),
         }
         (job_dir / "config.json").write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"

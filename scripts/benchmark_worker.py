@@ -65,11 +65,26 @@ def main() -> int:
     config = json.loads(config_file.read_text(encoding="utf-8"))
     runs_root = Path(config["runs_root"])
     subtitles_root = Path(config["subtitles_root"])
+    model_store_root = Path(config.get("model_store_root", str(ROOT / "runtime" / "model_store")))
+
+    # Mapování clip_strategy (frontend) → clip_selection_strategy (runner)
+    _STRATEGY_MAP = {"random": "deterministic_v1", "uniform": "start_zero"}
+    clip_strategy_raw = config.get("clip_strategy", "random")
+    clip_selection_strategy = _STRATEGY_MAP.get(clip_strategy_raw, "deterministic_v1")
 
     _write_progress(progress_file, "Worker spuštěn, inicializace...", 5)
 
     try:
         from packages.benchmarks.runners.matrix_benchmark_runner import run_benchmark_matrix
+        from packages.ingest.source_resolver import parse_source_entries
+
+        # Konverze URL strings → SourceEntry objekty
+        source_entries = parse_source_entries(
+            config["sources"],
+            max_sources=len(config["sources"]),
+        )
+        if not source_entries:
+            raise ValueError(f"Žádné validní zdroje z: {config['sources']}")
 
         call_count = [0]
 
@@ -81,14 +96,15 @@ def main() -> int:
         _write_progress(progress_file, "Načítám runner...", 10)
 
         matrix_payload = run_benchmark_matrix(
-            sources=config["sources"],
+            sources=source_entries,
             model_ids=config["model_ids"],
             setting_ids=config["setting_ids"],
             sample_seconds=config.get("sample_seconds", 120),
-            evaluation_mode=config.get("evaluation_mode", "real"),
-            clip_strategy=config.get("clip_strategy", "random"),
-            clip_seed=config.get("clip_seed"),
-            runs_root=runs_root,
+            evaluation_mode=config.get("evaluation_mode", "synthetic"),
+            clip_selection_strategy=clip_selection_strategy,
+            clip_selection_seed=config.get("clip_seed"),
+            run_root=str(runs_root),
+            model_store_root=str(model_store_root),
             subtitles_root=subtitles_root,
             progress_callback=progress_cb,
         )
