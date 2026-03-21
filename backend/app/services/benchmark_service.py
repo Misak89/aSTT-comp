@@ -242,7 +242,7 @@ def run_job(job_id: str) -> None:
         while proc.poll() is None:
             _poll_progress(job_id, progress_file)
             if HAS_PSUTIL:
-                sample = _sample_hw(proc.pid)
+                sample = _sample_hw(job_id, proc.pid)
                 hw_samples.append(sample)
                 with _lock:
                     series = _job_hw_series.setdefault(job_id, [])
@@ -295,6 +295,9 @@ def run_job(job_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 _subprocess_pids: dict[str, int] = {}
+# Cache psutil.Process objektů per job — cpu_percent(interval=None) vrací 0 na prvním volání
+# na novém objektu; musíme reusovat stejný objekt
+_job_hw_procs: dict = {}  # job_id -> psutil.Process (or None)
 
 
 def _resolve_sources(req_data: dict) -> list[str]:
@@ -317,16 +320,25 @@ def _check_conditions_and_sample() -> tuple[bool, Optional[float], Optional[floa
         return True, None, None
 
 
-def _sample_hw(pid: int) -> dict:
+def _sample_hw(job_id: str, pid: int) -> dict:
+    """Měří CPU% a RAM pro subprocess.
+    psutil.cpu_percent(interval=None) VŽDY vrací 0.0 při prvním volání na novém Process objektu —
+    proto cachujeme objekt a první volání slouží jen jako baseline."""
     sample: dict = {"ts": time.monotonic()}
     if not HAS_PSUTIL:
         return sample
     try:
-        proc = psutil.Process(pid)
+        proc = _job_hw_procs.get(job_id)
+        if proc is None or not proc.is_running() or proc.pid != pid:
+            proc = psutil.Process(pid)
+            _job_hw_procs[job_id] = proc
+            proc.cpu_percent(interval=None)  # baseline — první volání vždy vrátí 0, zahodíme
+            sample["ram_mb"] = proc.memory_info().rss / 1024 / 1024
+            return sample  # cpu ještě nemáme, vrátíme jen RAM
         sample["cpu"] = proc.cpu_percent(interval=None)
         sample["ram_mb"] = proc.memory_info().rss / 1024 / 1024
     except (psutil.NoSuchProcess, psutil.AccessDenied):
-        pass
+        _job_hw_procs.pop(job_id, None)
     return sample
 
 
@@ -347,13 +359,24 @@ def _poll_progress(job_id: str, progress_file: Path) -> None:
         if progress_file.exists():
             data = json.loads(progress_file.read_text(encoding="utf-8"))
             msg = data.get("message")
+            percent = data.get("percent", 0)
+            kwargs: dict = {}
             if msg:
-                _update_job(job_id, progress_message=msg)
-                # Req 1: přidej zprávu do logu (deduplikuj po sobě jdoucí)
+                kwargs["progress_message"] = msg
+            if percent:
+                kwargs["progress_percent"] = percent
+            if kwargs:
+                _update_job(job_id, **kwargs)
+            if msg:
+                # Req 1: přidej zprávu do logu s timestampem (deduplikuj po sobě jdoucí)
+                ts = datetime.now().strftime("%H:%M:%S")
+                stamped = f"[{ts}] {msg}"
                 with _lock:
                     log = _job_message_log.setdefault(job_id, [])
-                    if not log or log[-1] != msg:
-                        log.append(msg)
+                    # Deduplukuj ignorováním timestampu (porovnáváme samotnou zprávu)
+                    last_raw = log[-1].split("] ", 1)[-1] if log else ""
+                    if last_raw != msg:
+                        log.append(stamped)
                         if len(log) > _MAX_LOG:
                             log.pop(0)
     except Exception:
@@ -369,10 +392,13 @@ def _to_status(job: dict) -> BenchmarkJobStatus:
         started_at=job.get("started_at"),
         finished_at=job.get("finished_at"),
         progress_message=job.get("progress_message"),
+        progress_percent=job.get("progress_percent", 0),
         error=job.get("error"),
         run_id=job.get("run_id"),
         result_url=job.get("result_url"),
         conditions_clean=job.get("conditions_clean"),
+        pre_cpu=job.get("pre_cpu"),
+        pre_ram_mb=job.get("pre_ram_mb"),
         video_ids=job.get("video_ids"),
     )
 

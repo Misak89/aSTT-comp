@@ -35,10 +35,13 @@ class BenchmarkJobStatus(BaseModel):
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     progress_message: Optional[str] = None
+    progress_percent: int = 0              # % průběhu pro tabulku jobů
     error: Optional[str] = None
     run_id: Optional[str] = None
     result_url: Optional[str] = None
     conditions_clean: Optional[bool] = None   # HW podmínky byly čisté?
+    pre_cpu: Optional[float] = None           # CPU% systému před startem
+    pre_ram_mb: Optional[float] = None        # RAM MB systému před startem
     video_ids: Optional[list[str]] = None     # videa z requestu (pro live embed)
 
 

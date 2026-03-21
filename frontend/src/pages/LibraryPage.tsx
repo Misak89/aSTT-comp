@@ -7,6 +7,8 @@ export function LibraryPage() {
   const [items, setItems] = useState<LibraryItem[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, LatestResult[]>>({})
+  const [subtitleContent, setSubtitleContent] = useState<Record<string, string>>({})
+  const [subtitleOpen, setSubtitleOpen] = useState<string | null>(null)
   const [addUrl, setAddUrl] = useState('')
   const [addTitle, setAddTitle] = useState('')
   const [loading, setLoading] = useState(false)
@@ -26,6 +28,22 @@ export function LibraryPage() {
       const r = await api.library.latestResults(item.video_id)
       setResults(prev => ({ ...prev, [item.video_id]: r }))
     }
+  }
+
+  async function toggleSubtitles(item: LibraryItem) {
+    if (subtitleOpen === item.video_id) { setSubtitleOpen(null); return }
+    if (!subtitleContent[item.video_id]) {
+      const file = item.subtitle_files?.[0]
+      if (!file) return
+      try {
+        const r = await fetch(`/api/library/subtitle/${item.video_id}/${file.filename}`)
+        const text = await r.text()
+        setSubtitleContent(prev => ({ ...prev, [item.video_id]: text }))
+      } catch {
+        setSubtitleContent(prev => ({ ...prev, [item.video_id]: 'Nepodařilo se načíst titulky.' }))
+      }
+    }
+    setSubtitleOpen(item.video_id)
   }
 
   function extractVideoId(url: string): string {
@@ -103,9 +121,23 @@ export function LibraryPage() {
                   </td>
                   <td className="px-4 py-2">
                     {item.subtitles_local
-                      ? <span className="text-green-600 font-medium">VTT</span>
-                      : <button onClick={e => { e.stopPropagation(); downloadSubs(item) }}
-                          className="text-blue-600 underline text-xs">Stáhnout</button>}
+                      ? (
+                        <button
+                          onClick={e => { e.stopPropagation(); toggleSubtitles(item) }}
+                          className={`font-medium text-xs px-2 py-0.5 rounded border ${
+                            subtitleOpen === item.video_id
+                              ? 'bg-green-100 text-green-700 border-green-300'
+                              : 'bg-green-50 text-green-600 border-green-200 hover:bg-green-100'
+                          }`}
+                          title="Klikni pro zobrazení VTT titulků"
+                        >
+                          {subtitleOpen === item.video_id ? '▲ Skrýt VTT' : '📄 VTT'}
+                        </button>
+                      )
+                      : (
+                        <button onClick={e => { e.stopPropagation(); downloadSubs(item) }}
+                          className="text-blue-600 underline text-xs">Stáhnout</button>
+                      )}
                   </td>
                   <td className="px-4 py-2">
                     {results[item.video_id]?.[0]
@@ -116,6 +148,22 @@ export function LibraryPage() {
                     {expanded === item.video_id ? '▲' : '▼'}
                   </td>
                 </tr>
+
+                {/* Titulky inline */}
+                {subtitleOpen === item.video_id && subtitleContent[item.video_id] && (
+                  <tr key={`${item.video_id}-subs`} className="bg-yellow-50">
+                    <td colSpan={5} className="px-6 py-3">
+                      <p className="text-xs font-semibold text-yellow-700 mb-1">
+                        📄 {item.subtitle_files?.[0]?.filename} — {item.subtitle_files?.[0]?.size_bytes
+                          ? `${Math.round(item.subtitle_files[0].size_bytes / 1024)} KB`
+                          : ''}
+                      </p>
+                      <pre className="text-xs text-gray-700 max-h-64 overflow-y-auto whitespace-pre-wrap font-mono bg-white border border-yellow-200 rounded p-2">
+                        {subtitleContent[item.video_id]}
+                      </pre>
+                    </td>
+                  </tr>
+                )}
 
                 {/* Detail — rozbalené výsledky */}
                 {expanded === item.video_id && (

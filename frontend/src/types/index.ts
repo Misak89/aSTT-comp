@@ -93,10 +93,13 @@ export interface BenchmarkJobStatus {
   started_at: string | null
   finished_at: string | null
   progress_message: string | null
+  progress_percent: number
   error: string | null
   run_id: string | null
   result_url: string | null
   conditions_clean: boolean | null
+  pre_cpu: number | null
+  pre_ram_mb: number | null
   video_ids: string[] | null
 }
 

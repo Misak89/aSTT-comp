@@ -9,33 +9,37 @@ interface Props {
   job: BenchmarkJobStatus
 }
 
-/**
- * Panel pro live monitoring benchmarku — zobrazuje se i po dokončení.
- *
- * Req 1: message_log — přehled všech zpráv, nemaže se
- * Req 2: transcript — živý nebo finální přepis textu
- * Req 3: CPU/RAM před startem + v průběhu (grafy)
- * Req 4: přesné nastavení modelu (model_params_used)
- * Req 5: tlačítko pro zobrazení titulků
- * Req 7: doba přepisu vs délka videa
- */
 export function LiveJobPanel({ job }: Props) {
   const [percent, setPercent] = useState(0)
   const [messageLog, setMessageLog] = useState<string[]>([])
   const [hwSeries, setHwSeries] = useState<HwSample[]>([])
   const [transcript, setTranscript] = useState('')
-  const [preCpu, setPreCpu] = useState<number | null>(null)
-  const [preRamMb, setPreRamMb] = useState<number | null>(null)
+  const [preCpu, setPreCpu] = useState<number | null>(job.pre_cpu ?? null)
+  const [preRamMb, setPreRamMb] = useState<number | null>(job.pre_ram_mb ?? null)
   const [modelParams, setModelParams] = useState<Record<string, unknown>>({})
   const [libraryItem, setLibraryItem] = useState<LibraryItem | null>(null)
   const [showSubtitles, setShowSubtitles] = useState(false)
   const [subtitleContent, setSubtitleContent] = useState('')
   const [subtitleLoading, setSubtitleLoading] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const logEndRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const isActive = job.status === 'running' || job.status === 'pending'
 
+  // Elapsed time counter
+  useEffect(() => {
+    if (!isActive || !job.started_at) return
+    const start = new Date(job.started_at).getTime()
+    setElapsed(Math.floor((Date.now() - start) / 1000))
+    elapsedRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000))
+    }, 1000)
+    return () => { if (elapsedRef.current) clearInterval(elapsedRef.current) }
+  }, [job.job_id, job.status, job.started_at])
+
+  // Polling live dat
   useEffect(() => {
     const poll = async () => {
       try {
@@ -58,13 +62,12 @@ export function LiveJobPanel({ job }: Props) {
     if (isActive) {
       timerRef.current = setInterval(poll, 1000)
     } else {
-      // Po dokončení: jeden závěrečný poll pro transcript
       setTimeout(poll, 500)
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [job.job_id, job.status])
 
-  // Načti info o videu z knihovny (pro titulky — req 5)
+  // Načti info o videu z knihovny
   useEffect(() => {
     const videoId = job.video_ids?.[0]
     if (!videoId) return
@@ -104,6 +107,20 @@ export function LiveJobPanel({ job }: Props) {
     }
   }
 
+  function fmtElapsed(s: number) {
+    const m = Math.floor(s / 60)
+    const sec = s % 60
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`
+  }
+
+  function fmtFinished() {
+    if (!job.started_at || !job.finished_at) return null
+    const secs = Math.round(
+      (new Date(job.finished_at).getTime() - new Date(job.started_at).getTime()) / 1000
+    )
+    return fmtElapsed(secs)
+  }
+
   const statusColor = {
     running: 'border-blue-300 bg-blue-50',
     pending: 'border-yellow-300 bg-yellow-50',
@@ -116,7 +133,7 @@ export function LiveJobPanel({ job }: Props) {
     <div className={`border rounded-lg p-4 space-y-4 ${statusColor}`}>
       {/* Hlavička */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <h2 className="font-semibold text-sm text-gray-800">
             {job.label || job.job_id.slice(-8)}
           </h2>
@@ -126,6 +143,17 @@ export function LiveJobPanel({ job }: Props) {
             job.status === 'failed' ? 'bg-red-100 text-red-700' :
             'bg-gray-100 text-gray-600'
           }`}>{job.status}</span>
+          {/* Elapsed time */}
+          {isActive && (
+            <span className="text-xs font-mono text-blue-600 animate-pulse">
+              ⏱ {fmtElapsed(elapsed)}
+            </span>
+          )}
+          {!isActive && fmtFinished() && (
+            <span className="text-xs font-mono text-gray-500">
+              ⏱ celkem {fmtFinished()}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
           {hasSubtitles && (
@@ -145,7 +173,7 @@ export function LiveJobPanel({ job }: Props) {
       <div className="space-y-1">
         <div className="flex justify-between text-xs text-gray-500">
           <span className="font-mono">{percent}%</span>
-          {isActive && <span className="text-blue-500 animate-pulse">● běží</span>}
+          {isActive && <span className="text-blue-500 animate-pulse">● přepisuji</span>}
         </div>
         <div className="w-full bg-gray-200 rounded-full h-2">
           <div
@@ -158,10 +186,10 @@ export function LiveJobPanel({ job }: Props) {
         </div>
       </div>
 
-      {/* Req 1: Log zpráv (nemaže se) */}
+      {/* Log zpráv (nemaže se) */}
       {messageLog.length > 0 && (
-        <div className="bg-gray-900 rounded p-2 max-h-32 overflow-y-auto">
-          <p className="text-xs text-gray-500 mb-1 font-medium">Log zpráv</p>
+        <div className="bg-gray-900 rounded p-2 max-h-36 overflow-y-auto">
+          <p className="text-xs text-gray-500 mb-1 font-medium">Log průběhu</p>
           {messageLog.map((msg, i) => (
             <p key={i} className={`text-xs font-mono ${
               i === messageLog.length - 1 ? 'text-green-300' : 'text-gray-400'
@@ -174,14 +202,14 @@ export function LiveJobPanel({ job }: Props) {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* YouTube embed */}
+        {/* YouTube embed — autoplay při spuštění */}
         {videoId ? (
           <div className="aspect-video rounded overflow-hidden border border-gray-200">
             <iframe
-              src={`https://www.youtube.com/embed/${videoId}?autoplay=0&cc_load_policy=1`}
+              src={`https://www.youtube.com/embed/${videoId}?autoplay=${isActive ? 1 : 0}&cc_load_policy=0`}
               title="Video benchmark"
               className="w-full h-full"
-              allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               allowFullScreen
             />
           </div>
@@ -191,24 +219,33 @@ export function LiveJobPanel({ job }: Props) {
           </div>
         )}
 
-        {/* HW grafy — req 3 */}
+        {/* HW grafy */}
         <div className="space-y-2">
           {/* Pre-benchmark hodnoty */}
           {(preCpu != null || preRamMb != null) && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded px-3 py-2 text-xs flex gap-4">
-              <span className="text-yellow-700 font-medium">Před startem:</span>
-              {preCpu != null && <span>CPU: <strong>{preCpu}%</strong></span>}
-              {preRamMb != null && <span>RAM: <strong>{Math.round(preRamMb)} MB</strong></span>}
-              {job.conditions_clean != null && (
-                <span className={job.conditions_clean ? 'text-green-600' : 'text-orange-600'}>
-                  {job.conditions_clean ? '✓ čistý systém' : '⚠ zatížený systém'}
+            <div className="bg-yellow-50 border border-yellow-200 rounded px-3 py-2 text-xs flex gap-4 flex-wrap">
+              <span className="text-yellow-700 font-medium">Před startem (systém):</span>
+              {preCpu != null && (
+                <span>
+                  CPU: <strong className={preCpu >= 20 ? 'text-orange-600' : 'text-green-700'}>{preCpu}%</strong>
+                  <span className="text-gray-500 ml-1">({preCpu >= 20 ? 'zatíženo' : 'volno'})</span>
                 </span>
+              )}
+              {preRamMb != null && (
+                <span>RAM: <strong>{Math.round(preRamMb)} MB</strong> obsazeno</span>
               )}
             </div>
           )}
 
           <div>
-            <p className="text-xs font-medium text-gray-600 mb-1">CPU % (subprocess)</p>
+            <p className="text-xs font-medium text-gray-600 mb-1">
+              CPU % (subprocess)
+              {chartData.length > 0 && (
+                <span className="ml-2 text-gray-400 font-normal">
+                  aktuálně {chartData[chartData.length - 1]?.cpu ?? 0}%
+                </span>
+              )}
+            </p>
             <ResponsiveContainer width="100%" height={80}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="2 2" stroke="#f0f0f0" />
@@ -220,7 +257,14 @@ export function LiveJobPanel({ job }: Props) {
             </ResponsiveContainer>
           </div>
           <div>
-            <p className="text-xs font-medium text-gray-600 mb-1">RAM MB (subprocess)</p>
+            <p className="text-xs font-medium text-gray-600 mb-1">
+              RAM MB (subprocess)
+              {chartData.length > 0 && (
+                <span className="ml-2 text-gray-400 font-normal">
+                  aktuálně {chartData[chartData.length - 1]?.ram ?? 0} MB
+                </span>
+              )}
+            </p>
             <ResponsiveContainer width="100%" height={80}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="2 2" stroke="#f0f0f0" />
@@ -234,11 +278,11 @@ export function LiveJobPanel({ job }: Props) {
         </div>
       </div>
 
-      {/* Req 4: Nastavení modelu */}
+      {/* Nastavení modelu */}
       {Object.keys(modelParams).length > 0 && (
         <details className="text-xs">
           <summary className="cursor-pointer text-gray-500 hover:text-gray-700 select-none">
-            ⚙ Nastavení modelu
+            ⚙ Nastavení modelu použité při přepisu
           </summary>
           <div className="mt-1 bg-gray-50 border border-gray-200 rounded p-2 font-mono text-xs">
             {Object.entries(modelParams).map(([k, v]) => (
@@ -251,21 +295,22 @@ export function LiveJobPanel({ job }: Props) {
         </details>
       )}
 
-      {/* Req 2: Živý / finální přepis */}
-      {(transcript || isActive) && (
-        <div className="bg-white border border-gray-200 rounded p-3">
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-xs font-medium text-gray-600">
-              {isActive ? '⌨ Přepis (live)' : '✓ Přepis (finální)'}
-            </p>
-          </div>
-          <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-8">
-            {transcript || <span className="text-gray-400 italic">čeká na přepis...</span>}
-          </p>
-        </div>
-      )}
+      {/* Živý / finální přepis — vždy viditelný */}
+      <div className="bg-white border border-gray-200 rounded p-3">
+        <p className="text-xs font-medium text-gray-600 mb-1">
+          {isActive ? '⌨ Přepis (live)' : '✓ Přepis (finální)'}
+        </p>
+        <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-12">
+          {transcript
+            ? transcript
+            : <span className="text-gray-400 italic">
+                {isActive ? 'čeká na přepis...' : 'žádný přepis (streaming mode nebo prázdný výstup)'}
+              </span>
+          }
+        </p>
+      </div>
 
-      {/* Req 5: Titulky */}
+      {/* Titulky */}
       {showSubtitles && subtitleContent && (
         <div className="bg-gray-50 border border-gray-200 rounded p-3">
           <p className="text-xs font-medium text-gray-600 mb-2">

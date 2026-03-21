@@ -216,9 +216,9 @@ export function BenchmarkPage() {
             <tr>
               <th className="px-4 py-2 text-left">Job ID</th>
               <th className="px-4 py-2 text-left">Popis</th>
-              <th className="px-4 py-2 text-left">Stav</th>
-              <th className="px-4 py-2 text-left">Podmínky HW</th>
-              <th className="px-4 py-2 text-left">Zpráva</th>
+              <th className="px-4 py-2 text-left">Stav / průběh</th>
+              <th className="px-4 py-2 text-left">HW před startem</th>
+              <th className="px-4 py-2 text-left">Poslední zpráva</th>
               <th className="px-4 py-2"></th>
             </tr>
           </thead>
@@ -226,13 +226,30 @@ export function BenchmarkPage() {
             {jobs.map(job => (
               <tr key={job.job_id} className="border-t border-gray-100">
                 <td className="px-4 py-2 font-mono text-xs text-gray-500">{job.job_id.slice(-8)}</td>
-                <td className="px-4 py-2 text-gray-700">{job.label || '–'}</td>
-                <td className="px-4 py-2"><StatusBadge status={job.status} /></td>
+                <td className="px-4 py-2 text-gray-700">{job.label || <span className="text-gray-400 italic text-xs">bez popisu</span>}</td>
+                <td className="px-4 py-2">
+                  <div className="flex items-center gap-1">
+                    <StatusBadge status={job.status} />
+                    {job.status === 'running' && job.progress_percent > 0 && (
+                      <span className="text-xs font-mono text-blue-600">{job.progress_percent}%</span>
+                    )}
+                  </div>
+                </td>
                 <td className="px-4 py-2 text-xs">
-                  {job.conditions_clean == null ? '–'
-                    : job.conditions_clean
-                    ? <span className="text-green-600">OK</span>
-                    : <span className="text-orange-500">Zatizeny system</span>}
+                  {job.pre_cpu != null || job.pre_ram_mb != null ? (
+                    <span className={`font-mono ${(job.pre_cpu ?? 0) >= 20 ? 'text-orange-500' : 'text-green-700'}`}>
+                      {job.pre_cpu != null ? `CPU ${job.pre_cpu}%` : ''}
+                      {job.pre_cpu != null && job.pre_ram_mb != null ? ' / ' : ''}
+                      {job.pre_ram_mb != null ? `RAM ${Math.round(job.pre_ram_mb)}MB` : ''}
+                      {job.conditions_clean != null && (
+                        <span className="ml-1 text-gray-400">
+                          {job.conditions_clean ? '(čistý)' : '(zatížen)'}
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">–</span>
+                  )}
                 </td>
                 <td className="px-4 py-2 text-xs text-gray-500 max-w-xs truncate">
                   {job.error

@@ -104,25 +104,75 @@ export function ResultsPage() {
 
 function ResultsTable({ results }: { results: RunResult[] }) {
   const [expanded, setExpanded] = useState<string | null>(null)
+  const allKeys = results.map(r => `${r.model_id}-${r.setting_id}`)
+  const [visible, setVisible] = useState<Set<string>>(new Set(allKeys))
+
+  // Sync when results change
+  useEffect(() => {
+    setVisible(new Set(results.map(r => `${r.model_id}-${r.setting_id}`)))
+  }, [results.length])
+
+  function toggleVisible(key: string) {
+    setVisible(prev => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }
+
+  const filtered = results.filter(r => visible.has(`${r.model_id}-${r.setting_id}`))
 
   return (
+    <div className="space-y-2">
+      {/* Filtr výsledků */}
+      <div className="bg-white rounded border border-gray-200 p-3 flex flex-wrap gap-2 items-center">
+        <span className="text-xs text-gray-500 font-medium mr-1">Zobrazit:</span>
+        {results.map(r => {
+          const key = `${r.model_id}-${r.setting_id}`
+          return (
+            <label key={key} className="flex items-center gap-1 text-xs cursor-pointer select-none">
+              <input type="checkbox" checked={visible.has(key)} onChange={() => toggleVisible(key)}
+                className="accent-blue-500" />
+              <span className={visible.has(key) ? 'text-gray-800' : 'text-gray-400'}>
+                {r.model_id} / {r.setting_id}
+              </span>
+            </label>
+          )
+        })}
+        <button onClick={() => setVisible(new Set(allKeys))} className="text-xs text-blue-500 hover:underline ml-2">
+          vše
+        </button>
+        <button onClick={() => setVisible(new Set())} className="text-xs text-gray-400 hover:underline">
+          nic
+        </button>
+      </div>
+
     <div className="bg-white rounded border border-gray-200 overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
           <tr>
             <th className="px-4 py-2 text-left">Model</th>
             <th className="px-4 py-2 text-left">Nastavení</th>
-            <th className="px-4 py-2">WER</th>
-            <th className="px-4 py-2">CER</th>
+            <th className="px-4 py-2"
+              title="Word Error Rate — % slov přepsaných chybně. 0% = perfektní, 100% = nic nesedí.">
+              WER ⓘ
+            </th>
+            <th className="px-4 py-2"
+              title="Character Error Rate — % znaků přepsaných chybně. Citlivější než WER na drobné chyby.">
+              CER ⓘ
+            </th>
             <th className="px-4 py-2">Latence</th>
-            <th className="px-4 py-2">RTF</th>
+            <th className="px-4 py-2"
+              title="Real-Time Factor — poměr délky přepisu ku délce audia. RTF < 1.0 = model stíhá živý přepis.">
+              RTF ⓘ
+            </th>
             <th className="px-4 py-2">CPU%</th>
             <th className="px-4 py-2">RAM MB</th>
             <th className="px-4 py-2"></th>
           </tr>
         </thead>
         <tbody>
-          {results.map(r => {
+          {filtered.map(r => {
             const key = `${r.model_id}-${r.setting_id}`
             const isOpen = expanded === key
             const hasDiff = r.source_metrics?.some(
@@ -197,6 +247,7 @@ function ResultsTable({ results }: { results: RunResult[] }) {
           })}
         </tbody>
       </table>
+    </div>
     </div>
   )
 }
