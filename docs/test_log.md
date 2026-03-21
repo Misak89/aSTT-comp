@@ -4,7 +4,7 @@ Automaticky aktualizováno cron monitorem každých 10 minut.
 
 ## Poslední úspěšný test run
 
-- Datum: 2026-03-21 18:00 UTC
+- Datum: 2026-03-21 18:10 UTC
 - Python: 3.13.2 (aSTT-comp .venv)
 - Testy: 19/19 PASSED
 - Backend: DOWN (port 8012 neodpovídá)
@@ -13,6 +13,7 @@ Automaticky aktualizováno cron monitorem každých 10 minut.
 
 | Datum | Výsledek | Poznámka |
 | ----- | -------- | -------- |
+| 2026-03-21 18:10 | 19/19 PASS | testy OK; backend DOWN |
 | 2026-03-21 18:00 | 19/19 PASS | testy OK; backend DOWN |
 | 2026-03-21 17:50 | 19/19 PASS | testy OK; backend DOWN |
 | 2026-03-21 17:40 | 19/19 PASS | testy OK; backend DOWN |
