@@ -131,13 +131,24 @@ def get_live_progress(job_id: str) -> Optional[LiveJobProgress]:
         pass
 
     # Po dokončení: přečti transcript z worker_result.json (req 2)
+    # POZOR: transcript_text je uvnitř source_metrics[], ne na top-level výsledku
     if not transcript and job.get("status") == "completed":
         try:
             result_file = JOBS_ROOT / job_id / "worker_result.json"
             if result_file.exists():
                 rdata = json.loads(result_file.read_text(encoding="utf-8"))
                 results = rdata.get("payload", {}).get("results", [])
-                parts = [r.get("transcript_text", "") for r in results if r.get("transcript_text")]
+                parts = []
+                for r in results:
+                    # source_metrics level (matrix runner)
+                    for sm in r.get("source_metrics", []):
+                        t = sm.get("transcript_text", "")
+                        if t:
+                            parts.append(t)
+                    # top-level transcript_text (streaming runner)
+                    t = r.get("transcript_text", "")
+                    if t and t not in parts:
+                        parts.append(t)
                 transcript = "\n\n---\n\n".join(parts)
         except Exception:
             pass

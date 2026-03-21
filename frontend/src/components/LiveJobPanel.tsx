@@ -18,6 +18,7 @@ export function LiveJobPanel({ job }: Props) {
   const [preRamMb, setPreRamMb] = useState<number | null>(job.pre_ram_mb ?? null)
   const [modelParams, setModelParams] = useState<Record<string, unknown>>({})
   const [libraryItem, setLibraryItem] = useState<LibraryItem | null>(null)
+  const [showTranscript, setShowTranscript] = useState(true)
   const [showSubtitles, setShowSubtitles] = useState(false)
   const [subtitleContent, setSubtitleContent] = useState('')
   const [subtitleLoading, setSubtitleLoading] = useState(false)
@@ -156,6 +157,13 @@ export function LiveJobPanel({ job }: Props) {
           )}
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
+          <button
+            onClick={() => setShowTranscript(v => !v)}
+            className="text-blue-600 hover:underline"
+            title="Zobrazit/skrýt přepis"
+          >
+            {showTranscript ? '▲ Skrýt přepis' : '📝 Přepis'}
+          </button>
           {hasSubtitles && (
             <button
               onClick={showSubtitles ? () => setShowSubtitles(false) : loadSubtitles}
@@ -295,8 +303,8 @@ export function LiveJobPanel({ job }: Props) {
         </details>
       )}
 
-      {/* Živý / finální přepis — vždy viditelný */}
-      <div className="bg-white border border-gray-200 rounded p-3">
+      {/* Živý / finální přepis — toggle tlačítko v hlavičce */}
+      {showTranscript && <div className="bg-white border border-gray-200 rounded p-3">
         <p className="text-xs font-medium text-gray-600 mb-1">
           {isActive ? '⌨ Přepis (live)' : '✓ Přepis (finální)'}
         </p>
@@ -308,7 +316,7 @@ export function LiveJobPanel({ job }: Props) {
               </span>
           }
         </p>
-      </div>
+      </div>}
 
       {/* Titulky */}
       {showSubtitles && subtitleContent && (
