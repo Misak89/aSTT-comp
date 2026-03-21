@@ -29,17 +29,60 @@ export interface LibraryItem {
   latest_results?: LatestResult[]
 }
 
+export interface ParamSpec {
+  name: string
+  label: string
+  type: 'int' | 'float' | 'str' | 'bool' | 'select'
+  default: unknown
+  description: string
+  min: number | null
+  max: number | null
+  options: string[]
+}
+
+export interface ModelDescriptor {
+  model_id: string
+  label: string
+  adapter: string
+  languages: string[]
+  supports_streaming: boolean
+  supports_microphone: boolean
+  notes: string
+  params: ParamSpec[]
+}
+
 export interface BenchmarkJobRequest {
   video_ids?: string[]
   sources?: string[]
   model_ids?: string[]
   setting_ids?: string[]
   sample_seconds?: number
-  evaluation_mode?: 'real' | 'synthetic'
+  evaluation_mode?: 'real' | 'synthetic' | 'streaming'
   clip_strategy?: 'random' | 'uniform'
   clip_seed?: number
   label?: string
   scenario_id?: string
+  model_params?: Record<string, Record<string, unknown>>
+}
+
+// Mic session
+export interface MicSessionState {
+  session_id: string
+  model_id: string
+  status: 'idle' | 'recording' | 'stopped'
+  transcript: string
+  first_word_latency_ms: number | null
+  elapsed_s: number
+  rtf: number
+  total_audio_s: number
+  error: string | null
+}
+
+export interface AudioDevice {
+  index: number
+  name: string
+  max_input_channels: number
+  default_samplerate: number
 }
 
 export interface BenchmarkJobStatus {

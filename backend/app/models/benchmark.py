@@ -11,11 +11,14 @@ class BenchmarkJobRequest(BaseModel):
     model_ids: Optional[list[str]] = None      # None = all default models
     setting_ids: Optional[list[str]] = None    # None = all default settings
     sample_seconds: int = 120                  # default 120s dle specifikace
-    evaluation_mode: Literal["real", "synthetic"] = "real"
+    evaluation_mode: Literal["real", "synthetic", "streaming"] = "synthetic"
     clip_strategy: Literal["random", "uniform"] = "random"
     clip_seed: Optional[int] = None
     label: Optional[str] = None
     scenario_id: Optional[str] = None         # reference na uložený scénář
+    # Per-model parametry: {"whisper_cpp_small": {"language": "cs", "threads": 8}, ...}
+    # nebo společné: {"language": "cs"} — aplikuje se na všechny modely
+    model_params: Optional[dict] = Field(default=None, description="Per-model nebo sdílené parametry")
 
     @model_validator(mode="after")
     def check_sources(self) -> "BenchmarkJobRequest":

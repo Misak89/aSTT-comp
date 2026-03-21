@@ -4,15 +4,18 @@ Automaticky aktualizováno cron monitorem každých 10 minut.
 
 ## Poslední úspěšný test run
 
-- Datum: 2026-03-21 02:55 UTC
-- Python: 3.13.2 (.venv)
+- Datum: 2026-03-21 13:03 UTC
+- Python: 3.11.9 (aSTT-comparison .venv)
 - Testy: 19/19 PASSED
-- Backend: UP (port 8012) — první benchmark run dokončen
+- Backend: UP (port 8012)
 
 ## Historie
 
 | Datum | Výsledek | Poznámka |
 |-------|----------|----------|
+| 2026-03-21 13:03 | 19/19 PASS | testy OK; backend UP |
+| 2026-03-21 11:41 | 19/19 PASS | testy OK; backend UP |
+| 2026-03-21 11:40 | 19/19 PASS | testy OK; backend UP |
 | 2026-03-21 02:55 | 19/19 PASS | testy OK; backend UP; první benchmark run: WER=15.5%, RTF=1.115 |
 | 2026-03-21 00:25 | 19/19 PASS | testy OK; backend DOWN |
 | 2026-03-21 00:00 | 19/19 PASS | testy OK; backend DOWN — stará instance před restartem |

@@ -95,19 +95,30 @@ def main() -> int:
 
         _write_progress(progress_file, "Načítám runner...", 10)
 
-        matrix_payload = run_benchmark_matrix(
-            sources=source_entries,
-            model_ids=config["model_ids"],
-            setting_ids=config["setting_ids"],
-            sample_seconds=config.get("sample_seconds", 120),
-            evaluation_mode=config.get("evaluation_mode", "synthetic"),
-            clip_selection_strategy=clip_selection_strategy,
-            clip_selection_seed=config.get("clip_seed"),
-            run_root=str(runs_root),
-            model_store_root=str(model_store_root),
-            subtitles_root=subtitles_root,
-            progress_callback=progress_cb,
-        )
+            evaluation_mode = config.get("evaluation_mode", "synthetic")
+
+        if evaluation_mode == "streaming":
+            matrix_payload = _run_streaming_matrix(
+                config=config,
+                source_entries=source_entries,
+                runs_root=runs_root,
+                model_store_root=model_store_root,
+                progress_cb=progress_cb,
+            )
+        else:
+            matrix_payload = run_benchmark_matrix(
+                sources=source_entries,
+                model_ids=config["model_ids"],
+                setting_ids=config["setting_ids"],
+                sample_seconds=config.get("sample_seconds", 120),
+                evaluation_mode=evaluation_mode,
+                clip_selection_strategy=clip_selection_strategy,
+                clip_selection_seed=config.get("clip_seed"),
+                run_root=str(runs_root),
+                model_store_root=str(model_store_root),
+                subtitles_root=subtitles_root,
+                progress_callback=progress_cb,
+            )
 
         _write_progress(progress_file, "Hotovo", 100)
         _write_result(result_file, {"status": "completed", "payload": matrix_payload})
@@ -123,6 +134,75 @@ def main() -> int:
         })
         print(tb, file=sys.stderr)
         return 1
+
+
+def _run_streaming_matrix(*, config, source_entries, runs_root, model_store_root, progress_cb):
+    """Spustí benchmark v streaming módu (yt-dlp → ffmpeg pipe → live session adaptery)."""
+    from datetime import datetime, timezone
+    from packages.benchmarks.runners.streaming_runner import StreamingRunConfig, run_streaming_benchmark
+    from packages.ingest.youtube.stream_pipe import stream_youtube_audio
+
+    model_ids = config["model_ids"]
+    sample_seconds = config.get("sample_seconds", 120)
+    model_params_cfg = config.get("model_params") or {}
+
+    run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    run_dir = runs_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    all_results = []
+
+    for source in source_entries:
+        for model_id in model_ids:
+            progress_cb(f"Streaming: {source.source_id} × {model_id}")
+
+            # Per-model params: {"whisper_cpp_small": {...}} nebo sdílené {"language": "cs"}
+            if model_id in model_params_cfg:
+                params = {**model_params_cfg, **model_params_cfg[model_id]}
+            else:
+                # odfiltruj klíče které jsou dict (per-model sekce)
+                params = {k: v for k, v in model_params_cfg.items() if not isinstance(v, dict)}
+
+            out_dir = run_dir / "streaming_artifacts" / model_id / source.source_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            def _make_generator(src):
+                return stream_youtube_audio(
+                    src.canonical_url or src.value,
+                    chunk_seconds=0.1,
+                    max_seconds=float(sample_seconds),
+                )
+
+            cfg = StreamingRunConfig(
+                model_id=model_id,
+                model_params=params,
+                model_store_root=str(model_store_root),
+                output_dir=str(out_dir),
+                sample_seconds=sample_seconds,
+                progress_callback=progress_cb,
+            )
+
+            try:
+                result = run_streaming_benchmark(
+                    source=source,
+                    audio_generator=_make_generator(source),
+                    config=cfg,
+                )
+                result["model_id"] = model_id
+                all_results.append(result)
+            except Exception as exc:
+                all_results.append({
+                    "model_id": model_id,
+                    "source_id": source.source_id,
+                    "error": str(exc),
+                })
+
+    return {
+        "run_id": run_id,
+        "evaluation_mode": "streaming",
+        "sample_seconds": sample_seconds,
+        "results": all_results,
+    }
 
 
 if __name__ == "__main__":

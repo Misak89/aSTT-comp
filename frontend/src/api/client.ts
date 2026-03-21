@@ -1,6 +1,7 @@
 import type {
   LibraryItem, LatestResult, BenchmarkJobRequest, BenchmarkJobStatus,
   BenchmarkOptions, Scenario, RunDetail, LiveJobProgress, ModelStatus,
+  ModelDescriptor, MicSessionState, AudioDevice,
 } from '../types'
 
 const BASE = '/api'
@@ -68,11 +69,20 @@ export const api = {
   models: {
     list: () => get<ModelStatus[]>('/models'),
     get: (id: string) => get<ModelStatus>(`/models/${id}`),
+    registry: () => get<ModelDescriptor[]>('/models/registry'),
+    params: (id: string) => get<{ model_id: string; supports_streaming: boolean; supports_microphone: boolean; params: ModelDescriptor['params'] }>(`/models/${id}/params`),
     recordInstall: (id: string, version?: string, size_mb?: number) =>
       post<ModelStatus>(`/models/${id}/install`, { version, size_mb }),
     recordUninstall: (id: string, reason?: string) =>
       del(`/models/${id}`),
     addNote: (id: string, note: string) =>
       post<ModelStatus>(`/models/${id}/note`, { note }),
+  },
+  mic: {
+    devices: () => get<AudioDevice[]>('/mic/devices'),
+    createSession: (model_id: string, model_params?: Record<string, unknown>) =>
+      post<{ session_id: string; model_id: string; created_at: string }>('/mic/sessions', { model_id, model_params }),
+    getSession: (id: string) => get<MicSessionState>(`/mic/sessions/${id}`),
+    stopSession: (id: string) => post<MicSessionState>(`/mic/sessions/${id}/stop`),
   },
 }

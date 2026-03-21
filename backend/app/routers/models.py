@@ -4,6 +4,7 @@ from typing import Optional
 
 from ..models.models import ModelStatus
 from ..services import models_service
+from packages.adapters._registry import get_params_schema, list_models as registry_list, REGISTRY
 
 router = APIRouter(prefix="/api/models")
 
@@ -19,6 +20,39 @@ class UninstallRequest(BaseModel):
 
 class NoteRequest(BaseModel):
     note: str
+
+
+@router.get("/registry")
+def get_registry():
+    """Vrátí kompletní registry modelů s parametry a capabilities."""
+    return [
+        {
+            "model_id": m.model_id,
+            "label": m.label,
+            "adapter": m.adapter,
+            "languages": m.languages,
+            "supports_streaming": m.supports_streaming,
+            "supports_microphone": m.supports_microphone,
+            "notes": m.notes,
+            "params": get_params_schema(m.model_id),
+        }
+        for m in registry_list()
+    ]
+
+
+@router.get("/{model_id}/params")
+def get_model_params(model_id: str):
+    """Vrátí schéma parametrů pro konkrétní model."""
+    schema = get_params_schema(model_id)
+    if not schema and model_id not in REGISTRY:
+        raise HTTPException(status_code=404, detail="model not found in registry")
+    descriptor = REGISTRY.get(model_id)
+    return {
+        "model_id": model_id,
+        "supports_streaming": descriptor.supports_streaming if descriptor else False,
+        "supports_microphone": descriptor.supports_microphone if descriptor else False,
+        "params": schema,
+    }
 
 
 @router.get("", response_model=list[ModelStatus])
