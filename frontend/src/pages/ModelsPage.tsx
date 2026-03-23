@@ -363,36 +363,62 @@ python scripts/copy_subtitles.py     # kopíruj VTT`}
         )}
       </div>
 
-      {/* === Nápověda + adresáře === */}
+      {/* === Adresáře — klikatelné === */}
       <div className="bg-gray-50 rounded border border-gray-200 p-4 text-xs text-gray-500 space-y-3">
-        <p className="font-semibold text-gray-700 text-sm">Adresáře a soubory</p>
+        <p className="font-semibold text-gray-700 text-sm">Adresáře (klikni pro otevření v průzkumníku)</p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <p><span className="font-mono text-gray-700">runtime/model_store/{'{model_id}'}/ </span>— soubory modelu (.bin, .ggml, .onnx...)</p>
-            <p><span className="font-mono text-gray-700">docs/models/{'{model_id}'}.json</span>— log instalací, odinstalací, poznámek</p>
-            <p><span className="font-mono text-gray-700">runtime/jobs/{'{job_id}'}/</span>— config, progress, worker_result, log.txt</p>
-            <p><span className="font-mono text-gray-700">runtime/runs/{'{run_id}'}/</span>— benchmark_matrix.json, artefakty</p>
-          </div>
-          <div className="space-y-1">
-            <p className="font-medium text-gray-600">Jak nainstalovat model:</p>
-            <p>1. Zkopíruj soubory do <span className="font-mono">runtime/model_store/{'{model_id}'}/ </span></p>
-            <p>2. Klikni <strong>Zaznamenat install</strong> — uloží datum, velikost a verzi.</p>
-            <p>3. Pro whisper.cpp: whisper-cli.exe musí být v <span className="font-mono">runtime/model_store/whisper_cpp_runtime/</span></p>
-          </div>
+        <div className="space-y-1.5">
+          <DirLink
+            onClick={() => api.openDir.modelStore()}
+            path="runtime/model_store/"
+            desc="soubory modelů (.bin, .ggml, .onnx...)"
+          />
+          <DirLink
+            onClick={() => api.openDir.modelsLog()}
+            path="docs/models/"
+            desc="JSON logy instalací, odinstalací a poznámek"
+          />
+          <DirLink
+            onClick={() => api.openDir.jobs()}
+            path="runtime/jobs/"
+            desc="config, progress.json, worker_result.json, log.txt pro každý job"
+          />
+          <DirLink
+            onClick={() => api.openDir.runs()}
+            path="runtime/runs/"
+            desc="benchmark_matrix.json a artefakty každého runu"
+          />
         </div>
 
-        <div className="flex gap-2 flex-wrap pt-1">
-          <button
-            onClick={() => api.models.openLogsDir().catch(() => {})}
-            className="bg-white border border-gray-300 rounded px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 font-medium"
-            title="Otevřít docs/models/ v průzkumníku"
-          >
-            📁 Otevřít logy instalací (docs/models/)
-          </button>
+        <div className="border-t border-gray-200 pt-3 space-y-1">
+          <p className="font-medium text-gray-600">Jak nainstalovat model:</p>
+          <p>1. Zkopíruj soubory do <span className="font-mono">runtime/model_store/{'{model_id}'}/ </span></p>
+          <p>2. Klikni <strong>Zaznamenat install</strong> — uloží datum, velikost a verzi do logu.</p>
+          <p>3. Pro whisper.cpp: <span className="font-mono">whisper-cli.exe</span> musí být v <span className="font-mono">runtime/model_store/whisper_cpp_runtime/</span></p>
         </div>
       </div>
     </div>
+  )
+}
+
+function DirLink({ onClick, path, desc }: { onClick: () => Promise<unknown>; path: string; desc: string }) {
+  const [status, setStatus] = useState<'idle' | 'ok' | 'err'>('idle')
+  async function handle() {
+    try { await onClick(); setStatus('ok') } catch { setStatus('err') }
+    setTimeout(() => setStatus('idle'), 2000)
+  }
+  return (
+    <button
+      onClick={handle}
+      className="flex items-center gap-2 w-full text-left group hover:bg-gray-100 rounded px-2 py-1.5 transition-colors"
+    >
+      <span className="text-base">📁</span>
+      <span className="font-mono text-blue-700 group-hover:underline">{path}</span>
+      <span className="text-gray-400">—</span>
+      <span className="text-gray-500">{desc}</span>
+      {status === 'ok' && <span className="ml-auto text-green-600 text-xs">✓ otevřeno</span>}
+      {status === 'err' && <span className="ml-auto text-red-500 text-xs">chyba — restartuj backend</span>}
+    </button>
   )
 }
 

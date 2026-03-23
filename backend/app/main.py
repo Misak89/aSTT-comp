@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 # Add packages to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from .routers import health, library, benchmark, runs, models, mic
+from .routers import health, library, benchmark, runs, models, mic, open_dir
 
 app = FastAPI(title="aSTT-comp", version="0.1.0")
 
@@ -22,6 +22,7 @@ app.include_router(benchmark.router)
 app.include_router(runs.router)
 app.include_router(models.router)
 app.include_router(mic.router)
+app.include_router(open_dir.router)
 
 # Serve built frontend (production)
 _DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"

@@ -62,10 +62,17 @@ export const api = {
     saveScenario: (sc: Scenario) => post<Scenario>('/benchmark/scenarios', sc),
     deleteScenario: (id: string) => del(`/benchmark/scenarios/${id}`),
     getLive: (id: string) => get<LiveJobProgress>(`/benchmark/jobs/${id}/live`),
-    openJobDir: (id: string) => post<{ path: string }>(`/benchmark/jobs/${id}/open-dir`),
+    openJobDir: (id: string) => post<{ path: string }>(`/open-dir/jobs/${id}`),
   },
   runs: {
     get: (id: string) => get<RunDetail>(`/runs/${id}`),
+    openDir: (id: string) => post<{ path: string }>(`/open-dir/runs/${id}`),
+  },
+  openDir: {
+    jobs: () => post<{ path: string }>('/open-dir/jobs'),
+    runs: () => post<{ path: string }>('/open-dir/runs'),
+    modelStore: () => post<{ path: string }>('/open-dir/model_store'),
+    modelsLog: () => post<{ path: string }>('/open-dir/models_log'),
   },
   models: {
     list: () => get<ModelStatus[]>('/models'),
@@ -78,8 +85,8 @@ export const api = {
       del(`/models/${id}`),
     addNote: (id: string, note: string) =>
       post<ModelStatus>(`/models/${id}/note`, { note }),
-    openLogsDir: () => post<{ path: string }>('/models/open-logs-dir'),
-    openStoreDir: (id: string) => post<{ path: string }>(`/models/${id}/open-store-dir`),
+    openLogsDir: () => post<{ path: string }>('/open-dir/models_log'),
+    openStoreDir: (id: string) => post<{ path: string }>(`/open-dir/model_store/${id}`),
   },
   mic: {
     devices: () => get<AudioDevice[]>('/mic/devices'),
