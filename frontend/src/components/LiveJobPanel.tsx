@@ -15,7 +15,15 @@ export function LiveJobPanel({ job, onCancel }: Props) {
   const [messageLog, setMessageLog] = useState<string[]>([])
   const [hwSeries, setHwSeries] = useState<HwSample[]>([])
   const [transcript, setTranscript] = useState('')
-  const [allTranscripts, setAllTranscripts] = useState<{ label: string; transcript: string; wer: number | null; reference: string | null }[]>([])
+  const [allTranscripts, setAllTranscripts] = useState<{
+    label: string
+    model_id: string; model_label: string; setting_id: string; setting_label: string
+    transcript: string; reference: string | null
+    wer: number | null; cer: number | null; rtf: number | null
+    latency_ms: number | null; engine_elapsed_s: number | null; clip_seconds: number | null
+    agg_cpu: number | null; agg_ram: number | null
+    chunk_metrics: { chunk_start_s: number; chunk_end_s: number; chunk_duration_s: number; processing_s: number; rtf: number; total_elapsed_s: number; words: number }[] | null
+  }[]>([])
   const [activeTranscriptIdx, setActiveTranscriptIdx] = useState(0)
   const [preCpu, setPreCpu] = useState<number | null>(job.pre_cpu ?? null)
   const [preRamMb, setPreRamMb] = useState<number | null>(job.pre_ram_mb ?? null)
@@ -354,14 +362,25 @@ export function LiveJobPanel({ job, onCancel }: Props) {
                       const run = await api.runs.get(job.run_id)
                       const collected: typeof allTranscripts = []
                       for (const res of run.results ?? []) {
-                        const label = `${res.model_label} × ${res.setting_label}`
                         for (const sm of res.source_metrics ?? []) {
                           if (sm.transcript) {
                             collected.push({
-                              label,
+                              label: `${res.model_label} × ${res.setting_label}`,
+                              model_id: res.model_id,
+                              model_label: res.model_label,
+                              setting_id: res.setting_id,
+                              setting_label: res.setting_label,
                               transcript: sm.transcript,
-                              wer: sm.wer ?? null,
                               reference: sm.reference_text ?? null,
+                              wer: sm.wer ?? null,
+                              cer: sm.cer ?? null,
+                              rtf: sm.rtf ?? null,
+                              latency_ms: sm.latency_ms ?? null,
+                              engine_elapsed_s: sm.engine_elapsed_seconds ?? null,
+                              clip_seconds: sm.clip_seconds ?? null,
+                              agg_cpu: res.aggregate?.cpu_percent ?? null,
+                              agg_ram: res.aggregate?.ram_mb ?? null,
+                              chunk_metrics: (sm.chunk_metrics as any) ?? null,
                             })
                           }
                         }
@@ -392,14 +411,14 @@ export function LiveJobPanel({ job, onCancel }: Props) {
           </div>
         </div>
 
-        {/* Finální: více přepisů — záložky model × setting */}
-        {!isActive && allTranscripts.length > 1 && (
+        {/* Záložky model × setting */}
+        {!isActive && allTranscripts.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {allTranscripts.map((t, i) => (
               <button
                 key={i}
                 onClick={() => setActiveTranscriptIdx(i)}
-                className={`text-xs px-2 py-0.5 rounded border ${
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${
                   i === activeTranscriptIdx
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
@@ -407,7 +426,7 @@ export function LiveJobPanel({ job, onCancel }: Props) {
               >
                 {t.label}
                 {t.wer != null && (
-                  <span className={`ml-1 font-mono ${t.wer < 0.15 ? 'text-green-300' : t.wer < 0.4 ? 'text-yellow-300' : 'text-red-300'}`}>
+                  <span className={`ml-1 font-mono ${i === activeTranscriptIdx ? 'text-blue-200' : t.wer < 0.15 ? 'text-green-600' : t.wer < 0.4 ? 'text-yellow-600' : 'text-red-600'}`}>
                     WER {(t.wer * 100).toFixed(0)}%
                   </span>
                 )}
@@ -416,19 +435,96 @@ export function LiveJobPanel({ job, onCancel }: Props) {
           </div>
         )}
 
-        {/* Zobrazení aktivního přepisu */}
+        {/* Detail aktivního přepisu */}
         {!isActive && allTranscripts.length > 0
-          ? <div className="space-y-1">
-              <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-12">
-                {allTranscripts[activeTranscriptIdx]?.transcript}
-              </p>
-              {allTranscripts[activeTranscriptIdx]?.reference && (
-                <details className="text-xs">
-                  <summary className="cursor-pointer text-gray-400 hover:text-gray-600 select-none">Referenční text (titulky)</summary>
-                  <p className="mt-1 text-gray-500 italic whitespace-pre-wrap">{allTranscripts[activeTranscriptIdx].reference}</p>
-                </details>
-              )}
-            </div>
+          ? (() => {
+              const t = allTranscripts[activeTranscriptIdx]
+              if (!t) return null
+              return (
+                <div className="space-y-2">
+                  {/* Identifikace */}
+                  <div className="bg-gray-50 rounded px-3 py-2 text-xs space-y-0.5">
+                    <div className="flex gap-4 flex-wrap font-medium text-gray-700">
+                      <span>Model: <span className="font-mono text-blue-700">{t.model_id}</span></span>
+                      <span>Nastavení: <span className="font-mono text-blue-700">{t.setting_label}</span></span>
+                      {t.clip_seconds != null && <span>Délka klipu: <span className="font-mono">{t.clip_seconds}s</span></span>}
+                    </div>
+                  </div>
+
+                  {/* Statistiky */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    <StatBox label="WER" value={t.wer != null ? `${(t.wer * 100).toFixed(1)}%` : '–'}
+                      sub="Word Error Rate" color={t.wer == null ? '' : t.wer < 0.15 ? 'text-green-700' : t.wer < 0.4 ? 'text-yellow-700' : 'text-red-700'} />
+                    <StatBox label="CER" value={t.cer != null ? `${(t.cer * 100).toFixed(1)}%` : '–'}
+                      sub="Char Error Rate" color={t.cer == null ? '' : t.cer < 0.08 ? 'text-green-700' : t.cer < 0.2 ? 'text-yellow-700' : 'text-red-700'} />
+                    <StatBox label="RTF" value={t.rtf != null ? t.rtf.toFixed(3) : '–'}
+                      sub={t.rtf != null ? (t.rtf < 1 ? '✓ stíhá live' : '✗ nestíhá live') : 'Real-Time Factor'}
+                      color={t.rtf == null ? '' : t.rtf < 1 ? 'text-green-700' : 'text-red-700'} />
+                    <StatBox label="Latence" value={t.latency_ms != null ? `${(t.latency_ms / 1000).toFixed(1)}s` : '–'}
+                      sub="1. výsledek / celý přepis" />
+                    <StatBox label="Elapsed" value={t.engine_elapsed_s != null ? `${t.engine_elapsed_s.toFixed(1)}s` : '–'}
+                      sub="Skutečný čas přepisu" />
+                    {t.agg_cpu != null && <StatBox label="CPU" value={`${t.agg_cpu.toFixed(0)}%`} sub="Průměr (subprocess)" />}
+                    {t.agg_ram != null && <StatBox label="RAM" value={`${Math.round(t.agg_ram)} MB`} sub="Peak (subprocess)" />}
+                  </div>
+
+                  {/* Chunk metriky */}
+                  {t.chunk_metrics && t.chunk_metrics.length > 0 && (
+                    <details className="text-xs" open={t.chunk_metrics.length <= 5}>
+                      <summary className="cursor-pointer text-gray-500 hover:text-gray-700 select-none font-medium">
+                        Chunky ({t.chunk_metrics.length}× — RTF per chunk)
+                      </summary>
+                      <div className="mt-1 overflow-x-auto rounded border border-gray-100">
+                        <table className="w-full text-xs">
+                          <thead className="bg-gray-50 text-gray-500">
+                            <tr>
+                              <th className="px-2 py-1 text-left">#</th>
+                              <th className="px-2 py-1 text-right">Start</th>
+                              <th className="px-2 py-1 text-right">Délka</th>
+                              <th className="px-2 py-1 text-right">Přepis (s)</th>
+                              <th className="px-2 py-1 text-right font-bold">RTF</th>
+                              <th className="px-2 py-1 text-right">Elapsed</th>
+                              <th className="px-2 py-1 text-right">Slov</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {t.chunk_metrics.map((c, ci) => (
+                              <tr key={ci} className="border-t border-gray-100">
+                                <td className="px-2 py-1 text-gray-400">{ci + 1}</td>
+                                <td className="px-2 py-1 text-right font-mono">{c.chunk_start_s.toFixed(0)}s</td>
+                                <td className="px-2 py-1 text-right font-mono">{c.chunk_duration_s.toFixed(0)}s</td>
+                                <td className="px-2 py-1 text-right font-mono">{c.processing_s.toFixed(2)}s</td>
+                                <td className={`px-2 py-1 text-right font-mono font-bold ${c.rtf < 1 ? 'text-green-700' : 'text-red-700'}`}>
+                                  {c.rtf.toFixed(3)}
+                                </td>
+                                <td className="px-2 py-1 text-right font-mono text-gray-500">{c.total_elapsed_s.toFixed(1)}s</td>
+                                <td className="px-2 py-1 text-right font-mono">{c.words}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
+
+                  {/* Přepis text */}
+                  <div className="bg-gray-50 rounded p-2">
+                    <p className="text-xs text-gray-500 mb-1 font-medium">Přepis modelu</p>
+                    <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">{t.transcript}</p>
+                  </div>
+
+                  {/* Referenční text */}
+                  {t.reference && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-gray-400 hover:text-gray-600 select-none">
+                        Referenční text (titulky YouTube)
+                      </summary>
+                      <p className="mt-1 bg-green-50 border border-green-100 rounded p-2 text-gray-600 italic whitespace-pre-wrap">{t.reference}</p>
+                    </details>
+                  )}
+                </div>
+              )
+            })()
           : <div>
               {showTimestamps && transcriptTs
                 ? <pre className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-mono min-h-12">{transcriptTs}</pre>
@@ -462,6 +558,17 @@ export function LiveJobPanel({ job, onCancel }: Props) {
           </pre>
         </div>
       )}
+    </div>
+  )
+}
+
+
+function StatBox({ label, value, sub, color = '' }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div className="bg-gray-50 border border-gray-200 rounded px-3 py-2 text-center">
+      <p className="text-xs text-gray-400">{label}</p>
+      <p className={`text-base font-bold font-mono ${color || 'text-gray-800'}`}>{value}</p>
+      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
     </div>
   )
 }
