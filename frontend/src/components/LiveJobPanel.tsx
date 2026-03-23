@@ -201,7 +201,14 @@ export function LiveJobPanel({ job, onCancel }: Props) {
               {subtitleLoading ? 'Načítám...' : showSubtitles ? '▲ Skrýt titulky' : '📄 Titulky'}
             </button>
           )}
-          <span className="font-mono">{job.job_id.slice(-12)}</span>
+          <button
+            onClick={() => api.benchmark.openJobDir(job.job_id).catch(() => {})}
+            className="text-gray-500 hover:text-gray-800 hover:underline"
+            title={`Otevřít adresář jobu v průzkumníku: runtime/jobs/${job.job_id}`}
+          >
+            📁 Logy
+          </button>
+          <span className="font-mono text-gray-400">{job.job_id.slice(-12)}</span>
         </div>
       </div>
 

@@ -1,7 +1,11 @@
+import subprocess
+import sys
+
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from ..models.benchmark import BenchmarkJobRequest, BenchmarkJobStatus, JobListResponse, Scenario, LiveJobProgress
 from ..services import benchmark_service, scenario_service
+from ..config import JOBS_ROOT
 
 router = APIRouter(prefix="/api/benchmark")
 
@@ -41,6 +45,16 @@ def cancel_job(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job
+
+
+@router.post("/jobs/{job_id}/open-dir")
+def open_job_dir(job_id: str):
+    """Otevře adresář jobu v průzkumníku souborů (lokální nástroj)."""
+    job_dir = JOBS_ROOT / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="job dir not found")
+    _open_in_explorer(job_dir)
+    return {"path": str(job_dir)}
 
 
 @router.get("/jobs/{job_id}/live", response_model=LiveJobProgress)
@@ -109,3 +123,15 @@ def _merge_scenario(req: BenchmarkJobRequest, sc: Scenario) -> BenchmarkJobReque
         data["clip_seed"] = sc.clip_seed
     data["sample_seconds"] = data.get("sample_seconds") or sc.clip_seconds
     return BenchmarkJobRequest(**data)
+
+
+def _open_in_explorer(path) -> None:
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", str(path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception:
+        pass

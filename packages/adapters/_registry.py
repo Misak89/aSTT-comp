@@ -51,6 +51,7 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,   # whisper-cli potřebuje soubor
             supports_microphone=False,
+            notes="Nejmenší model (~74 MB). Rychlý, vhodný pro rychlé testy. WER cca 15–25% na CZ.",
             params=[
                 ParamSpec("language",   "Jazyk",        "str",  "cs", "Kód jazyka (cs, en, de, ...)"),
                 ParamSpec("threads",    "Vlákna CPU",   "int",  4,    "Počet CPU vláken", min=1, max=16),
@@ -67,12 +68,13 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
             supports_microphone=False,
+            notes="Doporučený model pro CZ (~244 MB). Dobrý poměr přesnost/rychlost. WER cca 8–15% na CZ.",
             params=[
-                ParamSpec("language",   "Jazyk",        "str",  "cs"),
-                ParamSpec("threads",    "Vlákna CPU",   "int",  4,   min=1, max=16),
-                ParamSpec("beam_size",  "Beam size",    "int",  5,   min=1, max=10),
-                ParamSpec("best_of",    "Best of",      "int",  5,   min=1, max=10),
-                ParamSpec("no_fallback","Bez fallbacku","bool", True),
+                ParamSpec("language",   "Jazyk",        "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
+                ParamSpec("threads",    "Vlákna CPU",   "int",  4,     "Počet CPU vláken", min=1, max=16),
+                ParamSpec("beam_size",  "Beam size",    "int",  5,     "Větší = přesnější, pomalejší", min=1, max=10),
+                ParamSpec("best_of",    "Best of",      "int",  5,     "Počet kandidátů dekódování", min=1, max=10),
+                ParamSpec("no_fallback","Bez fallbacku","bool", True,  "Zakáže fallback na menší model"),
             ],
         ),
 
@@ -83,13 +85,13 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
             supports_microphone=False,
-            notes="Nejlepší přesnost, RTF > 1 na většině CPU",
+            notes="Nejlepší přesnost (~1550 MB), RTF > 1 na většině CPU — nestíhá live přepis.",
             params=[
-                ParamSpec("language",   "Jazyk",        "str",  "cs"),
-                ParamSpec("threads",    "Vlákna CPU",   "int",  4,   min=1, max=16),
-                ParamSpec("beam_size",  "Beam size",    "int",  5,   min=1, max=10),
-                ParamSpec("best_of",    "Best of",      "int",  5,   min=1, max=10),
-                ParamSpec("no_fallback","Bez fallbacku","bool", True),
+                ParamSpec("language",   "Jazyk",        "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
+                ParamSpec("threads",    "Vlákna CPU",   "int",  4,     "Počet CPU vláken", min=1, max=16),
+                ParamSpec("beam_size",  "Beam size",    "int",  5,     "Větší = přesnější, pomalejší", min=1, max=10),
+                ParamSpec("best_of",    "Best of",      "int",  5,     "Počet kandidátů dekódování", min=1, max=10),
+                ParamSpec("no_fallback","Bez fallbacku","bool", True,  "Zakáže fallback na menší model"),
             ],
         ),
 

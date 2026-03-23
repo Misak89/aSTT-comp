@@ -1,19 +1,62 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { ModelStatus, ModelEvent } from '../types'
+import type { ModelStatus, ModelEvent, ModelDescriptor } from '../types'
+
+// Popis adaptérů — mapování adapter ID → info
+const ADAPTER_INFO: Record<string, { label: string; source: string; description: string }> = {
+  whisper_cpp: {
+    label: 'whisper.cpp',
+    source: 'packages/adapters/whisper_cpp_runner.py',
+    description: 'Offline inference přes whisper-cli binary (subprocess). Nepodporuje streaming — zpracovává celý soubor najednou. Potřebuje whisper-cli.exe v runtime/model_store/.',
+  },
+  vosk: {
+    label: 'VOSK (Kaldi)',
+    source: 'packages/adapters/vosk_runner.py',
+    description: 'Offline streaming přes VOSK Python API (Kaldi backend). Dedikované české modely, velmi nízké nároky na RAM (<200 MB), nízká latence.',
+  },
+  sherpa_onnx: {
+    label: 'sherpa-onnx',
+    source: 'packages/adapters/sherpa_onnx_runner.py',
+    description: 'Streaming ONNX inference. Cross-platform, nízká latence. Aktuální model je EN-only.',
+  },
+  qwen_asr: {
+    label: 'Qwen3-ASR (HuggingFace transformers)',
+    source: 'packages/adapters/qwen_asr_runner.py',
+    description: 'LLM-based ASR přes HuggingFace transformers. Vysoká přesnost, vysoké HW nároky (RAM 4–8 GB). Na Windows VŽDY float32 — bfloat16 způsobuje crash.',
+  },
+  moonshine: {
+    label: 'Moonshine (Useful Sensors)',
+    source: 'packages/adapters/moonshine_runner.py',
+    description: 'Moderní streaming ASR model. 245M params, WER 6.65% na EN LibriSpeech. Zatím pouze angličtina.',
+  },
+}
+
+// Popis settingů (chunk params)
+const SETTINGS_DOC = [
+  { id: 'low_latency',   label: 'Low latency (15s)',   chunk_seconds: 15, threads: 4, beam_size: 1,  no_fallback: true,
+    description: 'Nejkratší chunky — nejnižší latence, ale nižší přesnost. Vhodné pro živý dialog.' },
+  { id: 'balanced',      label: 'Balanced (30s)',      chunk_seconds: 30, threads: 4, beam_size: 5,  no_fallback: true,
+    description: 'Kompromis latence vs přesnost. Výchozí nastavení pro většinu testů.' },
+  { id: 'high_accuracy', label: 'High accuracy (60s)', chunk_seconds: 60, threads: 4, beam_size: 5,  no_fallback: false,
+    description: 'Nejdelší chunky — nejlepší přesnost, ale nejvyšší latence. Vhodné pro offline přepis.' },
+  { id: 'memory_saver',  label: 'Memory saver (30s)',  chunk_seconds: 30, threads: 2, beam_size: 1,  no_fallback: true,
+    description: 'Méně vláken a beam_size=1 — šetří RAM a CPU. Pro slabší stroje.' },
+]
 
 export function ModelsPage() {
   const [models, setModels] = useState<ModelStatus[]>([])
+  const [registry, setRegistry] = useState<ModelDescriptor[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
   const [noteInput, setNoteInput] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState('')
 
-  useEffect(() => { loadModels() }, [])
+  useEffect(() => { loadAll() }, [])
 
-  async function loadModels() {
+  async function loadAll() {
     try {
-      const data = await api.models.list()
-      setModels(data)
+      const [statuses, reg] = await Promise.all([api.models.list(), api.models.registry()])
+      setModels(statuses)
+      setRegistry(reg)
     } catch (e: any) {
       setMsg(`Chyba načítání: ${e.message}`)
     }
@@ -22,14 +65,14 @@ export function ModelsPage() {
   async function recordInstall(id: string) {
     try {
       await api.models.recordInstall(id)
-      await loadModels()
+      await loadAll()
     } catch (e: any) { setMsg(`Chyba: ${e.message}`) }
   }
 
   async function recordUninstall(id: string) {
     try {
       await api.models.recordUninstall(id)
-      await loadModels()
+      await loadAll()
     } catch (e: any) { setMsg(`Chyba: ${e.message}`) }
   }
 
@@ -39,114 +82,315 @@ export function ModelsPage() {
     try {
       await api.models.addNote(id, note)
       setNoteInput(prev => ({ ...prev, [id]: '' }))
-      await loadModels()
+      await loadAll()
     } catch (e: any) { setMsg(`Chyba: ${e.message}`) }
   }
+
+  // Vytvoř mapu registry pro rychlý lookup
+  const registryMap = new Map(registry.map(r => [r.model_id, r]))
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Modely</h1>
-        <button onClick={loadModels} className="text-xs text-blue-600 hover:underline">Obnovit</button>
+        <button onClick={loadAll} className="text-xs text-blue-600 hover:underline">Obnovit</button>
       </div>
 
       {msg && <p className="text-sm text-red-600">{msg}</p>}
 
-      <div className="space-y-3">
-        {models.map(m => (
-          <div key={m.model_id} className="bg-white rounded border border-gray-200">
-            {/* Hlavička modelu */}
-            <div className="px-4 py-3 flex items-center gap-4 flex-wrap">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{m.label}</span>
-                  <span className="font-mono text-xs text-gray-400">{m.model_id}</span>
-                </div>
-                <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500">
-                  {m.installed
-                    ? <>
-                        <span className="text-green-600 font-medium">Nainstalován</span>
-                        {m.size_mb != null && <span>{m.size_mb} MB</span>}
-                        {m.last_install && <span>od {m.last_install.slice(0, 10)}</span>}
-                      </>
-                    : <span className="text-gray-400">Nenainstalován</span>}
-                </div>
-              </div>
+      {/* === Jak spustit / restartovat === */}
+      <div className="bg-slate-900 rounded-lg border border-slate-700 p-4 space-y-4 text-sm">
+        <h2 className="font-bold text-white text-base">Spuštění a restart</h2>
 
-              {/* Akce */}
-              <div className="flex items-center gap-2 text-xs">
-                <button
-                  onClick={() => recordInstall(m.model_id)}
-                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1 rounded"
-                >
-                  + Zaznamenat install
-                </button>
-                {m.installed && (
-                  <button
-                    onClick={() => recordUninstall(m.model_id)}
-                    className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-3 py-1 rounded"
-                  >
-                    Odinstalovat
-                  </button>
-                )}
-                <button
-                  onClick={() => setExpanded(expanded === m.model_id ? null : m.model_id)}
-                  className="text-gray-500 hover:text-gray-700 border border-gray-200 px-3 py-1 rounded"
-                >
-                  {expanded === m.model_id ? '▲ Log' : '▼ Log'}
-                  {m.events.length > 0 && (
-                    <span className="ml-1 bg-gray-100 text-gray-600 rounded-full px-1.5">{m.events.length}</span>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Rozbalený log */}
-            {expanded === m.model_id && (
-              <div className="border-t border-gray-100 px-4 py-3 space-y-3">
-                {/* Přidat poznámku */}
-                <div className="flex gap-2">
-                  <input
-                    value={noteInput[m.model_id] || ''}
-                    onChange={e => setNoteInput(prev => ({ ...prev, [m.model_id]: e.target.value }))}
-                    placeholder="Přidat poznámku..."
-                    className="flex-1 border rounded px-2 py-1 text-xs"
-                    onKeyDown={e => e.key === 'Enter' && addNote(m.model_id)}
-                  />
-                  <button
-                    onClick={() => addNote(m.model_id)}
-                    className="text-xs bg-gray-50 hover:bg-gray-100 border border-gray-200 px-3 py-1 rounded"
-                  >
-                    Přidat
-                  </button>
-                </div>
-
-                {/* Timeline eventů */}
-                {m.events.length === 0 ? (
-                  <p className="text-xs text-gray-400">Žádné záznamy.</p>
-                ) : (
-                  <div className="space-y-1">
-                    {[...m.events].reverse().map((ev, i) => (
-                      <EventRow key={i} ev={ev} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-1">
+            <p className="text-slate-300 font-semibold">Backend (FastAPI)</p>
+            <p className="text-slate-500 text-xs">Port 8012 · uvicorn · --reload = auto-restart při změně souboru</p>
+            <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
+{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
+.venv\\Scripts\\python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8012 --reload`}
+            </pre>
+            <p className="text-slate-500 text-xs">Restart: Ctrl+C v terminálu → spusť znovu. Nebo ulož jakýkoliv .py soubor (--reload).</p>
           </div>
-        ))}
+
+          <div className="space-y-1">
+            <p className="text-slate-300 font-semibold">Frontend build (Vite → dist/)</p>
+            <p className="text-slate-500 text-xs">Po každé změně .tsx/.ts souboru je potřeba rebuild!</p>
+            <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
+{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
+npm run build`}
+            </pre>
+            <p className="text-slate-500 text-xs">Výstup jde do <span className="font-mono text-slate-400">frontend/dist/</span> — backend ji servuje staticky.</p>
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-slate-300 font-semibold">Frontend dev server (live reload)</p>
+            <p className="text-slate-500 text-xs">Alternativa k buildu — změny se projeví okamžitě na portu 5173</p>
+            <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
+{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
+npm run dev`}
+            </pre>
+            <p className="text-slate-500 text-xs">Otevři <span className="font-mono text-slate-400">http://localhost:5173</span> (API proxuje na backend :8012).</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <p className="text-slate-300 font-semibold">Testy</p>
+            <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
+{`# Unit testy (bez backendu)
+.venv\\Scripts\\python -m pytest tests/unit/ -v
+
+# Integration testy (potřebuje běžící backend)
+.venv\\Scripts\\python -m pytest tests/integration/ -v`}
+            </pre>
+          </div>
+          <div className="space-y-1">
+            <p className="text-slate-300 font-semibold">Utility skripty</p>
+            <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
+{`python scripts/check_health.py       # backend alive?
+python scripts/preflight.py          # HW podmínky OK?
+python scripts/check_model.py whisper_cpp_small
+python scripts/copy_subtitles.py     # kopíruj VTT`}
+            </pre>
+          </div>
+        </div>
+      </div>
+
+      {/* === Popis nastavení (settings / chunky) === */}
+      <div className="bg-white rounded border border-gray-200">
+        <div className="px-4 py-3 border-b border-gray-100">
+          <h2 className="font-semibold text-sm text-gray-700">Benchmark nastavení (Settings)</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Každé nastavení definuje chunk_seconds, threads a beam_size — jedno video se testuje s každým nastavením zvlášť.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 text-gray-500 uppercase">
+              <tr>
+                <th className="px-4 py-2 text-left">Název</th>
+                <th className="px-4 py-2 text-right">chunk_seconds</th>
+                <th className="px-4 py-2 text-right">threads</th>
+                <th className="px-4 py-2 text-right">beam_size</th>
+                <th className="px-4 py-2 text-center">no_fallback</th>
+                <th className="px-4 py-2 text-left">Popis</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SETTINGS_DOC.map(s => (
+                <tr key={s.id} className="border-t border-gray-100">
+                  <td className="px-4 py-2 font-medium text-gray-800">{s.label}</td>
+                  <td className="px-4 py-2 text-right font-mono text-blue-700">{s.chunk_seconds}s</td>
+                  <td className="px-4 py-2 text-right font-mono">{s.threads}</td>
+                  <td className="px-4 py-2 text-right font-mono">{s.beam_size}</td>
+                  <td className="px-4 py-2 text-center font-mono">{s.no_fallback ? '✓' : '✗'}</td>
+                  <td className="px-4 py-2 text-gray-500">{s.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* === Seznam modelů === */}
+      <div className="space-y-3">
+        {models.map(m => {
+          const reg = registryMap.get(m.model_id)
+          const adapterInfo = reg ? ADAPTER_INFO[reg.adapter] : undefined
+          const isExpanded = expanded === m.model_id
+
+          return (
+            <div key={m.model_id} className="bg-white rounded border border-gray-200">
+              {/* Hlavička */}
+              <div className="px-4 py-3 flex items-center gap-4 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-sm text-gray-900">{m.label}</span>
+                    <span className="font-mono text-xs text-gray-400 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded">{m.model_id}</span>
+                    {reg && (
+                      <span className="text-xs text-gray-500 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
+                        {reg.adapter}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500 flex-wrap">
+                    {m.installed
+                      ? <>
+                          <span className="text-green-600 font-medium">✓ Nainstalován</span>
+                          {m.size_mb != null && <span>{m.size_mb} MB</span>}
+                          {m.last_install && <span>od {m.last_install.slice(0, 10)}</span>}
+                        </>
+                      : <span className="text-orange-500">✗ Nenainstalován</span>}
+                    {reg && (
+                      <>
+                        <span className="text-gray-300">|</span>
+                        <span>Jazyky: {reg.languages.join(', ')}</span>
+                        {reg.supports_streaming && <span className="text-green-600">streaming</span>}
+                        {reg.supports_microphone && <span className="text-blue-600">mikrofon</span>}
+                      </>
+                    )}
+                  </div>
+                  {reg?.notes && (
+                    <p className="text-xs text-amber-700 mt-1 bg-amber-50 border border-amber-100 rounded px-2 py-0.5 inline-block">
+                      ⚠ {reg.notes}
+                    </p>
+                  )}
+                </div>
+
+                {/* Akce */}
+                <div className="flex items-center gap-2 text-xs flex-wrap">
+                  {m.installed && (
+                    <button
+                      onClick={() => api.models.openStoreDir(m.model_id).catch(() => {})}
+                      className="bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 px-2 py-1 rounded"
+                      title={`Otevřít runtime/model_store/${m.model_id}/`}
+                    >
+                      📁 Soubory
+                    </button>
+                  )}
+                  <button
+                    onClick={() => recordInstall(m.model_id)}
+                    className="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1 rounded"
+                  >
+                    + Zaznamenat install
+                  </button>
+                  {m.installed && (
+                    <button
+                      onClick={() => recordUninstall(m.model_id)}
+                      className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-3 py-1 rounded"
+                    >
+                      Odinstalovat
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setExpanded(isExpanded ? null : m.model_id)}
+                    className="text-gray-500 hover:text-gray-700 border border-gray-200 px-3 py-1 rounded"
+                  >
+                    {isExpanded ? '▲ Skrýt' : '▼ Detail'}
+                    {m.events.length > 0 && (
+                      <span className="ml-1 bg-gray-100 text-gray-600 rounded-full px-1.5">{m.events.length}</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Rozbalený detail */}
+              {isExpanded && (
+                <div className="border-t border-gray-100 px-4 py-4 space-y-4">
+
+                  {/* Popis adaptéru */}
+                  {adapterInfo && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Adaptér</p>
+                      <p className="text-sm text-gray-800 font-medium">{adapterInfo.label}</p>
+                      <p className="text-xs text-gray-500">{adapterInfo.description}</p>
+                      <p className="text-xs text-gray-400 font-mono">Zdroj kódu: {adapterInfo.source}</p>
+                    </div>
+                  )}
+
+                  {/* Parametry modelu */}
+                  {reg && reg.params.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                        Parametry modelu ({reg.params.length})
+                      </p>
+                      <div className="overflow-x-auto rounded border border-gray-100">
+                        <table className="w-full text-xs">
+                          <thead className="bg-gray-50 text-gray-500">
+                            <tr>
+                              <th className="px-3 py-1.5 text-left font-medium">Parametr</th>
+                              <th className="px-3 py-1.5 text-left font-medium">Popis</th>
+                              <th className="px-3 py-1.5 text-left font-medium">Typ</th>
+                              <th className="px-3 py-1.5 text-right font-medium">Výchozí</th>
+                              <th className="px-3 py-1.5 text-right font-medium">Min</th>
+                              <th className="px-3 py-1.5 text-right font-medium">Max</th>
+                              <th className="px-3 py-1.5 text-left font-medium">Možnosti</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reg.params.map(p => (
+                              <tr key={p.name} className="border-t border-gray-100">
+                                <td className="px-3 py-1.5 font-mono text-gray-800 font-medium">{p.name}</td>
+                                <td className="px-3 py-1.5 text-gray-600">{p.description || p.label}</td>
+                                <td className="px-3 py-1.5 text-gray-400">{p.type}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-blue-700">{String(p.default)}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-gray-400">{p.min ?? '–'}</td>
+                                <td className="px-3 py-1.5 text-right font-mono text-gray-400">{p.max ?? '–'}</td>
+                                <td className="px-3 py-1.5 text-gray-400">{p.options?.length ? p.options.join(', ') : '–'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Log instalací */}
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Log instalací</p>
+                    <div className="flex gap-2">
+                      <input
+                        value={noteInput[m.model_id] || ''}
+                        onChange={e => setNoteInput(prev => ({ ...prev, [m.model_id]: e.target.value }))}
+                        placeholder="Přidat poznámku..."
+                        className="flex-1 border rounded px-2 py-1 text-xs"
+                        onKeyDown={e => e.key === 'Enter' && addNote(m.model_id)}
+                      />
+                      <button
+                        onClick={() => addNote(m.model_id)}
+                        className="text-xs bg-gray-50 hover:bg-gray-100 border border-gray-200 px-3 py-1 rounded"
+                      >
+                        Přidat
+                      </button>
+                    </div>
+                    {m.events.length === 0 ? (
+                      <p className="text-xs text-gray-400">Žádné záznamy.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {[...m.events].reverse().map((ev, i) => (
+                          <EventRow key={i} ev={ev} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
 
         {models.length === 0 && !msg && (
           <p className="text-gray-400 text-sm">Načítání modelů...</p>
         )}
       </div>
 
-      {/* Nápověda */}
-      <div className="bg-gray-50 rounded border border-gray-200 p-4 text-xs text-gray-500 space-y-1">
-        <p className="font-medium text-gray-700">Jak nainstalovat model</p>
-        <p>Modely se instalují manuálně do <span className="font-mono">runtime/model_store/&#123;model_id&#125;/</span></p>
-        <p>Po instalaci klikni <strong>Zaznamenat install</strong> — zaznamená se datum, velikost a verze do logu.</p>
-        <p>Log se ukládá do <span className="font-mono">docs/models/&#123;model_id&#125;.json</span></p>
+      {/* === Nápověda + adresáře === */}
+      <div className="bg-gray-50 rounded border border-gray-200 p-4 text-xs text-gray-500 space-y-3">
+        <p className="font-semibold text-gray-700 text-sm">Adresáře a soubory</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <p><span className="font-mono text-gray-700">runtime/model_store/{'{model_id}'}/ </span>— soubory modelu (.bin, .ggml, .onnx...)</p>
+            <p><span className="font-mono text-gray-700">docs/models/{'{model_id}'}.json</span>— log instalací, odinstalací, poznámek</p>
+            <p><span className="font-mono text-gray-700">runtime/jobs/{'{job_id}'}/</span>— config, progress, worker_result, log.txt</p>
+            <p><span className="font-mono text-gray-700">runtime/runs/{'{run_id}'}/</span>— benchmark_matrix.json, artefakty</p>
+          </div>
+          <div className="space-y-1">
+            <p className="font-medium text-gray-600">Jak nainstalovat model:</p>
+            <p>1. Zkopíruj soubory do <span className="font-mono">runtime/model_store/{'{model_id}'}/ </span></p>
+            <p>2. Klikni <strong>Zaznamenat install</strong> — uloží datum, velikost a verzi.</p>
+            <p>3. Pro whisper.cpp: whisper-cli.exe musí být v <span className="font-mono">runtime/model_store/whisper_cpp_runtime/</span></p>
+          </div>
+        </div>
+
+        <div className="flex gap-2 flex-wrap pt-1">
+          <button
+            onClick={() => api.models.openLogsDir().catch(() => {})}
+            className="bg-white border border-gray-300 rounded px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 font-medium"
+            title="Otevřít docs/models/ v průzkumníku"
+          >
+            📁 Otevřít logy instalací (docs/models/)
+          </button>
+        </div>
       </div>
     </div>
   )

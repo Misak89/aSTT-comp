@@ -1,9 +1,13 @@
+import subprocess
+import sys
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
 from ..models.models import ModelStatus
 from ..services import models_service
+from ..config import MODELS_LOG_ROOT, MODEL_STORE_ROOT
 from packages.adapters._registry import get_params_schema, list_models as registry_list, REGISTRY
 
 router = APIRouter(prefix="/api/models")
@@ -90,3 +94,32 @@ def add_note(model_id: str, req: NoteRequest):
     if m is None:
         raise HTTPException(status_code=404, detail="model not found")
     return m
+
+
+@router.post("/open-logs-dir")
+def open_logs_dir():
+    """Otevře adresář s logy instalací modelů (docs/models/) v průzkumníku."""
+    _open_in_explorer(MODELS_LOG_ROOT)
+    return {"path": str(MODELS_LOG_ROOT)}
+
+
+@router.post("/{model_id}/open-store-dir")
+def open_model_store_dir(model_id: str):
+    """Otevře adresář modelu v runtime/model_store/ v průzkumníku."""
+    model_dir = MODEL_STORE_ROOT / model_id
+    if not model_dir.exists():
+        raise HTTPException(status_code=404, detail="model dir not found")
+    _open_in_explorer(model_dir)
+    return {"path": str(model_dir)}
+
+
+def _open_in_explorer(path) -> None:
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", str(path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception:
+        pass
