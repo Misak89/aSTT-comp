@@ -26,6 +26,7 @@ class SourceMetric(BaseModel):
     rtf: Optional[float] = None
     engine_elapsed_seconds: Optional[float] = None  # Req 7: doba přepisu
     model_runtime_config: Optional[dict[str, Any]] = None
+    chunk_metrics: Optional[list[dict[str, Any]]] = None
 
 
 class RunResult(BaseModel):

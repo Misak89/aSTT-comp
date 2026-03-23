@@ -20,7 +20,7 @@ export function BenchmarkPage() {
   const [clipSeconds, setClipSeconds] = useState(120)
   const [clipSeed, setClipSeed] = useState<number | ''>('')
   const [label, setLabel] = useState('')
-  const [evalMode, setEvalMode] = useState<EvalMode>('synthetic')
+  const [evalMode, setEvalMode] = useState<EvalMode>('streaming')
   const [perModelParams, setPerModelParams] = useState<Record<string, Record<string, unknown>>>({})
   const [jobs, setJobs] = useState<BenchmarkJobStatus[]>([])
   const [msg, setMsg] = useState('')
@@ -164,6 +164,9 @@ export function BenchmarkPage() {
             <input type="number" value={clipSeconds} onChange={e => setClipSeconds(+e.target.value)}
               className="border rounded px-2 py-1 text-sm w-24" min={10} max={3600} />
           </div>
+          {evalMode === 'streaming' && (
+            <p className="text-xs text-gray-400">Délka chunků je definována nastavením (Low latency = 15s, Balanced = 30s, High accuracy = 60s).</p>
+          )}
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-500">Seed (prázdné = náhodný)</label>
             <input type="number" value={clipSeed} onChange={e => setClipSeed(e.target.value === '' ? '' : +e.target.value)}
@@ -202,7 +205,7 @@ export function BenchmarkPage() {
 
       {/* Live panel pro běžící i dokončené joby (Req 1: panel se nezavírá) */}
       {jobs.filter(j => ['running', 'pending', 'completed', 'failed'].includes(j.status)).slice(0, 3).map(j => (
-        <LiveJobPanel key={j.job_id} job={j} />
+        <LiveJobPanel key={j.job_id} job={j} onCancel={loadJobs} />
       ))}
 
       {/* Seznam jobů */}

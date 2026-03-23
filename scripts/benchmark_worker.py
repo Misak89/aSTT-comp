@@ -29,13 +29,14 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _write_progress(progress_file: Path, message: str, percent: int = 0) -> None:
+def _write_progress(progress_file: Path, message: str, percent: int = 0, transcript: str = "", transcript_ts: str = "") -> None:
     try:
-        progress_file.write_text(
-            json.dumps({"message": message, "percent": percent, "updated_at": _now_utc()},
-                       ensure_ascii=False),
-            encoding="utf-8",
-        )
+        data: dict = {"message": message, "percent": percent, "updated_at": _now_utc()}
+        if transcript:
+            data["transcript"] = transcript
+        if transcript_ts:
+            data["transcript_ts"] = transcript_ts
+        progress_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
 
@@ -86,12 +87,18 @@ def main() -> int:
         if not source_entries:
             raise ValueError(f"Žádné validní zdroje z: {config['sources']}")
 
-        call_count = [0]
+        current_pct = [10]
+        live_transcript = [""]
+        live_transcript_ts = [""]
 
-        def progress_cb(msg: str) -> None:
-            call_count[0] += 1
-            pct = min(10 + call_count[0] * 3, 90)
-            _write_progress(progress_file, msg, pct)
+        def progress_cb(msg: str, pct: int | None = None) -> None:
+            p = pct if pct is not None else current_pct[0]
+            _write_progress(progress_file, msg, p, transcript=live_transcript[0], transcript_ts=live_transcript_ts[0])
+
+        def transcript_cb(text: str, pct: int, text_ts: str = "") -> None:
+            live_transcript[0] = text
+            live_transcript_ts[0] = text_ts
+            _write_progress(progress_file, f"Přepisuji... ({pct}%)", pct, transcript=text, transcript_ts=text_ts)
 
         _write_progress(progress_file, "Načítám runner...", 10)
 
@@ -102,8 +109,10 @@ def main() -> int:
                 config=config,
                 source_entries=source_entries,
                 runs_root=runs_root,
+                subtitles_root=subtitles_root,
                 model_store_root=model_store_root,
                 progress_cb=progress_cb,
+                transcript_cb=transcript_cb,
             )
         else:
             matrix_payload = run_benchmark_matrix(
@@ -136,72 +145,183 @@ def main() -> int:
         return 1
 
 
-def _run_streaming_matrix(*, config, source_entries, runs_root, model_store_root, progress_cb):
-    """Spustí benchmark v streaming módu (yt-dlp → ffmpeg pipe → live session adaptery)."""
+def _build_matrix(run_id, sample_seconds, source_entries, by_model_setting) -> dict:
+    """Sestaví benchmark_matrix dict ze shromážděných výsledků."""
+    import json as _json
     from datetime import datetime, timezone
+    matrix = {
+        "run_id": run_id,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "evaluation_mode": "streaming",
+        "sample_seconds": sample_seconds,
+        "source_count": len(source_entries),
+        "sources": [
+            {"source_id": s.source_id, "canonical_url": getattr(s, "canonical_url", None) or getattr(s, "value", None)}
+            for s in source_entries
+        ],
+        "results": [],
+    }
+    for (model_id, setting_id, setting_label), model_results in by_model_setting.items():
+        rtf_vals = [r["rtf"] for r in model_results if r.get("rtf") is not None]
+        latency_vals = [r.get("latency_ms") for r in model_results if r.get("latency_ms") is not None]
+        wer_vals = [r["wer"] for r in model_results if r.get("wer") is not None]
+        source_metrics = [{
+            "video_id": r.get("video_id") or r.get("source_id"),
+            "canonical_url": r.get("canonical_url"),
+            "clip_start_seconds": 0,
+            "clip_seconds": sample_seconds,
+            "transcript": r.get("transcript"),
+            "reference_text": r.get("reference_text"),
+            "wer": r.get("wer"),
+            "cer": r.get("cer"),
+            "latency_ms": r.get("latency_ms"),
+            "rtf": r.get("rtf"),
+            "engine_elapsed_seconds": r.get("engine_elapsed_seconds") or r.get("elapsed_s"),
+            "chunk_metrics": r.get("chunk_metrics"),
+            "error": r.get("error"),
+        } for r in model_results]
+        matrix["results"].append({
+            "model_id": model_id,
+            "model_label": model_id,
+            "setting_id": setting_id,
+            "setting_label": setting_label,
+            "aggregate": {
+                "rtf": round(sum(rtf_vals) / len(rtf_vals), 4) if rtf_vals else None,
+                "latency_ms": round(sum(latency_vals) / len(latency_vals), 1) if latency_vals else None,
+                "wer": round(sum(wer_vals) / len(wer_vals), 4) if wer_vals else None,
+                "cer": None, "cpu_percent": None, "ram_mb": None,
+            },
+            "source_metrics": source_metrics,
+        })
+    return matrix
+
+
+def _write_partial_matrix(run_dir, run_id, sample_seconds, source_entries, by_model_setting):
+    """Zapíše průběžný benchmark_matrix.json po každém dokončeném runu."""
+    import json as _json
+    matrix = _build_matrix(run_id, sample_seconds, source_entries, by_model_setting)
+    (run_dir / "benchmark_matrix.json").write_text(
+        _json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, model_store_root, progress_cb, transcript_cb=None):
+    """Spustí benchmark v streaming módu: iteruje source × model × setting."""
+    from datetime import datetime, timezone
+    from collections import defaultdict
     from packages.benchmarks.runners.streaming_runner import StreamingRunConfig, run_streaming_benchmark
     from packages.ingest.youtube.stream_pipe import stream_youtube_audio
+    from packages.benchmarks.ground_truth.vtt_reference import extract_vtt_clip_text
+    from packages.benchmarks.metrics.text_metrics import word_error_rate, char_error_rate
 
     model_ids = config["model_ids"]
     sample_seconds = config.get("sample_seconds", 120)
     model_params_cfg = config.get("model_params") or {}
 
+    # Settings s parametry — každé má vlastní chunk_seconds, threads, beam_size atd.
+    settings = config.get("settings") or [{"id": "balanced", "label": "Balanced (30s)", "chunk_seconds": 30, "threads": 4}]
+
     run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     run_dir = runs_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    all_results = []
+    # Výsledky indexované (model_id, setting_id) → list výsledků per source
+    by_model_setting: dict = defaultdict(list)
+
+    total_runs = len(source_entries) * len(model_ids) * len(settings)
+    run_num = 0
 
     for source in source_entries:
+        # VTT reference načti jednou per source
+        ref_text = extract_vtt_clip_text(source.video_id, 0, sample_seconds, subtitles_root) if source.video_id else None
+
         for model_id in model_ids:
-            progress_cb(f"Streaming: {source.source_id} × {model_id}")
-
-            # Per-model params: {"whisper_cpp_small": {...}} nebo sdílené {"language": "cs"}
+            # Per-model params
             if model_id in model_params_cfg:
-                params = {**model_params_cfg, **model_params_cfg[model_id]}
+                base_params = {**{k: v for k, v in model_params_cfg.items() if not isinstance(v, dict)},
+                               **model_params_cfg[model_id]}
             else:
-                # odfiltruj klíče které jsou dict (per-model sekce)
-                params = {k: v for k, v in model_params_cfg.items() if not isinstance(v, dict)}
+                base_params = {k: v for k, v in model_params_cfg.items() if not isinstance(v, dict)}
 
-            out_dir = run_dir / "streaming_artifacts" / model_id / source.source_id
-            out_dir.mkdir(parents=True, exist_ok=True)
+            for setting in settings:
+                setting_id = setting["id"]
+                setting_label = setting.get("label", setting_id)
+                chunk_seconds = int(setting.get("chunk_seconds", 30))
 
-            def _make_generator(src):
-                return stream_youtube_audio(
-                    src.canonical_url or src.value,
-                    chunk_seconds=0.1,
-                    max_seconds=float(sample_seconds),
+                # Merge: base_params + setting params (threads, beam_size atd.)
+                params = {**base_params}
+                for k in ("threads", "beam_size", "best_of", "no_fallback", "language"):
+                    if k in setting:
+                        params[k] = setting[k]
+
+                run_num += 1
+                pct_start = int(10 + (run_num - 1) / total_runs * 80)
+                pct_end   = int(10 + run_num / total_runs * 80)
+                progress_cb(f"[{run_num}/{total_runs}] {model_id} × {setting_label} | video: {source.video_id or source.source_id}", pct_start)
+
+                out_dir = run_dir / "streaming_artifacts" / model_id / setting_id / source.source_id
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                # Progress callback s fixním procentem pro tento run
+                def _run_progress_cb(msg: str, _pct: int | None = None, _p=pct_start):
+                    progress_cb(msg, _pct if _pct is not None else _p)
+
+                cfg = StreamingRunConfig(
+                    model_id=model_id,
+                    model_params=params,
+                    model_store_root=str(model_store_root),
+                    output_dir=str(out_dir),
+                    sample_seconds=sample_seconds,
+                    chunk_seconds=chunk_seconds,
+                    progress_callback=_run_progress_cb,
+                    transcript_callback=transcript_cb,
                 )
 
-            cfg = StreamingRunConfig(
-                model_id=model_id,
-                model_params=params,
-                model_store_root=str(model_store_root),
-                output_dir=str(out_dir),
-                sample_seconds=sample_seconds,
-                progress_callback=progress_cb,
-            )
+                try:
+                    result = run_streaming_benchmark(
+                        source=source,
+                        audio_generator=stream_youtube_audio(
+                            source.canonical_url or source.value,
+                            chunk_seconds=0.1,
+                            max_seconds=float(sample_seconds),
+                        ),
+                        config=cfg,
+                    )
+                    result["model_id"] = model_id
+                    result["setting_id"] = setting_id
+                    result["setting_label"] = setting_label
+                    result["video_id"] = source.video_id or source.source_id
 
-            try:
-                result = run_streaming_benchmark(
-                    source=source,
-                    audio_generator=_make_generator(source),
-                    config=cfg,
-                )
-                result["model_id"] = model_id
-                all_results.append(result)
-            except Exception as exc:
-                all_results.append({
-                    "model_id": model_id,
-                    "source_id": source.source_id,
-                    "error": str(exc),
-                })
+                    if "transcript" not in result and "transcript_text" in result:
+                        result["transcript"] = result["transcript_text"]
+
+                    if result.get("transcript") and ref_text:
+                        result["reference_text"] = ref_text
+                        result["wer"] = round(word_error_rate(ref_text, result["transcript"]), 4)
+                        result["cer"] = round(char_error_rate(ref_text, result["transcript"]), 4)
+
+                except Exception as exc:
+                    result = {
+                        "model_id": model_id,
+                        "setting_id": setting_id,
+                        "setting_label": setting_label,
+                        "video_id": source.video_id or source.source_id,
+                        "error": str(exc),
+                    }
+
+                by_model_setting[(model_id, setting_id, setting_label)].append(result)
+                progress_cb(f"✓ [{run_num}/{total_runs}] hotovo: {model_id} × {setting_label}", pct_end)
+
+                # Průběžný zápis — aby partial výsledky nebyly ztraceny při crashu
+                _write_partial_matrix(run_dir, run_id, sample_seconds, source_entries, by_model_setting)
+
+    # Finální zápis benchmark_matrix.json
+    _write_partial_matrix(run_dir, run_id, sample_seconds, source_entries, by_model_setting)
 
     return {
         "run_id": run_id,
         "evaluation_mode": "streaming",
         "sample_seconds": sample_seconds,
-        "results": all_results,
     }
 
 

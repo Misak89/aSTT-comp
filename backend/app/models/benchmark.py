@@ -11,6 +11,7 @@ class BenchmarkJobRequest(BaseModel):
     model_ids: Optional[list[str]] = None      # None = all default models
     setting_ids: Optional[list[str]] = None    # None = all default settings
     sample_seconds: int = 120                  # default 120s dle specifikace
+    chunk_seconds: int = 15                    # délka jednoho chunku v streaming módu
     evaluation_mode: Literal["real", "synthetic", "streaming"] = "synthetic"
     clip_strategy: Literal["random", "uniform"] = "random"
     clip_seed: Optional[int] = None
@@ -43,6 +44,7 @@ class BenchmarkJobStatus(BaseModel):
     pre_cpu: Optional[float] = None           # CPU% systému před startem
     pre_ram_mb: Optional[float] = None        # RAM MB systému před startem
     video_ids: Optional[list[str]] = None     # videa z requestu (pro live embed)
+    evaluation_mode: Optional[str] = None     # synthetic / streaming / real
 
 
 class Scenario(BaseModel):
@@ -70,6 +72,7 @@ class LiveJobProgress(BaseModel):
     updated_at: Optional[str] = None
     hw_series: list[dict] = []         # Série HW vzorků — posledních 120 (60s)
     transcript: str = ""               # Req 2: poslední transkript (live nebo finální)
+    transcript_ts: str = ""            # Transkript s časovými značkami [MM:SS] z whisper segmentů
     pre_cpu: Optional[float] = None    # Req 3: CPU% před spuštěním benchmarku
     pre_ram_mb: Optional[float] = None # Req 3: RAM MB před spuštěním benchmarku
     model_params_used: dict = {}       # Req 4: přesné nastavení modelu

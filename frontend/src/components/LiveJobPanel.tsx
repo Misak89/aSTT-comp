@@ -7,9 +7,10 @@ import type { BenchmarkJobStatus, HwSample, LibraryItem } from '../types'
 
 interface Props {
   job: BenchmarkJobStatus
+  onCancel?: () => void  // callback po zrušení — parent refreshne seznam jobů
 }
 
-export function LiveJobPanel({ job }: Props) {
+export function LiveJobPanel({ job, onCancel }: Props) {
   const [percent, setPercent] = useState(0)
   const [messageLog, setMessageLog] = useState<string[]>([])
   const [hwSeries, setHwSeries] = useState<HwSample[]>([])
@@ -18,12 +19,15 @@ export function LiveJobPanel({ job }: Props) {
   const [preRamMb, setPreRamMb] = useState<number | null>(job.pre_ram_mb ?? null)
   const [modelParams, setModelParams] = useState<Record<string, unknown>>({})
   const [libraryItem, setLibraryItem] = useState<LibraryItem | null>(null)
+  const [cancelling, setCancelling] = useState(false)
   const [showTranscript, setShowTranscript] = useState(true)
+  const [showTimestamps, setShowTimestamps] = useState(false)
+  const [transcriptTs, setTranscriptTs] = useState('')
   const [showSubtitles, setShowSubtitles] = useState(false)
   const [subtitleContent, setSubtitleContent] = useState('')
   const [subtitleLoading, setSubtitleLoading] = useState(false)
   const [elapsed, setElapsed] = useState(0)
-  const logEndRef = useRef<HTMLDivElement>(null)
+  const logContainerRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -49,6 +53,7 @@ export function LiveJobPanel({ job }: Props) {
         setMessageLog(live.message_log ?? [])
         setHwSeries(live.hw_series.slice(-60))
         setTranscript(live.transcript ?? '')
+        if (live.transcript_ts) setTranscriptTs(live.transcript_ts)
         if (live.pre_cpu != null) setPreCpu(live.pre_cpu)
         if (live.pre_ram_mb != null) setPreRamMb(live.pre_ram_mb)
         if (Object.keys(live.model_params_used ?? {}).length > 0) {
@@ -63,7 +68,9 @@ export function LiveJobPanel({ job }: Props) {
     if (isActive) {
       timerRef.current = setInterval(poll, 1000)
     } else {
-      setTimeout(poll, 500)
+      // Completed job: zkus 3× s prodlevami (backend mohl být při prvním pokusu restart)
+      const delays = [500, 1500, 3000]
+      delays.forEach(ms => setTimeout(poll, ms))
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [job.job_id, job.status])
@@ -78,9 +85,10 @@ export function LiveJobPanel({ job }: Props) {
     }).catch(() => {})
   }, [job.video_ids])
 
-  // Auto-scroll log dolů
+  // Auto-scroll log dolů — pouze uvnitř log kontejneru, ne celá stránka
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = logContainerRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [messageLog])
 
   const chartData = hwSeries.map((s, i) => ({
@@ -157,6 +165,26 @@ export function LiveJobPanel({ job }: Props) {
           )}
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
+          {isActive && (
+            <button
+              onClick={async () => {
+                setCancelling(true)
+                try {
+                  await api.benchmark.cancelJob(job.job_id)
+                  onCancel?.()
+                } catch { setCancelling(false) }
+              }}
+              disabled={cancelling}
+              className="px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200 font-medium disabled:opacity-50"
+            >
+              {cancelling ? 'Zastavuji...' : '⏹ Zastavit'}
+            </button>
+          )}
+          {!isActive && job.run_id && (
+            <a href={`/results?run=${job.run_id}`} className="text-green-600 hover:underline font-medium">
+              📊 Výsledky
+            </a>
+          )}
           <button
             onClick={() => setShowTranscript(v => !v)}
             className="text-blue-600 hover:underline"
@@ -196,7 +224,7 @@ export function LiveJobPanel({ job }: Props) {
 
       {/* Log zpráv (nemaže se) */}
       {messageLog.length > 0 && (
-        <div className="bg-gray-900 rounded p-2 max-h-36 overflow-y-auto">
+        <div ref={logContainerRef} className="bg-gray-900 rounded p-2 max-h-36 overflow-y-auto">
           <p className="text-xs text-gray-500 mb-1 font-medium">Log průběhu</p>
           {messageLog.map((msg, i) => (
             <p key={i} className={`text-xs font-mono ${
@@ -205,7 +233,6 @@ export function LiveJobPanel({ job }: Props) {
               {msg}
             </p>
           ))}
-          <div ref={logEndRef} />
         </div>
       )}
 
@@ -214,7 +241,7 @@ export function LiveJobPanel({ job }: Props) {
         {videoId ? (
           <div className="aspect-video rounded overflow-hidden border border-gray-200">
             <iframe
-              src={`https://www.youtube.com/embed/${videoId}?autoplay=${isActive ? 1 : 0}&cc_load_policy=0`}
+              src={`https://www.youtube.com/embed/${videoId}?autoplay=${isActive ? 1 : 0}&mute=${isActive ? 1 : 0}&cc_load_policy=0`}
               title="Video benchmark"
               className="w-full h-full"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -305,17 +332,60 @@ export function LiveJobPanel({ job }: Props) {
 
       {/* Živý / finální přepis — toggle tlačítko v hlavičce */}
       {showTranscript && <div className="bg-white border border-gray-200 rounded p-3">
-        <p className="text-xs font-medium text-gray-600 mb-1">
-          {isActive ? '⌨ Přepis (live)' : '✓ Přepis (finální)'}
-        </p>
-        <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-12">
-          {transcript
-            ? transcript
-            : <span className="text-gray-400 italic">
-                {isActive ? 'čeká na přepis...' : 'žádný přepis (streaming mode nebo prázdný výstup)'}
-              </span>
-          }
-        </p>
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-xs font-medium text-gray-600 flex items-center gap-2">
+            {isActive ? '⌨ Přepis (live)' : '✓ Přepis (finální)'}
+            {!isActive && !transcript && job.evaluation_mode !== 'synthetic' && (
+              <button
+                onClick={async () => {
+                  try {
+                    // Po completion načti přepis z run results (ne z progress.json)
+                    if (job.run_id) {
+                      const run = await api.runs.get(job.run_id)
+                      for (const res of run.results ?? []) {
+                        for (const sm of res.source_metrics ?? []) {
+                          if (sm.transcript) { setTranscript(sm.transcript); return }
+                        }
+                      }
+                    }
+                    // Fallback: progress.json
+                    const live = await api.benchmark.getLive(job.job_id)
+                    if (live.transcript) setTranscript(live.transcript)
+                    if (live.transcript_ts) setTranscriptTs(live.transcript_ts)
+                  } catch {}
+                }}
+                className="text-xs text-blue-500 hover:underline font-normal"
+              >
+                ↻ Načíst
+              </button>
+            )}
+          </p>
+          {(transcript || transcriptTs) && (
+            <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showTimestamps}
+                onChange={e => setShowTimestamps(e.target.checked)}
+              />
+              ⏱ Časové značky
+            </label>
+          )}
+        </div>
+        {showTimestamps && transcriptTs
+          ? <pre className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-mono min-h-12">{transcriptTs}</pre>
+          : <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-12">
+              {transcript
+                ? transcript
+                : <span className="text-gray-400 italic">
+                    {isActive
+                      ? 'čeká na přepis...'
+                      : job.evaluation_mode === 'synthetic'
+                        ? 'Syntetický mód — přepis se negeneruje (simulované metriky)'
+                        : 'žádný přepis (prázdný výstup)'}
+                  </span>
+              }
+            </p>
+        }
       </div>}
 
       {/* Titulky */}

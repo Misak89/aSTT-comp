@@ -95,6 +95,10 @@ def run_whisper_source(
         except Exception:
             proc_handle = None
 
+    # Timeout: max 10× délka audia nebo 600s — aby whisper nepřeběhl donekonečna
+    timeout_s = max(600, sample_seconds * 10)
+    deadline = time.perf_counter() + timeout_s
+
     while proc.poll() is None:
         if proc_handle is not None:
             try:
@@ -104,6 +108,11 @@ def run_whisper_source(
                 process_cpu_seconds = float(cpu_times.user + cpu_times.system)
             except Exception:
                 pass
+        if time.perf_counter() > deadline:
+            proc.kill()
+            raise RuntimeError(
+                f"whisper-cli timeout po {timeout_s}s (audio={sample_seconds}s) — proces zabit"
+            )
         time.sleep(0.05)
 
     stdout_text, stderr_text = proc.communicate()
@@ -166,6 +175,7 @@ def run_whisper_source(
         "transcript_text": transcript_text,
         "transcript_path": str(txt_path) if txt_path.exists() else None,
         "json_path": str(json_path),
+        "_segments": segments,
         "engine": "whisper_cpp",
         "engine_started_at_utc": started.isoformat(),
         "engine_elapsed_seconds": round(elapsed_s, 4),

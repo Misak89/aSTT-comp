@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { api } from '../api/client'
-import type { RunDetail, RunResult, SourceMetric } from '../types'
+import type { RunDetail, RunResult, SourceMetric, ChunkMetric } from '../types'
 import { WerBadge } from '../components/WerBadge'
 import { WerDiff } from '../components/WerDiff'
 
@@ -176,7 +176,7 @@ function ResultsTable({ results }: { results: RunResult[] }) {
             const key = `${r.model_id}-${r.setting_id}`
             const isOpen = expanded === key
             const hasDiff = r.source_metrics?.some(
-              (s: SourceMetric) => s.transcript && s.reference_text
+              (s: SourceMetric) => (s.transcript && s.reference_text) || (s.chunk_metrics && s.chunk_metrics.length > 0)
             )
             return (
               <>
@@ -209,38 +209,43 @@ function ResultsTable({ results }: { results: RunResult[] }) {
                   </td>
                 </tr>
                 {isOpen && r.source_metrics?.map((s: SourceMetric, si: number) => (
-                  s.transcript && s.reference_text ? (
-                    <tr key={`${key}-diff-${si}`} className="border-t border-blue-50 bg-blue-50/30">
-                      <td colSpan={9} className="px-4 py-3">
-                        <div className="flex items-center gap-4 text-xs text-gray-500 mb-2 font-medium flex-wrap">
-                          <span>
-                            Zdroj {si + 1}{s.video_id ? ` — ${s.video_id}` : ''}
-                            {s.clip_start_seconds != null ? ` @ ${s.clip_start_seconds}s` : ''}
+                  <tr key={`${key}-diff-${si}`} className="border-t border-blue-50 bg-blue-50/30">
+                    <td colSpan={9} className="px-4 py-3 space-y-3">
+                      {/* Hlavička zdroje */}
+                      <div className="flex items-center gap-4 text-xs text-gray-500 font-medium flex-wrap">
+                        <span>
+                          Zdroj {si + 1}{s.video_id ? ` — ${s.video_id}` : ''}
+                          {s.clip_start_seconds != null ? ` @ ${s.clip_start_seconds}s` : ''}
+                        </span>
+                        {(s.engine_elapsed_seconds != null || s.clip_seconds != null) && (
+                          <span className="bg-white border border-gray-200 rounded px-2 py-0.5 font-mono">
+                            {s.engine_elapsed_seconds != null ? `přepis ${s.engine_elapsed_seconds.toFixed(1)}s` : ''}
+                            {s.engine_elapsed_seconds != null && s.clip_seconds != null ? ' / ' : ''}
+                            {s.clip_seconds != null ? `audio ${s.clip_seconds.toFixed(0)}s` : ''}
+                            {s.rtf != null && (
+                              <span className={`ml-1 font-bold ${s.rtf > 1 ? 'text-red-500' : 'text-green-600'}`}>
+                                RTF {s.rtf.toFixed(2)}
+                              </span>
+                            )}
                           </span>
-                          {/* Req 7: doba přepisu vs délka audia */}
-                          {(s.engine_elapsed_seconds != null || s.clip_seconds != null) && (
-                            <span className="bg-white border border-gray-200 rounded px-2 py-0.5 font-mono">
-                              {s.engine_elapsed_seconds != null
-                                ? `přepis ${s.engine_elapsed_seconds.toFixed(1)}s`
-                                : ''}
-                              {s.engine_elapsed_seconds != null && s.clip_seconds != null ? ' / ' : ''}
-                              {s.clip_seconds != null ? `audio ${s.clip_seconds.toFixed(0)}s` : ''}
-                              {s.rtf != null && (
-                                <span className={`ml-1 font-bold ${s.rtf > 1 ? 'text-red-500' : 'text-green-600'}`}>
-                                  RTF {s.rtf.toFixed(2)}
-                                </span>
-                              )}
-                            </span>
-                          )}
-                        </div>
+                        )}
+                      </div>
+
+                      {/* Tabulka chunk metrik */}
+                      {s.chunk_metrics && s.chunk_metrics.length > 0 && (
+                        <ChunkMetricsTable chunks={s.chunk_metrics} />
+                      )}
+
+                      {/* WER diff */}
+                      {s.transcript && s.reference_text && (
                         <WerDiff
                           reference={s.reference_text}
                           transcript={s.transcript}
                           wer={s.wer}
                         />
-                      </td>
-                    </tr>
-                  ) : null
+                      )}
+                    </td>
+                  </tr>
                 ))}
               </>
             )
@@ -282,6 +287,67 @@ function Recommendation({ results }: { results: RunResult[] }) {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function ChunkMetricsTable({ chunks }: { chunks: ChunkMetric[] }) {
+  const avgRtf = chunks.reduce((s, c) => s + c.rtf, 0) / chunks.length
+  const maxRtf = Math.max(...chunks.map(c => c.rtf))
+  const totalWords = chunks.reduce((s, c) => s + c.words, 0)
+  const lastChunk = chunks[chunks.length - 1]
+  const totalDelay = lastChunk ? lastChunk.total_elapsed_s - lastChunk.chunk_end_s : null
+
+  return (
+    <div className="space-y-2">
+      {/* Souhrn */}
+      <div className="flex flex-wrap gap-3 text-xs font-mono bg-gray-50 border border-gray-200 rounded px-3 py-2">
+        <span>Chunků: <strong>{chunks.length}</strong></span>
+        <span>Slov: <strong>{totalWords}</strong></span>
+        <span>Průměrné RTF: <strong className={avgRtf > 1 ? 'text-red-500' : 'text-green-600'}>{avgRtf.toFixed(2)}</strong></span>
+        <span>Max RTF: <strong className={maxRtf > 1 ? 'text-red-500' : 'text-green-600'}>{maxRtf.toFixed(2)}</strong></span>
+        {totalDelay != null && (
+          <span>Celkové zpoždění: <strong>{totalDelay.toFixed(1)}s</strong></span>
+        )}
+      </div>
+      {/* Per-chunk tabulka */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs font-mono border border-gray-200 rounded">
+          <thead className="bg-gray-100 text-gray-500">
+            <tr>
+              <th className="px-2 py-1 text-left">#</th>
+              <th className="px-2 py-1 text-right">Audio</th>
+              <th className="px-2 py-1 text-right">Dur</th>
+              <th className="px-2 py-1 text-right">Přepis</th>
+              <th className="px-2 py-1 text-right">RTF</th>
+              <th className="px-2 py-1 text-right">Elapsed</th>
+              <th className="px-2 py-1 text-right">Zpoždění</th>
+              <th className="px-2 py-1 text-right">Slov</th>
+            </tr>
+          </thead>
+          <tbody>
+            {chunks.map((c, i) => {
+              const delay = c.total_elapsed_s - c.chunk_end_s
+              return (
+                <tr key={i} className="border-t border-gray-100 hover:bg-gray-50">
+                  <td className="px-2 py-0.5 text-gray-400">{i + 1}</td>
+                  <td className="px-2 py-0.5 text-right">{c.chunk_start_s.toFixed(0)}→{c.chunk_end_s.toFixed(0)}s</td>
+                  <td className="px-2 py-0.5 text-right">{c.chunk_duration_s.toFixed(0)}s</td>
+                  <td className="px-2 py-0.5 text-right">{c.processing_s.toFixed(1)}s</td>
+                  <td className={`px-2 py-0.5 text-right font-bold ${c.rtf > 1 ? 'text-red-500' : 'text-green-600'}`}>
+                    {c.rtf.toFixed(2)}
+                  </td>
+                  <td className="px-2 py-0.5 text-right text-gray-600">{c.total_elapsed_s.toFixed(1)}s</td>
+                  <td className={`px-2 py-0.5 text-right ${delay > 5 ? 'text-orange-500' : 'text-gray-600'}`}>
+                    +{delay.toFixed(1)}s
+                  </td>
+                  <td className="px-2 py-0.5 text-right text-gray-600">{c.words}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   )

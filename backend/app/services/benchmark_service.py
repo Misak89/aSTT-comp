@@ -54,11 +54,14 @@ DEFAULT_MODELS = [
 ]
 
 DEFAULT_SETTINGS = [
-    {"id": "low_latency",   "label": "Low latency"},
-    {"id": "balanced",      "label": "Balanced"},
-    {"id": "high_accuracy", "label": "High accuracy"},
-    {"id": "memory_saver",  "label": "Memory saver"},
+    {"id": "low_latency",   "label": "Low latency (15s)",   "chunk_seconds": 15,  "threads": 4, "beam_size": 1,  "no_fallback": True},
+    {"id": "balanced",      "label": "Balanced (30s)",      "chunk_seconds": 30,  "threads": 4, "beam_size": 5,  "no_fallback": True},
+    {"id": "high_accuracy", "label": "High accuracy (60s)", "chunk_seconds": 60,  "threads": 4, "beam_size": 5,  "no_fallback": False},
+    {"id": "memory_saver",  "label": "Memory saver (30s)",  "chunk_seconds": 30,  "threads": 2, "beam_size": 1,  "no_fallback": True},
 ]
+
+# Rychlý lookup id → params
+SETTING_PARAMS: dict[str, dict] = {s["id"]: s for s in DEFAULT_SETTINGS}
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +122,7 @@ def get_live_progress(job_id: str) -> Optional[LiveJobProgress]:
     message = job.get("progress_message") or ""
     updated_at = None
     transcript = ""
+    transcript_ts = ""
     progress_file = JOBS_ROOT / job_id / "progress.json"
     try:
         if progress_file.exists():
@@ -127,31 +131,28 @@ def get_live_progress(job_id: str) -> Optional[LiveJobProgress]:
             message = data.get("message", message)
             updated_at = data.get("updated_at")
             transcript = data.get("transcript", "")
+            transcript_ts = data.get("transcript_ts", "")
     except Exception:
         pass
 
-    # Po dokončení: přečti transcript z worker_result.json (req 2)
-    # POZOR: transcript_text je uvnitř source_metrics[], ne na top-level výsledku
+    # Po dokončení: transcript je uložen přímo v job dictu (nastaven v run_job při completion)
     if not transcript and job.get("status") == "completed":
-        try:
-            result_file = JOBS_ROOT / job_id / "worker_result.json"
-            if result_file.exists():
-                rdata = json.loads(result_file.read_text(encoding="utf-8"))
-                results = rdata.get("payload", {}).get("results", [])
-                parts = []
-                for r in results:
-                    # source_metrics level (matrix runner)
-                    for sm in r.get("source_metrics", []):
-                        t = sm.get("transcript_text", "")
-                        if t:
-                            parts.append(t)
-                    # top-level transcript_text (streaming runner)
-                    t = r.get("transcript_text", "")
-                    if t and t not in parts:
-                        parts.append(t)
-                transcript = "\n\n---\n\n".join(parts)
-        except Exception:
-            pass
+        transcript = job.get("transcript", "")
+    # Fallback pro starší joby (transcript nebyl v job dictu): čti z worker_result.json
+    if not transcript and job.get("status") == "completed":
+        result_file = JOBS_ROOT / job_id / "worker_result.json"
+        if result_file.exists():
+            rdata = json.loads(result_file.read_bytes().decode("utf-8", errors="replace"))
+            for r in rdata.get("payload", {}).get("results", []):
+                for sm in r.get("source_metrics", []):
+                    t = sm.get("transcript_text", "")
+                    if t:
+                        transcript = t
+                        break
+                if not transcript:
+                    transcript = r.get("transcript_text", "")
+                if transcript:
+                    break
 
     with _lock:
         hw_series = list(_job_hw_series.get(job_id, []))
@@ -166,6 +167,7 @@ def get_live_progress(job_id: str) -> Optional[LiveJobProgress]:
         updated_at=updated_at,
         hw_series=hw_series,
         transcript=transcript,
+        transcript_ts=transcript_ts,
         pre_cpu=job.get("pre_cpu"),
         pre_ram_mb=job.get("pre_ram_mb"),
         model_params_used=job.get("model_params_used") or {},
@@ -209,13 +211,19 @@ def run_job(job_id: str) -> None:
         model_ids = req_data.get("model_ids") or [m["id"] for m in DEFAULT_MODELS]
         setting_ids = req_data.get("setting_ids") or [s["id"] for s in DEFAULT_SETTINGS]
 
+        # Sestaví settings s parametry — každé setting má vlastní chunk_seconds atd.
+        settings_with_params = []
+        for sid in setting_ids:
+            base = SETTING_PARAMS.get(sid, {"id": sid, "label": sid, "chunk_seconds": 30, "threads": 4})
+            settings_with_params.append(base)
+
         # Zapíše config pro worker subprocess
         job_dir = JOBS_ROOT / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         config = {
             "sources": sources,
             "model_ids": model_ids,
-            "setting_ids": setting_ids,
+            "settings": settings_with_params,
             "sample_seconds": req_data.get("sample_seconds", 120),
             "evaluation_mode": req_data.get("evaluation_mode", "synthetic"),
             "clip_strategy": req_data.get("clip_strategy", "random"),
@@ -287,12 +295,25 @@ def run_job(job_id: str) -> None:
         except Exception:
             pass
 
+        # Extrahuj transcript z výsledků a ulož do job dictu (spolehlivější než číst soubor v get_live_progress)
+        transcript_parts = []
+        for r in matrix_payload.get("results", []):
+            for sm in r.get("source_metrics", []):
+                t = sm.get("transcript_text", "")
+                if t:
+                    transcript_parts.append(t)
+            t = r.get("transcript_text", "")
+            if t and t not in transcript_parts:
+                transcript_parts.append(t)
+        job_transcript = "\n\n---\n\n".join(transcript_parts)
+
         _update_job(job_id,
                     status="completed",
                     finished_at=datetime.now(timezone.utc).isoformat(),
                     run_id=run_id,
                     result_url=f"/api/runs/{run_id}",
-                    progress_message="Hotovo")
+                    progress_message="Hotovo",
+                    transcript=job_transcript)
 
     except Exception as exc:
         _update_job(job_id,
@@ -384,12 +405,18 @@ def _poll_progress(job_id: str, progress_file: Path) -> None:
                 stamped = f"[{ts}] {msg}"
                 with _lock:
                     log = _job_message_log.setdefault(job_id, [])
-                    # Deduplukuj ignorováním timestampu (porovnáváme samotnou zprávu)
                     last_raw = log[-1].split("] ", 1)[-1] if log else ""
                     if last_raw != msg:
                         log.append(stamped)
                         if len(log) > _MAX_LOG:
                             log.pop(0)
+                        # Perzistuj log na disk
+                        try:
+                            log_path = JOBS_ROOT / job_id / "log.txt"
+                            with log_path.open("a", encoding="utf-8") as lf:
+                                lf.write(stamped + "\n")
+                        except Exception:
+                            pass
     except Exception:
         pass
 
@@ -411,6 +438,7 @@ def _to_status(job: dict) -> BenchmarkJobStatus:
         pre_cpu=job.get("pre_cpu"),
         pre_ram_mb=job.get("pre_ram_mb"),
         video_ids=job.get("video_ids"),
+        evaluation_mode=job.get("request", {}).get("evaluation_mode"),
     )
 
 

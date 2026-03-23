@@ -57,6 +57,7 @@ export interface BenchmarkJobRequest {
   model_ids?: string[]
   setting_ids?: string[]
   sample_seconds?: number
+  chunk_seconds?: number
   evaluation_mode?: 'real' | 'synthetic' | 'streaming'
   clip_strategy?: 'random' | 'uniform'
   clip_seed?: number
@@ -101,6 +102,7 @@ export interface BenchmarkJobStatus {
   pre_cpu: number | null
   pre_ram_mb: number | null
   video_ids: string[] | null
+  evaluation_mode: string | null
 }
 
 export interface Scenario {
@@ -146,6 +148,17 @@ export interface SourceMetric {
   latency_ms: number | null
   rtf: number | null
   engine_elapsed_seconds: number | null
+  chunk_metrics: ChunkMetric[] | null
+}
+
+export interface ChunkMetric {
+  chunk_start_s: number
+  chunk_end_s: number
+  chunk_duration_s: number
+  processing_s: number
+  rtf: number
+  total_elapsed_s: number
+  words: number
 }
 
 export interface RunResult {
@@ -181,6 +194,7 @@ export interface LiveJobProgress {
   updated_at: string | null
   hw_series: HwSample[]
   transcript: string
+  transcript_ts?: string
   pre_cpu: number | null
   pre_ram_mb: number | null
   model_params_used: Record<string, unknown>

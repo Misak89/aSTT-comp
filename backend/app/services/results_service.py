@@ -56,6 +56,7 @@ def get_run(run_id: str) -> Optional[RunDetail]:
                     rtf=sm.get("rtf"),
                     engine_elapsed_seconds=sm.get("engine_elapsed_seconds"),
                     model_runtime_config=sm.get("model_runtime_config"),
+                    chunk_metrics=sm.get("chunk_metrics"),
                 )
                 for sm in r.get("source_metrics", [])
             ]
