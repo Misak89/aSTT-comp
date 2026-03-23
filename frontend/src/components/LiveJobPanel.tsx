@@ -15,6 +15,8 @@ export function LiveJobPanel({ job, onCancel }: Props) {
   const [messageLog, setMessageLog] = useState<string[]>([])
   const [hwSeries, setHwSeries] = useState<HwSample[]>([])
   const [transcript, setTranscript] = useState('')
+  const [allTranscripts, setAllTranscripts] = useState<{ label: string; transcript: string; wer: number | null; reference: string | null }[]>([])
+  const [activeTranscriptIdx, setActiveTranscriptIdx] = useState(0)
   const [preCpu, setPreCpu] = useState<number | null>(job.pre_cpu ?? null)
   const [preRamMb, setPreRamMb] = useState<number | null>(job.pre_ram_mb ?? null)
   const [modelParams, setModelParams] = useState<Record<string, unknown>>({})
@@ -337,61 +339,115 @@ export function LiveJobPanel({ job, onCancel }: Props) {
         </details>
       )}
 
-      {/* Živý / finální přepis — toggle tlačítko v hlavičce */}
-      {showTranscript && <div className="bg-white border border-gray-200 rounded p-3">
-        <div className="flex items-center justify-between mb-1">
-          <p className="text-xs font-medium text-gray-600 flex items-center gap-2">
-            {isActive ? '⌨ Přepis (live)' : '✓ Přepis (finální)'}
-            {!isActive && !transcript && job.evaluation_mode !== 'synthetic' && (
+      {/* Přepisy */}
+      {showTranscript && <div className="bg-white border border-gray-200 rounded p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-gray-600">
+            {isActive ? '⌨ Přepis (live)' : '✓ Přepisy (finální)'}
+          </p>
+          <div className="flex items-center gap-2">
+            {!isActive && allTranscripts.length === 0 && job.evaluation_mode !== 'synthetic' && (
               <button
                 onClick={async () => {
                   try {
-                    // Po completion načti přepis z run results (ne z progress.json)
                     if (job.run_id) {
                       const run = await api.runs.get(job.run_id)
+                      const collected: typeof allTranscripts = []
                       for (const res of run.results ?? []) {
+                        const label = `${res.model_label} × ${res.setting_label}`
                         for (const sm of res.source_metrics ?? []) {
-                          if (sm.transcript) { setTranscript(sm.transcript); return }
+                          if (sm.transcript) {
+                            collected.push({
+                              label,
+                              transcript: sm.transcript,
+                              wer: sm.wer ?? null,
+                              reference: sm.reference_text ?? null,
+                            })
+                          }
                         }
                       }
+                      if (collected.length > 0) {
+                        setAllTranscripts(collected)
+                        setActiveTranscriptIdx(0)
+                        return
+                      }
                     }
-                    // Fallback: progress.json
+                    // Fallback: progress.json (live transcript z posledního runu)
                     const live = await api.benchmark.getLive(job.job_id)
                     if (live.transcript) setTranscript(live.transcript)
                     if (live.transcript_ts) setTranscriptTs(live.transcript_ts)
                   } catch {}
                 }}
-                className="text-xs text-blue-500 hover:underline font-normal"
+                className="text-xs text-blue-500 hover:underline"
               >
-                ↻ Načíst
+                ↻ Načíst přepisy
               </button>
             )}
-          </p>
-          {(transcript || transcriptTs) && (
-            <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showTimestamps}
-                onChange={e => setShowTimestamps(e.target.checked)}
-              />
-              ⏱ Časové značky
-            </label>
-          )}
+            {(transcript || transcriptTs) && (
+              <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer select-none">
+                <input type="checkbox" checked={showTimestamps} onChange={e => setShowTimestamps(e.target.checked)} />
+                ⏱ Časové značky
+              </label>
+            )}
+          </div>
         </div>
-        {showTimestamps && transcriptTs
-          ? <pre className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-mono min-h-12">{transcriptTs}</pre>
-          : <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-12">
-              {transcript
-                ? transcript
-                : <span className="text-gray-400 italic">
-                    {isActive
-                      ? 'čeká na přepis...'
-                      : job.evaluation_mode === 'synthetic'
-                        ? 'Syntetický mód — přepis se negeneruje (simulované metriky)'
-                        : 'žádný přepis (prázdný výstup)'}
+
+        {/* Finální: více přepisů — záložky model × setting */}
+        {!isActive && allTranscripts.length > 1 && (
+          <div className="flex flex-wrap gap-1">
+            {allTranscripts.map((t, i) => (
+              <button
+                key={i}
+                onClick={() => setActiveTranscriptIdx(i)}
+                className={`text-xs px-2 py-0.5 rounded border ${
+                  i === activeTranscriptIdx
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                }`}
+              >
+                {t.label}
+                {t.wer != null && (
+                  <span className={`ml-1 font-mono ${t.wer < 0.15 ? 'text-green-300' : t.wer < 0.4 ? 'text-yellow-300' : 'text-red-300'}`}>
+                    WER {(t.wer * 100).toFixed(0)}%
                   </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Zobrazení aktivního přepisu */}
+        {!isActive && allTranscripts.length > 0
+          ? <div className="space-y-1">
+              <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-12">
+                {allTranscripts[activeTranscriptIdx]?.transcript}
+              </p>
+              {allTranscripts[activeTranscriptIdx]?.reference && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-gray-400 hover:text-gray-600 select-none">Referenční text (titulky)</summary>
+                  <p className="mt-1 text-gray-500 italic whitespace-pre-wrap">{allTranscripts[activeTranscriptIdx].reference}</p>
+                </details>
+              )}
+            </div>
+          : <div>
+              {showTimestamps && transcriptTs
+                ? <pre className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap font-mono min-h-12">{transcriptTs}</pre>
+                : <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap min-h-12">
+                    {transcript
+                      ? transcript
+                      : <span className="text-gray-400 italic">
+                          {isActive
+                            ? 'čeká na přepis...'
+                            : job.evaluation_mode === 'synthetic'
+                              ? 'Syntetický mód — přepis se negeneruje'
+                              : allTranscripts.length === 0
+                                ? 'Klikni ↻ Načíst přepisy'
+                                : 'žádný přepis'}
+                        </span>
+                    }
+                  </p>
               }
-            </p>
+            </div>
         }
       </div>}
 
