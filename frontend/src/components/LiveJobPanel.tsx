@@ -23,6 +23,9 @@ export function LiveJobPanel({ job, onCancel }: Props) {
     latency_ms: number | null; engine_elapsed_s: number | null; clip_seconds: number | null
     agg_cpu: number | null; agg_ram: number | null
     chunk_metrics: { chunk_start_s: number; chunk_end_s: number; chunk_duration_s: number; processing_s: number; rtf: number; total_elapsed_s: number; words: number }[] | null
+    wer_normalized: number | null; mer: number | null; wil: number | null
+    segment_metrics: { from_ms: number; to_ms: number; hyp_text: string; ref_text: string | null; wer: number | null }[] | null
+    result_idx: number; source_idx: number; run_id: string
   }[]>([])
   const [activeTranscriptIdx, setActiveTranscriptIdx] = useState(0)
   const [preCpu, setPreCpu] = useState<number | null>(job.pre_cpu ?? null)
@@ -364,6 +367,8 @@ export function LiveJobPanel({ job, onCancel }: Props) {
                       for (const res of run.results ?? []) {
                         for (const sm of res.source_metrics ?? []) {
                           if (sm.transcript) {
+                            const result_idx = run.results.indexOf(res)
+                            const source_idx = res.source_metrics.indexOf(sm)
                             collected.push({
                               label: `${res.model_label} × ${res.setting_label}`,
                               model_id: res.model_id,
@@ -381,6 +386,13 @@ export function LiveJobPanel({ job, onCancel }: Props) {
                               agg_cpu: res.aggregate?.cpu_percent ?? null,
                               agg_ram: res.aggregate?.ram_mb ?? null,
                               chunk_metrics: (sm.chunk_metrics as any) ?? null,
+                              wer_normalized: (sm as any).wer_normalized ?? null,
+                              mer: (sm as any).mer ?? null,
+                              wil: (sm as any).wil ?? null,
+                              segment_metrics: (sm as any).segment_metrics ?? null,
+                              result_idx,
+                              source_idx,
+                              run_id: job.run_id!,
                             })
                           }
                         }
@@ -466,7 +478,13 @@ export function LiveJobPanel({ job, onCancel }: Props) {
                       sub="Skutečný čas přepisu" />
                     {t.agg_cpu != null && <StatBox label="CPU" value={`${t.agg_cpu.toFixed(0)}%`} sub="Průměr (subprocess)" />}
                     {t.agg_ram != null && <StatBox label="RAM" value={`${Math.round(t.agg_ram)} MB`} sub="Peak (subprocess)" />}
+                    {t.wer_normalized != null && <StatBox label="WER norm." value={`${(t.wer_normalized * 100).toFixed(1)}%`} sub="Bez interpunkce a tagů" color={t.wer_normalized < 0.15 ? 'text-green-700' : t.wer_normalized < 0.4 ? 'text-yellow-700' : 'text-red-700'} />}
+                    {t.mer != null && <StatBox label="MER" value={`${(t.mer * 100).toFixed(1)}%`} sub="Match Error Rate" />}
+                    {t.wil != null && <StatBox label="WIL" value={`${(t.wil * 100).toFixed(1)}%`} sub="Word Info Lost" />}
                   </div>
+
+                  {/* Word Diff */}
+                  <WordDiffSection runId={t.run_id} resultIdx={t.result_idx} sourceIdx={t.source_idx} />
 
                   {/* Chunk metriky */}
                   {t.chunk_metrics && t.chunk_metrics.length > 0 && (
@@ -503,6 +521,32 @@ export function LiveJobPanel({ job, onCancel }: Props) {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    </details>
+                  )}
+
+                  {/* Segmenty — per-segment WER */}
+                  {t.segment_metrics && t.segment_metrics.length > 0 && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-gray-500 hover:text-gray-700 select-none font-medium">
+                        Segmenty ({t.segment_metrics.length}× — WER per segment)
+                      </summary>
+                      <div className="mt-1 space-y-1">
+                        {t.segment_metrics.map((seg, si) => {
+                          const fromS = (seg.from_ms / 1000).toFixed(0)
+                          const toS = (seg.to_ms / 1000).toFixed(0)
+                          const werColor = seg.wer == null ? 'text-gray-400' : seg.wer < 0.15 ? 'text-green-700' : seg.wer < 0.4 ? 'text-yellow-700' : 'text-red-700'
+                          return (
+                            <div key={si} className="bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+                              <div className="flex items-center gap-2 mb-0.5">
+                                <span className="font-mono text-gray-400">{fromS}s–{toS}s</span>
+                                {seg.wer != null && <span className={`font-mono font-bold ${werColor}`}>WER {(seg.wer * 100).toFixed(0)}%</span>}
+                              </div>
+                              <p className="text-gray-700"><span className="text-gray-400 mr-1">ASR:</span>{seg.hyp_text}</p>
+                              {seg.ref_text && <p className="text-gray-500 italic"><span className="text-gray-400 mr-1">VTT:</span>{seg.ref_text}</p>}
+                            </div>
+                          )
+                        })}
                       </div>
                     </details>
                   )}
@@ -569,6 +613,70 @@ function StatBox({ label, value, sub, color = '' }: { label: string; value: stri
       <p className="text-xs text-gray-400">{label}</p>
       <p className={`text-base font-bold font-mono ${color || 'text-gray-800'}`}>{value}</p>
       {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  )
+}
+
+
+function WordDiffSection({ runId, resultIdx, sourceIdx }: { runId: string; resultIdx: number; sourceIdx: number }) {
+  const [diff, setDiff] = useState<{op: string; ref: string|null; hyp: string|null}[] | null>(null)
+  const [stats, setStats] = useState<{total: number; correct: number; substitutions: number; deletions: number; insertions: number} | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function load() {
+    setLoading(true); setErr('')
+    try {
+      const data = await api.runs.wordDiff(runId, resultIdx, sourceIdx)
+      setDiff(data.diff)
+      setStats(data.stats)
+    } catch (e: any) { setErr(e.message) }
+    finally { setLoading(false) }
+  }
+
+  if (!diff) return (
+    <div>
+      <button onClick={load} disabled={loading}
+        className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+        {loading ? 'Načítám diff...' : '🔍 Zobrazit word-diff (ref vs. přepis)'}
+      </button>
+      {err && <span className="ml-2 text-xs text-red-500">{err}</span>}
+    </div>
+  )
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
+        <span className="font-medium text-gray-700">Word diff</span>
+        {stats && <>
+          <span className="text-green-700">✓ {stats.correct} správně</span>
+          <span className="text-orange-600">~ {stats.substitutions} záměn</span>
+          <span className="text-blue-600">+ {stats.insertions} vložení</span>
+          <span className="text-red-600">− {stats.deletions} vypuštění</span>
+        </>}
+        <button onClick={() => setDiff(null)} className="ml-auto text-gray-400 hover:text-gray-600">✕ skrýt</button>
+      </div>
+      <div className="bg-gray-50 border border-gray-200 rounded p-2 leading-7">
+        {diff.map((d, i) => {
+          if (d.op === '=') return <span key={i} className="text-gray-700"> {d.ref}</span>
+          if (d.op === 'S') return (
+            <span key={i} title={`záměna: ref="${d.ref}" hyp="${d.hyp}"`}>
+              {' '}<span className="line-through text-red-500">{d.ref}</span>
+              <span className="text-orange-600 bg-orange-50 rounded px-0.5">{d.hyp}</span>
+            </span>
+          )
+          if (d.op === 'D') return <span key={i} className="text-blue-500 line-through" title={`vypuštěno: "${d.ref}"`}> {d.ref}</span>
+          if (d.op === 'I') return <span key={i} className="text-red-500 bg-red-50 rounded px-0.5 underline" title={`vloženo navíc: "${d.hyp}"`}> {d.hyp}</span>
+          return null
+        })}
+      </div>
+      <div className="flex gap-3 text-xs text-gray-400">
+        <span><span className="text-gray-600">šedá</span> = správně</span>
+        <span><span className="line-through text-red-500">červená přeškrtnutá</span> = ref. slovo (model záměnou)</span>
+        <span><span className="text-orange-600">oranžová</span> = co model řekl</span>
+        <span><span className="text-blue-500 line-through">modrá přeškrtnutá</span> = model vynechal</span>
+        <span><span className="text-red-500 underline">červená podtržená</span> = model přidal navíc</span>
+      </div>
     </div>
   )
 }

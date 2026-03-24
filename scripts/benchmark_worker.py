@@ -174,6 +174,10 @@ def _build_matrix(run_id, sample_seconds, source_entries, by_model_setting) -> d
             "reference_text": r.get("reference_text"),
             "wer": r.get("wer"),
             "cer": r.get("cer"),
+            "wer_normalized": r.get("wer_normalized"),
+            "mer": r.get("mer"),
+            "wil": r.get("wil"),
+            "segment_metrics": r.get("segment_metrics"),
             "latency_ms": r.get("latency_ms"),
             "rtf": r.get("rtf"),
             "engine_elapsed_seconds": r.get("engine_elapsed_seconds") or r.get("elapsed_s"),
@@ -299,6 +303,19 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                         result["reference_text"] = ref_text
                         result["wer"] = round(word_error_rate(ref_text, result["transcript"]), 4)
                         result["cer"] = round(char_error_rate(ref_text, result["transcript"]), 4)
+                        from packages.benchmarks.metrics.text_metrics import (
+                            match_error_rate, word_information_lost, word_error_rate_normalized,
+                            segment_level_wer,
+                        )
+                        result["wer_normalized"] = round(word_error_rate_normalized(ref_text, result["transcript"]), 4)
+                        result["mer"] = round(match_error_rate(ref_text, result["transcript"]), 4)
+                        result["wil"] = round(word_information_lost(ref_text, result["transcript"]), 4)
+                        # Segment-level WER pokud máme Whisper segmenty
+                        _segs = result.get("_segments", [])
+                        if _segs and source.video_id:
+                            result["segment_metrics"] = segment_level_wer(
+                                _segs, source.video_id, 0, subtitles_root
+                            )
 
                 except Exception as exc:
                     result = {

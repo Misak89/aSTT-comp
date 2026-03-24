@@ -11,6 +11,9 @@ class AggregateMetrics(BaseModel):
     rtf: Optional[float] = None
     cpu_percent: Optional[float] = None
     ram_mb: Optional[float] = None
+    mer: Optional[float] = None
+    wil: Optional[float] = None
+    wer_normalized: Optional[float] = None
 
 
 class SourceMetric(BaseModel):
@@ -27,6 +30,10 @@ class SourceMetric(BaseModel):
     engine_elapsed_seconds: Optional[float] = None  # Req 7: doba přepisu
     model_runtime_config: Optional[dict[str, Any]] = None
     chunk_metrics: Optional[list[dict[str, Any]]] = None
+    wer_normalized: Optional[float] = None
+    mer: Optional[float] = None
+    wil: Optional[float] = None
+    segment_metrics: Optional[list[dict[str, Any]]] = None
 
 
 class RunResult(BaseModel):

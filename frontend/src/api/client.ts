@@ -67,6 +67,8 @@ export const api = {
   runs: {
     get: (id: string) => get<RunDetail>(`/runs/${id}`),
     openDir: (id: string) => post<{ path: string }>(`/open-dir/runs/${id}`),
+    wordDiff: (runId: string, resultIdx: number, sourceIdx: number) =>
+      get<{ run_id: string; model_id: string; setting_id: string; diff: {op: string; ref: string|null; hyp: string|null}[]; stats: {total: number; correct: number; substitutions: number; deletions: number; insertions: number} }>(`/runs/${runId}/results/${resultIdx}/sources/${sourceIdx}/diff`),
   },
   openDir: {
     jobs: () => post<{ path: string }>('/open-dir/jobs'),

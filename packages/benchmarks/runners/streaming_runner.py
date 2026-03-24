@@ -311,6 +311,8 @@ def _run_buffered(
         latency_mode="single_batch_replay",
     )
     result["chunk_metrics"] = chunk_metrics
+    if segments:
+        result["_segments"] = segments
     return result
 
 

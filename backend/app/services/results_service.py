@@ -57,6 +57,10 @@ def get_run(run_id: str) -> Optional[RunDetail]:
                     engine_elapsed_seconds=sm.get("engine_elapsed_seconds"),
                     model_runtime_config=sm.get("model_runtime_config"),
                     chunk_metrics=sm.get("chunk_metrics"),
+                    wer_normalized=sm.get("wer_normalized"),
+                    mer=sm.get("mer"),
+                    wil=sm.get("wil"),
+                    segment_metrics=sm.get("segment_metrics"),
                 )
                 for sm in r.get("source_metrics", [])
             ]
@@ -73,6 +77,9 @@ def get_run(run_id: str) -> Optional[RunDetail]:
                     rtf=agg.get("rtf"),
                     cpu_percent=agg.get("cpu_percent"),
                     ram_mb=agg.get("ram_mb"),
+                    mer=agg.get("mer"),
+                    wil=agg.get("wil"),
+                    wer_normalized=agg.get("wer_normalized"),
                 ),
                 source_metrics=source_metrics,
                 model_runtime_config=r.get("model_runtime_config"),

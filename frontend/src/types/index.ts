@@ -134,6 +134,9 @@ export interface AggregateMetrics {
   rtf: number | null
   cpu_percent: number | null
   ram_mb: number | null
+  mer: number | null
+  wil: number | null
+  wer_normalized: number | null
 }
 
 export interface SourceMetric {
@@ -149,6 +152,10 @@ export interface SourceMetric {
   rtf: number | null
   engine_elapsed_seconds: number | null
   chunk_metrics: ChunkMetric[] | null
+  wer_normalized: number | null
+  mer: number | null
+  wil: number | null
+  segment_metrics: { from_ms: number; to_ms: number; hyp_text: string; ref_text: string | null; wer: number | null }[] | null
 }
 
 export interface ChunkMetric {
