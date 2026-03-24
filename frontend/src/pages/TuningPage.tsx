@@ -9,14 +9,72 @@ import { WerBadge } from '../components/WerBadge'
 
 type Strategy = 'grid' | 'ablation' | 'random'
 
-// Parametry dostupné pro tuning whisper_cpp
+// Parametry (bez initial_prompt — ten má vlastní UI)
 const WHISPER_PARAM_DEFS = [
-  { name: 'beam_size',      label: 'Beam size',       type: 'int',  values: [1, 2, 3, 5, 8],       default: 5 },
-  { name: 'best_of',        label: 'Best of',         type: 'int',  values: [1, 2, 3, 5],           default: 5 },
-  { name: 'threads',        label: 'Vlákna CPU',      type: 'int',  values: [2, 4, 6, 8],           default: 4 },
-  { name: 'no_fallback',    label: 'Bez fallbacku',   type: 'bool', values: [true, false],          default: true },
-  { name: 'chunk_seconds',  label: 'Chunk délka (s)', type: 'int',  values: [10, 15, 20, 30, 45, 60], default: 30 },
-  { name: 'initial_prompt', label: 'Initial prompt',  type: 'str',  values: ['', 'Rozhovor v češtině:', 'Toto je rozhovor v češtině o technologii.', 'Dobrý den,'], default: '' },
+  { name: 'beam_size',     label: 'Beam size',       type: 'int',  values: [1, 2, 3, 5, 8],          default: 5 },
+  { name: 'best_of',       label: 'Best of',         type: 'int',  values: [1, 2, 3, 5],              default: 5 },
+  { name: 'threads',       label: 'Vlákna CPU',      type: 'int',  values: [2, 4, 6, 8],              default: 4 },
+  { name: 'no_fallback',   label: 'Bez fallbacku',   type: 'bool', values: [true, false],             default: true },
+  { name: 'chunk_seconds', label: 'Chunk délka (s)', type: 'int',  values: [10, 15, 20, 30, 45, 60],  default: 30 },
+]
+
+// Doménová knihovna initial_prompt šablon
+type PromptTemplate = { id: string; label: string; domain: string; color: string; prompts: { label: string; text: string }[] }
+const PROMPT_LIBRARY: PromptTemplate[] = [
+  {
+    id: 'none', label: 'Bez promptu', domain: 'baseline', color: 'gray',
+    prompts: [{ label: 'Prázdný (baseline)', text: '' }],
+  },
+  {
+    id: 'czech_general', label: 'Čeština — obecně', domain: 'general', color: 'blue',
+    prompts: [
+      { label: 'Obecný rozhovor', text: 'Rozhovor v češtině:' },
+      { label: 'Kontext + pozdrav', text: 'Dobrý den, toto je rozhovor v češtině.' },
+      { label: 'Delší kontext', text: 'Toto je rozhovor dvou lidí v českém jazyce. Mluví plynně česky.' },
+    ],
+  },
+  {
+    id: 'topic_auto', label: 'Téma z názvu videa', domain: 'auto', color: 'violet',
+    prompts: [], // generováno dynamicky dle vybraného videa
+  },
+  {
+    id: 'medicine', label: 'Medicína', domain: 'medical', color: 'red',
+    prompts: [
+      { label: 'Obecné lékařské vyšetření', text: 'Toto je lékařské vyšetření. Lékař hovoří s pacientem o zdravotním stavu, symptomech a léčbě.' },
+      { label: 'Kardiologie', text: 'Toto je kardiologické vyšetření. Lékař kardiolog diskutuje o srdečních onemocněních, EKG, krevním tlaku a léčbě.' },
+      { label: 'Neurologie', text: 'Toto je neurologické vyšetření. Neurolog hodnotí reflexy, pohybové funkce a neurologické symptomy pacienta.' },
+      { label: 'Psychiatrie', text: 'Toto je psychiatrická konzultace. Psychiatr hovoří s pacientem o duševním zdraví, náladě a psychologických symptomech.' },
+      { label: 'Praktický lékař', text: 'Ordinace praktického lékaře. Pacient popisuje potíže, lékař doporučuje vyšetření a léčbu.' },
+      { label: 'Onkologie', text: 'Onkologická konzultace. Lékař diskutuje o diagnóze nádorového onemocnění, chemoterapii a prognóze.' },
+      { label: 'Operace / chirurgie', text: 'Chirurgické pracoviště. Lékaři diskutují o operačním zákroku, přípravě pacienta a postoperační péči.' },
+    ],
+  },
+  {
+    id: 'technology', label: 'Technologie', domain: 'tech', color: 'indigo',
+    prompts: [
+      { label: 'IT a software', text: 'Technický rozhovor o softwaru, programování a informatice.' },
+      { label: 'Hardware a počítače', text: 'Rozhovor o počítačovém hardwaru, procesorech, grafických kartách a technologiích.' },
+      { label: 'Herní průmysl', text: 'Rozhovor o videohrách, vývoji her a herním průmyslu.' },
+      { label: 'Umělá inteligence', text: 'Diskuse o umělé inteligenci, strojovém učení a neuronových sítích.' },
+    ],
+  },
+  {
+    id: 'sport', label: 'Sport', domain: 'sport', color: 'green',
+    prompts: [
+      { label: 'Obecný sport', text: 'Sportovní rozhovor. Sportovci a trenéři diskutují o výkonu, tréninku a soutěžích.' },
+      { label: 'Fotbal', text: 'Fotbalový rozhovor. Hráči a trenéři diskutují o zápasech, taktice a lize.' },
+      { label: 'Esport', text: 'Rozhovor s profesionálním hráčem esportu o turnajích, strategii a týmové spolupráci.' },
+    ],
+  },
+  {
+    id: 'podcast', label: 'Podcast / pořad', domain: 'media', color: 'orange',
+    prompts: [
+      { label: 'Obecný podcast', text: 'Podcastový rozhovor. Moderátor diskutuje s hostem o různých tématech.' },
+      { label: 'Věda a vzdělávání', text: 'Vzdělávací pořad. Odborník vysvětluje vědecká témata srozumitelně pro veřejnost.' },
+      { label: 'Byznys a ekonomika', text: 'Obchodní rozhovor o ekonomice, podnikání, investicích a finančních trzích.' },
+      { label: 'Politika a společnost', text: 'Politická diskuse. Politici a novináři hovoří o společenských otázkách a vládní politice.' },
+    ],
+  },
 ]
 
 export function TuningPage() {
@@ -35,6 +93,9 @@ export function TuningPage() {
   const [paramValues, setParamValues] = useState<Record<string, Set<unknown>>>(() =>
     Object.fromEntries(WHISPER_PARAM_DEFS.map(p => [p.name, new Set([p.default])]))
   )
+  // Prompt management
+  const [selectedPrompts, setSelectedPrompts] = useState<Set<string>>(new Set(['']))
+  const [customPrompt, setCustomPrompt] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -46,25 +107,50 @@ export function TuningPage() {
     setParamValues(prev => {
       const next = new Set(prev[paramName])
       next.has(value) ? next.delete(value) : next.add(value)
-      if (next.size === 0) next.add(value) // vždy alespoň jedna hodnota
+      if (next.size === 0) next.add(value)
       return { ...prev, [paramName]: next }
     })
   }
 
-  function countTrials(): number {
-    if (strategy === 'ablation') {
-      let n = 1 // baseline
-      for (const p of WHISPER_PARAM_DEFS) {
-        if (p.name === 'chunk_seconds') {
-          n += (paramValues[p.name]?.size ?? 1) - 1
-        } else {
-          n += Math.max(0, (paramValues[p.name]?.size ?? 1) - 1)
-        }
+  function togglePrompt(text: string) {
+    setSelectedPrompts(prev => {
+      const next = new Set(prev)
+      next.has(text) ? next.delete(text) : next.add(text)
+      if (next.size === 0) next.add('')
+      return next
+    })
+  }
+
+  function autoPromptFromTitle(title: string): string {
+    return `Toto je rozhovor v češtině. Téma: ${title}.`
+  }
+
+  function allSelectedPrompts(): string[] {
+    const prompts = new Set(selectedPrompts)
+    if (customPrompt.trim()) prompts.add(customPrompt.trim())
+    // Auto-prompt: přidej pro každé vybrané video
+    const autoTemplate = PROMPT_LIBRARY.find(p => p.id === 'topic_auto')
+    if (autoTemplate && selectedVideos.length > 0) {
+      for (const vid of selectedVideos) {
+        const item = library.find(l => l.video_id === vid)
+        if (item) prompts.add(autoPromptFromTitle(item.title))
       }
+    }
+    return [...prompts]
+  }
+
+  function countTrials(): number {
+    const promptCount = Math.max(1, allSelectedPrompts().length)
+    if (strategy === 'ablation') {
+      let n = 1
+      for (const p of WHISPER_PARAM_DEFS) {
+        n += Math.max(0, (paramValues[p.name]?.size ?? 1) - 1)
+      }
+      n += Math.max(0, promptCount - 1)
       return n
     }
     if (strategy === 'grid') {
-      return WHISPER_PARAM_DEFS.reduce((acc, p) => acc * (paramValues[p.name]?.size ?? 1), 1)
+      return WHISPER_PARAM_DEFS.reduce((acc, p) => acc * (paramValues[p.name]?.size ?? 1), 1) * promptCount
     }
     return maxTrials
   }
@@ -77,6 +163,11 @@ export function TuningPage() {
       .map(p => ({ name: p.name, values: [...(paramValues[p.name] ?? [p.default])] }))
     const chunkValues = [...(paramValues['chunk_seconds'] ?? [30])]
     paramSpace.push({ name: 'chunk_seconds', values: chunkValues })
+    // Přidej initial_prompt jako parametr
+    const prompts = allSelectedPrompts()
+    if (prompts.length > 0) {
+      paramSpace.push({ name: 'initial_prompt', values: prompts })
+    }
 
     const baseline: Record<string, unknown> = {}
     for (const p of WHISPER_PARAM_DEFS) {
@@ -203,6 +294,8 @@ export function TuningPage() {
       {/* Parametrický prostor */}
       <div className="bg-white rounded border border-gray-200 p-4 space-y-4">
         <h2 className="font-semibold text-sm text-gray-700">Parametrický prostor</h2>
+
+        {/* Numerické / bool parametry */}
         <div className="space-y-3">
           {WHISPER_PARAM_DEFS.map(p => (
             <div key={p.name} className="flex items-start gap-4">
@@ -215,23 +308,132 @@ export function TuningPage() {
                     <button key={String(v)}
                       onClick={() => toggleParamValue(p.name, v)}
                       className={`px-2.5 py-1 rounded text-xs font-mono border transition-colors ${
-                        selected
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
+                        selected ? 'bg-blue-600 text-white border-blue-600'
+                               : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
                       }`}
                     >
                       {p.type === 'bool' ? (v ? 'true' : 'false') : String(v)}
-                      {isDefault && <span className="ml-1 opacity-60 text-xs">●</span>}
+                      {isDefault && <span className="ml-1 opacity-50">●</span>}
                     </button>
                   )
                 })}
               </div>
               <div className="text-xs text-gray-400 pt-1">
-                {paramValues[p.name]?.size ?? 1} hodnot{(paramValues[p.name]?.size ?? 1) > 1 ? 'y' : 'a'}
+                {paramValues[p.name]?.size ?? 1} hod.
               </div>
             </div>
           ))}
         </div>
+
+        {/* Initial prompt — doménová knihovna */}
+        <div className="border-t border-gray-100 pt-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs font-medium text-gray-700">Initial prompt</span>
+            <span className="text-xs text-gray-400">— kontext pro model (co čekat za obsah a slovní zásobu)</span>
+            <span className="ml-auto text-xs text-blue-600 font-medium">{allSelectedPrompts().length} vybráno</span>
+          </div>
+
+          <div className="space-y-3">
+            {PROMPT_LIBRARY.map(group => {
+              const colorMap: Record<string, string> = {
+                gray: 'border-gray-200 bg-gray-50',
+                blue: 'border-blue-200 bg-blue-50',
+                violet: 'border-violet-200 bg-violet-50',
+                red: 'border-red-200 bg-red-50',
+                indigo: 'border-indigo-200 bg-indigo-50',
+                green: 'border-green-200 bg-green-50',
+                orange: 'border-orange-200 bg-orange-50',
+              }
+              const tagMap: Record<string, string> = {
+                gray: 'bg-gray-200 text-gray-700',
+                blue: 'bg-blue-200 text-blue-800',
+                violet: 'bg-violet-200 text-violet-800',
+                red: 'bg-red-200 text-red-800',
+                indigo: 'bg-indigo-200 text-indigo-800',
+                green: 'bg-green-200 text-green-800',
+                orange: 'bg-orange-200 text-orange-800',
+              }
+              const btnSel = 'border-2 font-semibold'
+              const btnUnsel = 'border opacity-70 hover:opacity-100'
+
+              // Auto-prompt skupinu zobrazíme jinak
+              if (group.id === 'topic_auto') {
+                const autoPrompts = selectedVideos.map(vid => {
+                  const item = library.find(l => l.video_id === vid)
+                  return item ? { label: item.title, text: autoPromptFromTitle(item.title) } : null
+                }).filter(Boolean) as { label: string; text: string }[]
+
+                const isActive = selectedVideos.length > 0 && autoPrompts.some(p => selectedPrompts.has(p.text) || allSelectedPrompts().includes(p.text))
+
+                return (
+                  <div key={group.id} className={`rounded border p-3 ${colorMap[group.color]}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${tagMap[group.color]}`}>{group.label}</span>
+                      <span className="text-xs text-gray-500">automaticky z názvu vybraného videa</span>
+                    </div>
+                    {selectedVideos.length === 0
+                      ? <p className="text-xs text-gray-400 italic">Vyber video — prompt se vygeneruje automaticky z jeho názvu.</p>
+                      : autoPrompts.map(p => (
+                          <div key={p.text} className="flex items-start gap-2 mt-1">
+                            <button onClick={() => togglePrompt(p.text)}
+                              className={`shrink-0 text-xs px-2 py-0.5 rounded border ${selectedPrompts.has(p.text) ? `${btnSel} border-violet-500 bg-violet-100 text-violet-800` : `${btnUnsel} border-violet-300 bg-white text-violet-700`}`}>
+                              {selectedPrompts.has(p.text) ? '✓' : '+'}
+                            </button>
+                            <div>
+                              <div className="text-xs font-medium text-gray-700">{p.label}</div>
+                              <div className="text-xs text-gray-500 font-mono mt-0.5 italic">„{p.text}"</div>
+                            </div>
+                          </div>
+                        ))
+                    }
+                  </div>
+                )
+              }
+
+              return (
+                <div key={group.id} className={`rounded border p-3 ${colorMap[group.color]}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${tagMap[group.color]}`}>{group.label}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {group.prompts.map(p => {
+                      const sel = selectedPrompts.has(p.text)
+                      return (
+                        <button key={p.text} onClick={() => togglePrompt(p.text)}
+                          title={`"${p.text}"`}
+                          className={`text-xs px-2.5 py-1.5 rounded border transition-all text-left ${
+                            sel ? `${btnSel} border-blue-500 bg-white text-blue-800 shadow-sm`
+                                : `${btnUnsel} border-gray-300 bg-white text-gray-700`
+                          }`}>
+                          {sel && <span className="mr-1">✓</span>}
+                          {p.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {/* Zobraz text vybraných promptů v téhle skupině */}
+                  {group.prompts.filter(p => selectedPrompts.has(p.text)).map(p => (
+                    <div key={p.text} className="mt-2 text-xs text-gray-500 font-mono bg-white/70 rounded px-2 py-1 italic">
+                      „{p.text}"
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+
+            {/* Vlastní prompt */}
+            <div className="rounded border border-dashed border-gray-300 p-3">
+              <label className="text-xs font-medium text-gray-600 block mb-1">Vlastní prompt</label>
+              <input value={customPrompt} onChange={e => setCustomPrompt(e.target.value)}
+                placeholder="Napiš vlastní kontext pro model…"
+                className="w-full border rounded px-2 py-1.5 text-xs font-mono text-gray-700" />
+              {customPrompt.trim() && (
+                <div className="text-xs text-green-600 mt-1">✓ Bude přidán jako jeden trial</div>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="flex items-center gap-4 pt-2 border-t border-gray-100">
           <div className="text-sm text-gray-700">
             Vygeneruje <strong>{trialCount}</strong> kombinac{trialCount === 1 ? 'i' : trialCount < 5 ? 'e' : 'í'}.
@@ -244,7 +446,7 @@ export function TuningPage() {
           </button>
           {msg && <span className="text-sm text-red-500">{msg}</span>}
         </div>
-        <p className="text-xs text-gray-400">● = výchozí hodnota (baseline). Vyber více hodnot pro sweep.</p>
+        <p className="text-xs text-gray-400">● = výchozí hodnota (baseline). Vyber více hodnot nebo promptů pro sweep.</p>
       </div>
 
       {/* Historie jobů */}
