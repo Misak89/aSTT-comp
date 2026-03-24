@@ -258,6 +258,8 @@ export interface TuningTrialResult {
   latency_ms: number | null
   error: string | null
   is_pareto: boolean
+  rtf_viable: boolean  // RTF < 1.0 = použitelné pro live mikrofon
+  source_metrics?: { video_id: string; wer: number | null; cer: number | null; rtf: number | null; error?: string | null }[]
   transcript: string | null
   reference_text: string | null
   elapsed_s: number | null

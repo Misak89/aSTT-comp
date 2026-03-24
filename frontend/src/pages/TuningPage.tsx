@@ -78,31 +78,78 @@ const PROMPT_LIBRARY: PromptTemplate[] = [
   },
 ]
 
+const LS_KEY = 'tuning_config_v1'
+
+function loadConfig() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') } catch { return {} }
+}
+
 export function TuningPage() {
   const [library, setLibrary] = useState<LibraryItem[]>([])
   const [registry, setRegistry] = useState<ModelDescriptor[]>([])
   const [jobs, setJobs] = useState<TuningJobStatus[]>([])
-  const [selectedModel, setSelectedModel] = useState('whisper_cpp_small')
-  const [selectedVideos, setSelectedVideos] = useState<string[]>([])
-  const [strategy, setStrategy] = useState<Strategy>('ablation')
-  const [sampleSeconds, setSampleSeconds] = useState(60)
-  const [maxTrials, setMaxTrials] = useState(16)
-  const [label, setLabel] = useState('')
+
+  const cfg = loadConfig()
+  const [selectedModel, setSelectedModel] = useState<string>(cfg.selectedModel ?? 'whisper_cpp_small')
+  const [selectedVideos, setSelectedVideos] = useState<string[]>(cfg.selectedVideos ?? [])
+  const [strategy, setStrategy] = useState<Strategy>(cfg.strategy ?? 'ablation')
+  const [sampleSeconds, setSampleSeconds] = useState<number>(cfg.sampleSeconds ?? 60)
+  const [maxTrials, setMaxTrials] = useState<number>(cfg.maxTrials ?? 16)
+  const [label, setLabel] = useState<string>(cfg.label ?? '')
   const [selectedJob, setSelectedJob] = useState<TuningJobStatus | null>(null)
   const [msg, setMsg] = useState('')
   // Výběr hodnot pro každý parametr
-  const [paramValues, setParamValues] = useState<Record<string, Set<unknown>>>(() =>
-    Object.fromEntries(WHISPER_PARAM_DEFS.map(p => [p.name, new Set([p.default])]))
-  )
+  const [paramValues, setParamValues] = useState<Record<string, Set<unknown>>>(() => {
+    const saved: Record<string, unknown[]> = cfg.paramValues ?? {}
+    return Object.fromEntries(
+      WHISPER_PARAM_DEFS.map(p => [p.name, new Set(saved[p.name] ?? [p.default])])
+    )
+  })
   // Prompt management
-  const [selectedPrompts, setSelectedPrompts] = useState<Set<string>>(new Set(['']))
-  const [customPrompt, setCustomPrompt] = useState('')
+  const [selectedPrompts, setSelectedPrompts] = useState<Set<string>>(
+    () => new Set(cfg.selectedPrompts ?? [''])
+  )
+  const [customPrompt, setCustomPrompt] = useState<string>(cfg.customPrompt ?? '')
+  const [videoSortBy, setVideoSortBy] = useState<'title' | 'language' | 'duration' | 'upload_date'>(
+    cfg.videoSortBy ?? 'title'
+  )
+  const [videoSortDir, setVideoSortDir] = useState<'asc' | 'desc'>(cfg.videoSortDir ?? 'asc')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  function handleVideoSort(col: typeof videoSortBy) {
+    if (videoSortBy === col) setVideoSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setVideoSortBy(col); setVideoSortDir('asc') }
+  }
+
+  const sortedLibrary = [...library.filter(v => v.subtitles_local)].sort((a, b) => {
+    let va: string | number = ''
+    let vb: string | number = ''
+    if (videoSortBy === 'title') { va = a.title.toLowerCase(); vb = b.title.toLowerCase() }
+    else if (videoSortBy === 'language') { va = a.language; vb = b.language }
+    else if (videoSortBy === 'duration') { va = a.duration_seconds ?? -1; vb = b.duration_seconds ?? -1 }
+    else if (videoSortBy === 'upload_date') { va = a.upload_date ?? a.added_at ?? ''; vb = b.upload_date ?? b.added_at ?? '' }
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0
+    return videoSortDir === 'asc' ? cmp : -cmp
+  })
 
   useEffect(() => {
     Promise.all([api.library.list(), api.models.registry(), api.tuning.listJobs()])
       .then(([lib, reg, j]) => { setLibrary(lib); setRegistry(reg); setJobs(j) })
   }, [])
+
+  // Uložit konfiguraci do localStorage při každé změně
+  useEffect(() => {
+    const cfg = {
+      selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label,
+      paramValues: Object.fromEntries(
+        Object.entries(paramValues).map(([k, v]) => [k, [...v]])
+      ),
+      selectedPrompts: [...selectedPrompts],
+      customPrompt, videoSortBy, videoSortDir,
+    }
+    localStorage.setItem(LS_KEY, JSON.stringify(cfg))
+  }, [selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label,
+      paramValues, selectedPrompts, customPrompt, videoSortBy, videoSortDir])
 
   function toggleParamValue(paramName: string, value: unknown) {
     setParamValues(prev => {
@@ -226,16 +273,31 @@ export function TuningPage() {
 
         {/* Videa */}
         <div className="bg-white rounded border border-gray-200 p-4 space-y-1">
-          <h2 className="font-semibold text-sm text-gray-700 mb-2">Evaluační video</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-semibold text-sm text-gray-700">Evaluační video</h2>
+            <div className="flex gap-1 text-xs text-gray-400">
+              {([['title','Název'],['language','Jazyk'],['duration','Délka'],['upload_date','Datum']] as [typeof videoSortBy, string][]).map(([col, lbl]) => (
+                <button key={col} onClick={() => handleVideoSort(col)}
+                  className={`px-1.5 py-0.5 rounded ${videoSortBy === col ? 'bg-gray-200 text-gray-700 font-medium' : 'hover:bg-gray-100'}`}>
+                  {lbl}{videoSortBy === col ? (videoSortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="space-y-1 max-h-52 overflow-y-auto">
-            {library.filter(v => v.subtitles_local).map(v => (
+            {sortedLibrary.map(v => (
               <label key={v.video_id} className="flex items-center gap-2 text-xs cursor-pointer">
                 <input type="checkbox" checked={selectedVideos.includes(v.video_id)}
                   onChange={() => setSelectedVideos(prev =>
                     prev.includes(v.video_id) ? prev.filter(x => x !== v.video_id) : [...prev, v.video_id]
                   )} />
-                <span className={`shrink-0 px-1 rounded font-mono font-bold text-xs ${v.language === 'cs' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`} title={v.language === 'cs' ? 'Čeština' : v.language === 'en' ? 'Angličtina' : v.language}>{v.language.toUpperCase()}</span>
+                <span className={`shrink-0 px-1 rounded font-mono font-bold text-xs ${v.language === 'cs' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}
+                  title={v.language === 'cs' ? 'Čeština' : v.language === 'en' ? 'Angličtina' : v.language}>
+                  {v.language.toUpperCase()}
+                </span>
                 <span className="truncate" title={v.title}>{v.title}</span>
+                {v.upload_date && <span className="shrink-0 text-gray-400">{v.upload_date}</span>}
+                {v.duration_seconds && <span className="shrink-0 text-gray-400">{Math.round(v.duration_seconds)}s</span>}
               </label>
             ))}
           </div>
@@ -627,6 +689,7 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                 <th className="px-3 py-2 text-center">CER</th>
                 <th className="px-3 py-2 text-center">WER norm.</th>
                 <th className="px-3 py-2 text-center">RTF</th>
+                <th className="px-3 py-2 text-center">Live mic</th>
                 <th className="px-3 py-2 text-center">Latence</th>
                 <th className="px-3 py-2 text-center">Pareto</th>
               </tr>
@@ -656,6 +719,13 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                     <td className="px-3 py-2 text-center font-mono">
                       {r.rtf != null
                         ? <span className={r.rtf > 1 ? 'bg-red-100 text-red-700 font-bold px-1 rounded' : 'text-green-700 font-semibold'}>{r.rtf.toFixed(3)}</span>
+                        : '–'}
+                    </td>
+                    <td className="px-3 py-2 text-center" title="RTF < 1.0 = model stíhá live přepis mikrofonu">
+                      {r.rtf != null
+                        ? r.rtf_viable
+                          ? <span className="text-green-700 font-bold" title="✓ Stíhá live přepis (RTF &lt; 1.0)">✓ OK</span>
+                          : <span className="text-red-600 font-bold" title="✗ Nestíhá live přepis (RTF &gt; 1.0)">✗ Pomalý</span>
                         : '–'}
                     </td>
                     <td className="px-3 py-2 text-center font-mono text-gray-600">
@@ -688,6 +758,28 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                             {r.total_audio_s != null && <span>Audio: <strong>{r.total_audio_s.toFixed(1)}s</strong></span>}
                             {r.word_count != null && <span>Slov: <strong>{r.word_count}</strong></span>}
                           </div>
+
+                          {/* Per-video breakdown */}
+                          {r.source_metrics && r.source_metrics.length > 1 && (
+                            <div>
+                              <div className="font-semibold text-gray-600 mb-1">Výsledky per video (průměr v tabulce):</div>
+                              <div className="flex flex-wrap gap-2">
+                                {r.source_metrics.map(sm => (
+                                  <div key={sm.video_id} className={`border rounded px-2 py-1 font-mono text-center ${sm.error ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-white'}`}>
+                                    <div className="text-gray-500 text-xs truncate max-w-28">{sm.video_id}</div>
+                                    {sm.error
+                                      ? <div className="text-red-600 text-xs">chyba</div>
+                                      : <>
+                                          <div>WER <strong>{sm.wer != null ? (sm.wer*100).toFixed(1)+'%' : '–'}</strong></div>
+                                          <div className={sm.rtf != null && sm.rtf > 1 ? 'text-red-600' : 'text-green-700'}>
+                                            RTF <strong>{sm.rtf?.toFixed(2) ?? '–'}</strong>
+                                          </div>
+                                        </>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
 
                           {/* Word diff */}
                           {r.word_diff && r.word_diff.length > 0 && (
