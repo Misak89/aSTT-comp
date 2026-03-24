@@ -27,6 +27,7 @@ class WhisperRunConfig:
     beam_size: int | None = None
     best_of: int | None = None
     no_fallback: bool = True
+    initial_prompt: str | None = None
 
 
 def run_whisper_source(
@@ -73,6 +74,7 @@ def run_whisper_source(
         beam_size=config.beam_size,
         best_of=config.best_of,
         no_fallback=config.no_fallback,
+        initial_prompt=config.initial_prompt,
     )
 
     started = datetime.now(UTC)
@@ -258,6 +260,7 @@ def _build_cmd(
     beam_size: int | None,
     best_of: int | None,
     no_fallback: bool,
+    initial_prompt: str | None = None,
 ) -> list[str]:
     cmd = [
         whisper_bin,
@@ -285,6 +288,8 @@ def _build_cmd(
         cmd.extend(["-bo", str(max(1, best_of))])
     if no_fallback:
         cmd.append("-nf")
+    if initial_prompt:
+        cmd.extend(["-p", initial_prompt])
     return cmd
 
 

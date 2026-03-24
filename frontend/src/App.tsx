@@ -4,6 +4,7 @@ import { LibraryPage } from './pages/LibraryPage'
 import { BenchmarkPage } from './pages/BenchmarkPage'
 import { ResultsPage } from './pages/ResultsPage'
 import { ModelsPage } from './pages/ModelsPage'
+import { TuningPage } from './pages/TuningPage'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="library" element={<LibraryPage />} />
           <Route path="benchmark" element={<BenchmarkPage />} />
           <Route path="results" element={<ResultsPage />} />
+          <Route path="tuning" element={<TuningPage />} />
           <Route path="models" element={<ModelsPage />} />
         </Route>
       </Routes>

@@ -4,6 +4,7 @@ const NAV = [
   { to: '/library',   label: 'Knihovna' },
   { to: '/benchmark', label: 'Benchmark' },
   { to: '/results',   label: 'Výsledky' },
+  { to: '/tuning',    label: 'Tuning' },
   { to: '/models',    label: 'Modely' },
 ]
 

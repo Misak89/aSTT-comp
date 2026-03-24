@@ -1,7 +1,7 @@
 import type {
   LibraryItem, LatestResult, BenchmarkJobRequest, BenchmarkJobStatus,
   BenchmarkOptions, Scenario, RunDetail, LiveJobProgress, ModelStatus,
-  ModelDescriptor, MicSessionState, AudioDevice,
+  ModelDescriptor, MicSessionState, AudioDevice, TuningJobStatus,
 } from '../types'
 
 const BASE = '/api'
@@ -89,6 +89,11 @@ export const api = {
       post<ModelStatus>(`/models/${id}/note`, { note }),
     openLogsDir: () => post<{ path: string }>('/open-dir/models_log'),
     openStoreDir: (id: string) => post<{ path: string }>(`/open-dir/model_store/${id}`),
+  },
+  tuning: {
+    createJob: (req: unknown) => post<TuningJobStatus>('/tuning/jobs', req),
+    listJobs: () => get<TuningJobStatus[]>('/tuning/jobs'),
+    getJob: (id: string) => get<TuningJobStatus>(`/tuning/jobs/${id}`),
   },
   mic: {
     devices: () => get<AudioDevice[]>('/mic/devices'),

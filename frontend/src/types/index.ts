@@ -226,3 +226,32 @@ export interface ModelStatus {
   size_mb: number | null
   events: ModelEvent[]
 }
+
+// Tuning
+export interface TuningTrialResult {
+  trial_idx: number
+  params: Record<string, unknown>
+  chunk_seconds: number
+  wer: number | null
+  cer: number | null
+  wer_normalized: number | null
+  mer: number | null
+  wil: number | null
+  rtf: number | null
+  latency_ms: number | null
+  error: string | null
+  is_pareto: boolean
+}
+
+export interface TuningJobStatus {
+  job_id: string
+  status: string
+  model_id: string
+  label: string | null
+  created_at: string
+  total_trials: number
+  completed_trials: number
+  results: TuningTrialResult[]
+  error: string | null
+  best_trial_idx: number | null
+}

@@ -339,6 +339,7 @@ def _run_batch_adapter(*, source: SourceEntry, adapter: str, config: StreamingRu
             beam_size=params.get("beam_size"),
             best_of=params.get("best_of"),
             no_fallback=bool(params.get("no_fallback", True)),
+            initial_prompt=params.get("initial_prompt") or None,
         )
         return run_whisper_source(
             source=source,
