@@ -1,7 +1,10 @@
 """Tuning router — hledání nejlepší kombinace parametrů modelu."""
+import subprocess
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from ..models.tuning import TuningJobRequest, TuningJobStatus
 from ..services import tuning_service
+from ..config import TUNING_ROOT
 
 router = APIRouter(prefix="/api/tuning")
 
@@ -22,3 +25,12 @@ def get_tuning_job(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="tuning job not found")
     return job
+
+
+@router.post("/jobs/{job_id}/open-dir")
+def open_tuning_job_dir(job_id: str):
+    job_dir = TUNING_ROOT / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="job dir not found")
+    subprocess.Popen(["explorer", str(job_dir)])
+    return JSONResponse({"path": str(job_dir)})

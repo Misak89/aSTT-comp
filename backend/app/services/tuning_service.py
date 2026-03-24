@@ -61,11 +61,14 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
 
     # Spusť worker subprocess
     worker = ROOT / "scripts" / "tuning_worker.py"
+    import os as _os
+    env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     subprocess.Popen(
         [sys.executable, str(worker), "--job-id", job_id, "--tuning-root", str(TUNING_ROOT)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         cwd=str(ROOT),
+        env=env,
     )
 
     return status

@@ -32,6 +32,14 @@ def _update_status(status_file: Path, updates: dict) -> None:
         print(f"WARN: status update failed: {e}", file=sys.stderr)
 
 
+def _set_progress(status_file: Path, message: str) -> None:
+    _update_status(status_file, {"progress_message": message})
+    try:
+        print(message, flush=True)
+    except Exception:
+        pass
+
+
 def _append_result(status_file: Path, result: dict) -> None:
     try:
         data = json.loads(status_file.read_text(encoding="utf-8"))
@@ -68,29 +76,39 @@ def main() -> int:
     _update_status(status_file, {"status": "running"})
 
     try:
-        from packages.benchmarks.runners.streaming_runner import StreamingRunner, StreamingRunConfig
-        from packages.ingest.source_resolver import parse_source_entries
+        from packages.benchmarks.runners.streaming_runner import run_streaming_benchmark, StreamingRunConfig
+        from packages.ingest.source_resolver import SourceEntry
+        from packages.ingest.youtube.stream_pipe import stream_youtube_audio
         from packages.benchmarks.metrics.text_metrics import (
-            word_error_rate, character_error_rate,
+            word_error_rate, char_error_rate,
             word_error_rate_normalized, match_error_rate, word_information_lost,
+            word_diff,
         )
         from packages.benchmarks.ground_truth.vtt_reference import extract_vtt_clip_text
 
         # Vyber první video (tuning typicky na jednom videu)
-        sources_raw = [f"yt:{vid}" for vid in video_ids]
-        source_entries = parse_source_entries(sources_raw, max_sources=len(sources_raw))
-        if not source_entries:
-            raise ValueError(f"Žádné validní zdroje: {video_ids}")
-        source = source_entries[0]
+        if not video_ids:
+            raise ValueError("Žádná video_ids v konfiguraci")
         video_id = video_ids[0]
+        yt_url = f"https://www.youtube.com/watch?v={video_id}"
+        source = SourceEntry(
+            source_id=f"src-{video_id}",
+            label=video_id,
+            origin_type="youtube",
+            value=yt_url,
+            exists=True,
+            canonical_url=yt_url,
+            video_id=video_id,
+        )
 
         for trial_idx, trial_params in enumerate(trials):
             chunk_seconds = int(trial_params.pop("_chunk_seconds", 30))
             # trial_params teď obsahuje jen model params
 
-            print(f"Trial {trial_idx+1}/{len(trials)}: chunk={chunk_seconds}s params={trial_params}", flush=True)
+            _set_progress(status_file, f"Trial {trial_idx+1}/{len(trials)}: chunk={chunk_seconds}s | {', '.join(f'{k}={v}' for k,v in trial_params.items())}")
 
             try:
+                _set_progress(status_file, f"Trial {trial_idx+1}/{len(trials)}: ⬇ stahuji audio z YouTube...")
                 run_config = StreamingRunConfig(
                     model_id=model_id,
                     model_params=trial_params,
@@ -98,11 +116,20 @@ def main() -> int:
                     output_dir=str(job_dir / f"trial_{trial_idx:03d}"),
                     sample_seconds=sample_seconds,
                     chunk_seconds=chunk_seconds,
+                    progress_callback=lambda msg: _set_progress(status_file, f"Trial {trial_idx+1}/{len(trials)}: {msg}"),
                 )
-                runner = StreamingRunner(run_config)
-                result = runner.run(source)
+                result = run_streaming_benchmark(
+                    source=source,
+                    audio_generator=stream_youtube_audio(
+                        source.canonical_url or source.value,
+                        chunk_seconds=0.1,
+                        max_seconds=float(sample_seconds),
+                    ),
+                    config=run_config,
+                )
 
                 # Extrahuj referenční text
+                _set_progress(status_file, f"Trial {trial_idx+1}/{len(trials)}: ✓ přepis hotov, počítám WER...")
                 ref_text = extract_vtt_clip_text(
                     video_id=video_id,
                     clip_start_s=0,
@@ -110,7 +137,7 @@ def main() -> int:
                     subtitles_root=subtitles_root,
                 )
 
-                transcript = result.get("transcript") or result.get("text") or ""
+                transcript = result.get("transcript") or result.get("transcript_text") or result.get("text") or ""
                 wer = None
                 cer = None
                 wer_norm = None
@@ -119,10 +146,17 @@ def main() -> int:
 
                 if ref_text and transcript:
                     wer = word_error_rate(ref_text, transcript)
-                    cer = character_error_rate(ref_text, transcript)
+                    cer = char_error_rate(ref_text, transcript)
                     wer_norm = word_error_rate_normalized(ref_text, transcript)
                     mer = match_error_rate(ref_text, transcript)
                     wil = word_information_lost(ref_text, transcript)
+
+                wdiff = None
+                if ref_text and transcript:
+                    try:
+                        wdiff = word_diff(ref_text, transcript)
+                    except Exception:
+                        pass
 
                 trial_result = {
                     "trial_idx": trial_idx,
@@ -135,8 +169,15 @@ def main() -> int:
                     "wil": round(wil, 4) if wil is not None else None,
                     "rtf": result.get("rtf"),
                     "latency_ms": result.get("latency_ms"),
+                    "elapsed_s": result.get("elapsed_s"),
+                    "total_audio_s": result.get("total_audio_s"),
+                    "word_count": len(transcript.split()) if transcript else 0,
                     "error": None,
                     "is_pareto": False,
+                    "transcript": transcript[:3000] if transcript else None,
+                    "reference_text": ref_text[:3000] if ref_text else None,
+                    "word_diff": wdiff,
+                    "chunk_metrics": result.get("chunk_metrics"),
                 }
 
             except Exception as e:

@@ -234,6 +234,7 @@ export function TuningPage() {
                   onChange={() => setSelectedVideos(prev =>
                     prev.includes(v.video_id) ? prev.filter(x => x !== v.video_id) : [...prev, v.video_id]
                   )} />
+                <span className={`shrink-0 px-1 rounded font-mono font-bold text-xs ${v.language === 'cs' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`} title={v.language === 'cs' ? 'Čeština' : v.language === 'en' ? 'Angličtina' : v.language}>{v.language.toUpperCase()}</span>
                 <span className="truncate" title={v.title}>{v.title}</span>
               </label>
             ))}
@@ -479,6 +480,7 @@ export function TuningPage() {
 }
 
 function TuningJobDetail({ job }: { job: TuningJobStatus }) {
+  const [expandedTrial, setExpandedTrial] = useState<number | null>(null)
   const best = job.best_trial_idx != null ? job.results[job.best_trial_idx] : null
   const sorted = [...job.results].filter(r => r.wer != null).sort((a, b) => (a.wer ?? 99) - (b.wer ?? 99))
 
@@ -513,7 +515,19 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                 style={{ width: `${Math.round(job.completed_trials / job.total_trials * 100)}%` }} />
             </div>
           )}
+          <button onClick={() => api.tuning.openJobDir(job.job_id)}
+            className="ml-auto text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-0.5">
+            📁 Otevřít složku
+          </button>
         </div>
+        {job.progress_message && (
+          <div className={`mt-2 text-xs font-mono px-3 py-2 rounded ${
+            job.status === 'running' ? 'bg-blue-50 text-blue-800' : 'bg-gray-50 text-gray-600'
+          }`}>
+            {job.status === 'running' && <span className="animate-pulse mr-2">⌛</span>}
+            {job.progress_message}
+          </div>
+        )}
 
         {best && (
           <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded">
@@ -544,11 +558,11 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
             RTF &lt; 1.0 = stíhá živý přepis.
           </p>
           <ResponsiveContainer width="100%" height={280}>
-            <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
+            <ScatterChart margin={{ top: 24, right: 20, bottom: 20, left: 10 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="x" name="RTF" unit="" label={{ value: 'RTF', position: 'insideBottom', offset: -10 }} type="number" />
               <YAxis dataKey="y" name="WER" unit="%" label={{ value: 'WER %', angle: -90, position: 'insideLeft' }} />
-              <ReferenceLine x={1.0} stroke="#ef4444" strokeDasharray="4 4" label={{ value: 'RTF=1', position: 'top', fontSize: 10, fill: '#ef4444' }} />
+              <ReferenceLine x={1.0} stroke="#ef4444" strokeDasharray="4 4" label={{ value: 'RTF=1', position: 'insideTopRight', fontSize: 10, fill: '#ef4444' }} />
               <Tooltip
                 content={({ payload }) => {
                   if (!payload?.length) return null
@@ -584,6 +598,23 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
         </div>
       )}
 
+      {/* Triály s chybou nebo null WER */}
+      {job.results.filter(r => r.wer == null).length > 0 && (
+        <div className="bg-orange-50 rounded border border-orange-300 p-4">
+          <h3 className="text-sm font-semibold text-orange-800 mb-2">
+            ⚠ Triály bez výsledku ({job.results.filter(r => r.wer == null).length}×)
+          </h3>
+          <div className="space-y-1.5">
+            {job.results.filter(r => r.wer == null).map(r => (
+              <div key={r.trial_idx} className="text-xs font-mono bg-white border border-orange-200 rounded px-2 py-1.5 text-orange-900">
+                <span className="text-orange-500 font-bold">Trial {r.trial_idx}:</span>{' '}
+                {r.error ?? 'WER = null — prázdný přepis nebo chybí titulky'}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Tabulka výsledků */}
       {sorted.length > 0 && (
         <div className="bg-white rounded border border-gray-200 overflow-x-auto">
@@ -602,36 +633,107 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
             </thead>
             <tbody>
               {sorted.map((r, rank) => (
-                <tr key={r.trial_idx}
-                  className={`border-t border-gray-100 ${r.trial_idx === job.best_trial_idx ? 'bg-green-50' : 'hover:bg-gray-50'}`}>
-                  <td className="px-3 py-2 text-center text-gray-400 font-mono">
-                    {rank === 0 ? '🏆' : rank + 1}
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {Object.entries(r.params).map(([k, v]) => (
-                        <span key={k} className="bg-gray-100 rounded px-1.5 py-0.5 font-mono text-gray-700">
-                          {k}=<strong>{String(v)}</strong>
-                        </span>
-                      ))}
-                    </div>
-                    {r.error && <div className="text-red-500 text-xs mt-1">{r.error}</div>}
-                  </td>
-                  <td className="px-3 py-2 text-center"><WerBadge value={r.wer} label="" /></td>
-                  <td className="px-3 py-2 text-center"><WerBadge value={r.cer} label="" /></td>
-                  <td className="px-3 py-2 text-center"><WerBadge value={r.wer_normalized} label="" /></td>
-                  <td className="px-3 py-2 text-center font-mono">
-                    {r.rtf != null
-                      ? <span className={r.rtf > 1 ? 'text-red-500 font-bold' : 'text-green-600'}>{r.rtf.toFixed(3)}</span>
-                      : '–'}
-                  </td>
-                  <td className="px-3 py-2 text-center font-mono text-gray-600">
-                    {r.latency_ms != null ? `${r.latency_ms.toFixed(0)}ms` : '–'}
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    {r.is_pareto ? <span className="text-yellow-600">★</span> : ''}
-                  </td>
-                </tr>
+                <>
+                  <tr key={r.trial_idx}
+                    onClick={() => setExpandedTrial(expandedTrial === r.trial_idx ? null : r.trial_idx)}
+                    className={`border-t border-gray-100 cursor-pointer ${r.trial_idx === job.best_trial_idx ? 'bg-green-50 hover:bg-green-100' : 'hover:bg-gray-50'}`}>
+                    <td className="px-3 py-2 text-center text-gray-400 font-mono">
+                      {rank === 0 ? '🏆' : rank + 1}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1 items-center">
+                        <span className="text-blue-500 mr-1 text-xs font-bold">{expandedTrial === r.trial_idx ? '▼' : '▶'}</span>
+                        {Object.entries(r.params).map(([k, v]) => (
+                          <span key={k} className="bg-gray-100 rounded px-1.5 py-0.5 font-mono text-gray-700">
+                            {k}=<strong>{String(v)}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-center"><WerBadge value={r.wer} label="" /></td>
+                    <td className="px-3 py-2 text-center"><WerBadge value={r.cer} label="" /></td>
+                    <td className="px-3 py-2 text-center"><WerBadge value={r.wer_normalized} label="" /></td>
+                    <td className="px-3 py-2 text-center font-mono">
+                      {r.rtf != null
+                        ? <span className={r.rtf > 1 ? 'bg-red-100 text-red-700 font-bold px-1 rounded' : 'text-green-700 font-semibold'}>{r.rtf.toFixed(3)}</span>
+                        : '–'}
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono text-gray-600">
+                      {r.latency_ms != null ? `${r.latency_ms.toFixed(0)}ms` : '–'}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {r.is_pareto ? <span className="text-yellow-600 font-bold">★</span> : ''}
+                    </td>
+                  </tr>
+                  {expandedTrial === r.trial_idx && (
+                    <tr key={`${r.trial_idx}-detail`} className={r.trial_idx === job.best_trial_idx ? 'bg-green-50' : 'bg-gray-50'}>
+                      <td colSpan={8} className="px-4 py-3 border-t border-gray-100">
+                        <div className="space-y-4 text-xs">
+                          {r.error && (
+                            <div className="bg-red-50 border border-red-200 rounded p-2 text-red-700 font-mono">{r.error}</div>
+                          )}
+
+                          {/* Statistiky */}
+                          <div className="flex flex-wrap gap-4 text-gray-600 bg-white border border-gray-200 rounded px-3 py-2">
+                            <span>WER: <strong>{r.wer != null ? (r.wer*100).toFixed(1)+'%' : '–'}</strong></span>
+                            <span>CER: <strong>{r.cer != null ? (r.cer*100).toFixed(1)+'%' : '–'}</strong></span>
+                            <span>WER norm: <strong>{r.wer_normalized != null ? (r.wer_normalized*100).toFixed(1)+'%' : '–'}</strong></span>
+                            <span>MER: <strong>{r.mer != null ? (r.mer*100).toFixed(1)+'%' : '–'}</strong></span>
+                            <span>WIL: <strong>{r.wil != null ? (r.wil*100).toFixed(1)+'%' : '–'}</strong></span>
+                            <span className={r.rtf != null && r.rtf > 1 ? 'text-red-700 font-bold' : 'text-green-700 font-semibold'}>
+                              RTF: <strong>{r.rtf?.toFixed(3) ?? '–'}</strong>
+                            </span>
+                            <span>Latence: <strong>{r.latency_ms != null ? r.latency_ms.toFixed(0)+'ms' : '–'}</strong></span>
+                            {r.elapsed_s != null && <span>Engine: <strong>{r.elapsed_s.toFixed(1)}s</strong></span>}
+                            {r.total_audio_s != null && <span>Audio: <strong>{r.total_audio_s.toFixed(1)}s</strong></span>}
+                            {r.word_count != null && <span>Slov: <strong>{r.word_count}</strong></span>}
+                          </div>
+
+                          {/* Word diff */}
+                          {r.word_diff && r.word_diff.length > 0 && (
+                            <div>
+                              <div className="font-semibold text-gray-600 mb-1">Word diff (přepis vs reference):</div>
+                              <div className="bg-white border border-gray-200 rounded p-2 leading-6 max-h-48 overflow-y-auto">
+                                {r.word_diff.map((d, i) => {
+                                  if (d.op === 'equal') return <span key={i} className="text-gray-700">{d.hyp} </span>
+                                  if (d.op === 'replace') return <span key={i}><span className="bg-yellow-100 text-yellow-800 rounded px-0.5">{d.hyp}</span><span className="bg-gray-100 text-gray-400 line-through rounded px-0.5 ml-0.5 text-xs">{d.ref}</span> </span>
+                                  if (d.op === 'insert') return <span key={i} className="bg-red-100 text-red-700 rounded px-0.5 line-through">{d.hyp} </span>
+                                  if (d.op === 'delete') return <span key={i} className="bg-blue-100 text-blue-700 rounded px-0.5">[{d.ref}] </span>
+                                  return null
+                                })}
+                              </div>
+                              <div className="flex gap-3 mt-1 text-gray-400">
+                                <span><span className="bg-yellow-100 text-yellow-800 rounded px-1">slovo</span> záměna</span>
+                                <span><span className="bg-red-100 text-red-700 rounded px-1 line-through">slovo</span> přebývá</span>
+                                <span><span className="bg-blue-100 text-blue-700 rounded px-1">[slovo]</span> chybí</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Chunk metriky */}
+                          {r.chunk_metrics && r.chunk_metrics.length > 0 && (
+                            <div>
+                              <div className="font-semibold text-gray-600 mb-1">Chunk metriky (RTF per chunk):</div>
+                              <div className="flex flex-wrap gap-1">
+                                {r.chunk_metrics.map((c, i) => (
+                                  <div key={i} className={`px-2 py-1 rounded font-mono text-center border ${
+                                    c.rtf > 1 ? 'bg-red-50 border-red-200 text-red-700' :
+                                    c.rtf > 0.7 ? 'bg-yellow-50 border-yellow-200 text-yellow-700' :
+                                    'bg-green-50 border-green-200 text-green-700'
+                                  }`}>
+                                    <div className="text-xs">{c.chunk_start_s.toFixed(0)}s</div>
+                                    <div className="font-bold">{c.rtf.toFixed(2)}</div>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="text-gray-400 mt-1">RTF &lt;0.7 zelená · 0.7–1.0 žlutá · &gt;1.0 červená (nestíhá živý přepis)</div>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
               ))}
             </tbody>
           </table>
@@ -640,8 +742,9 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
 
       {/* Čekání na první výsledky */}
       {job.status === 'running' && job.results.length === 0 && (
-        <div className="text-center text-sm text-gray-400 py-6">
-          Probíhá první trial… <span className="animate-pulse">⌛</span>
+        <div className="bg-white rounded border border-blue-200 p-4 text-sm text-blue-800">
+          <span className="animate-pulse mr-2">⌛</span>
+          Probíhá první trial — {job.progress_message || 'inicializace...'}
         </div>
       )}
 

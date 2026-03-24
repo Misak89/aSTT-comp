@@ -113,6 +113,7 @@ export function BenchmarkPage() {
               <label key={item.video_id} className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={selectedVideos.includes(item.video_id)}
                   onChange={() => setSelectedVideos(v => toggleItem(v, item.video_id))} />
+                <span className={`shrink-0 px-1 rounded font-mono font-bold text-xs ${item.language === 'cs' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`} title={item.language === 'cs' ? 'Čeština' : item.language === 'en' ? 'Angličtina' : item.language}>{item.language.toUpperCase()}</span>
                 <span className="truncate" title={item.title}>
                   {item.title}
                   {!item.subtitles_local && <span className="text-orange-400 ml-1 text-xs">(bez titulků)</span>}

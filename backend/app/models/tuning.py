@@ -35,6 +35,13 @@ class TuningTrialResult(BaseModel):
     latency_ms: Optional[float]
     error: Optional[str]
     is_pareto: bool = False         # vypočítáno na frontendu / při GET
+    transcript: Optional[str] = None
+    reference_text: Optional[str] = None
+    elapsed_s: Optional[float] = None
+    total_audio_s: Optional[float] = None
+    word_count: Optional[int] = None
+    word_diff: Optional[list] = None   # [{op, ref, hyp}] — barevný diff
+    chunk_metrics: Optional[list] = None  # per-chunk RTF/timing
 
 
 class TuningJobStatus(BaseModel):
@@ -48,3 +55,4 @@ class TuningJobStatus(BaseModel):
     results: list[TuningTrialResult] = []
     error: Optional[str] = None
     best_trial_idx: Optional[int] = None
+    progress_message: Optional[str] = None

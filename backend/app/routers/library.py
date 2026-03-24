@@ -41,3 +41,20 @@ def get_subtitle_file(video_id: str, filename: str):
 @router.get("/latest-results/{video_id}", response_model=list[LatestResult])
 def latest_results(video_id: str):
     return library_service.get_latest_results(video_id)
+
+
+@router.post("/search")
+def search_youtube(req: dict):
+    return library_service.search_youtube(
+        q=req.get("q", ""),
+        max_results=int(req.get("max_results", 20)),
+        min_duration=int(req.get("min_duration", 0)),
+        max_duration=int(req.get("max_duration", 0)),
+        min_views=int(req.get("min_views", 0)),
+        uploaded_after=req.get("uploaded_after", ""),
+        audio_langs=req.get("audio_langs") or None,
+        subtitle_langs=req.get("subtitle_langs") or None,
+        subtitle_type=req.get("subtitle_type", "any"),
+        content_type=req.get("content_type", "any"),
+        categories=req.get("categories") or None,
+    )

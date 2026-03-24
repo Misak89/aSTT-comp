@@ -1,5 +1,21 @@
 // Typy zrcadlí Pydantic modely backendu
 
+export interface YTSearchResult {
+  video_id: string
+  title: string
+  url: string
+  duration_seconds: number
+  view_count: number
+  upload_date: string
+  channel: string
+  thumbnail: string
+  audio_language: string
+  subtitle_manual: string[]
+  subtitle_auto: string[]
+  categories: string[]
+  in_library: boolean
+}
+
 export interface SubtitleFile {
   filename: string
   size_bytes: number
@@ -26,6 +42,7 @@ export interface LibraryItem {
   subtitles_local: boolean
   subtitle_files: SubtitleFile[]
   added_at: string | null
+  upload_date: string | null
   latest_results?: LatestResult[]
 }
 
@@ -241,6 +258,13 @@ export interface TuningTrialResult {
   latency_ms: number | null
   error: string | null
   is_pareto: boolean
+  transcript: string | null
+  reference_text: string | null
+  elapsed_s: number | null
+  total_audio_s: number | null
+  word_count: number | null
+  word_diff: { op: string; ref: string | null; hyp: string | null }[] | null
+  chunk_metrics: { chunk_start_s: number; chunk_end_s: number; rtf: number; processing_s: number }[] | null
 }
 
 export interface TuningJobStatus {
@@ -254,4 +278,5 @@ export interface TuningJobStatus {
   results: TuningTrialResult[]
   error: string | null
   best_trial_idx: number | null
+  progress_message: string | null
 }

@@ -19,6 +19,7 @@ class LibraryItem(BaseModel):
     subtitles_local: bool = False
     subtitle_files: list[SubtitleFile] = []
     added_at: Optional[str] = None
+    upload_date: Optional[str] = None  # datum vydání na YouTube (YYYY-MM-DD)
 
 
 class LatestResult(BaseModel):

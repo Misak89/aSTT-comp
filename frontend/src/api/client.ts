@@ -1,7 +1,7 @@
 import type {
   LibraryItem, LatestResult, BenchmarkJobRequest, BenchmarkJobStatus,
   BenchmarkOptions, Scenario, RunDetail, LiveJobProgress, ModelStatus,
-  ModelDescriptor, MicSessionState, AudioDevice, TuningJobStatus,
+  ModelDescriptor, MicSessionState, AudioDevice, TuningJobStatus, YTSearchResult,
 } from '../types'
 
 const BASE = '/api'
@@ -50,6 +50,11 @@ export const api = {
       post('/library/download-subtitles', { video_id, url }),
     latestResults: (video_id: string) =>
       get<LatestResult[]>(`/library/latest-results/${video_id}`),
+    search: (params: {
+      q: string; max_results?: number; min_duration?: number; max_duration?: number;
+      min_views?: number; uploaded_after?: string; audio_langs?: string[];
+      subtitle_langs?: string[]; subtitle_type?: string; content_type?: string; categories?: string[];
+    }) => post<YTSearchResult[]>('/library/search', params),
   },
   benchmark: {
     options: () => get<BenchmarkOptions>('/benchmark/options'),
@@ -94,6 +99,7 @@ export const api = {
     createJob: (req: unknown) => post<TuningJobStatus>('/tuning/jobs', req),
     listJobs: () => get<TuningJobStatus[]>('/tuning/jobs'),
     getJob: (id: string) => get<TuningJobStatus>(`/tuning/jobs/${id}`),
+    openJobDir: (id: string) => post<{ path: string }>(`/tuning/jobs/${id}/open-dir`),
   },
   mic: {
     devices: () => get<AudioDevice[]>('/mic/devices'),
