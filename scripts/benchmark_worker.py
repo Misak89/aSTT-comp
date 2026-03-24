@@ -165,6 +165,7 @@ def _build_matrix(run_id, sample_seconds, source_entries, by_model_setting) -> d
         rtf_vals = [r["rtf"] for r in model_results if r.get("rtf") is not None]
         latency_vals = [r.get("latency_ms") for r in model_results if r.get("latency_ms") is not None]
         wer_vals = [r["wer"] for r in model_results if r.get("wer") is not None]
+        cer_vals = [r["cer"] for r in model_results if r.get("cer") is not None]
         source_metrics = [{
             "video_id": r.get("video_id") or r.get("source_id"),
             "canonical_url": r.get("canonical_url"),
@@ -193,7 +194,8 @@ def _build_matrix(run_id, sample_seconds, source_entries, by_model_setting) -> d
                 "rtf": round(sum(rtf_vals) / len(rtf_vals), 4) if rtf_vals else None,
                 "latency_ms": round(sum(latency_vals) / len(latency_vals), 1) if latency_vals else None,
                 "wer": round(sum(wer_vals) / len(wer_vals), 4) if wer_vals else None,
-                "cer": None, "cpu_percent": None, "ram_mb": None,
+                "cer": round(sum(cer_vals) / len(cer_vals), 4) if cer_vals else None,
+                "cpu_percent": None, "ram_mb": None,
             },
             "source_metrics": source_metrics,
         })

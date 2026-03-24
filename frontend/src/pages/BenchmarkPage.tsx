@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { api } from '../api/client'
-import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor } from '../types'
+import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor, RunDetail } from '../types'
 import { StatusBadge } from '../components/StatusBadge'
 import { LiveJobPanel } from '../components/LiveJobPanel'
 import { MicSession } from '../components/MicSession'
@@ -217,9 +217,10 @@ export function BenchmarkPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>
-              <th className="px-4 py-2 text-left">Job ID</th>
+              <th className="px-4 py-2 text-left">Datum / čas</th>
               <th className="px-4 py-2 text-left">Popis</th>
               <th className="px-4 py-2 text-left">Stav / průběh</th>
+              <th className="px-4 py-2 text-left">Nejlepší model</th>
               <th className="px-4 py-2 text-left">HW před startem</th>
               <th className="px-4 py-2 text-left">Poslední zpráva</th>
               <th className="px-4 py-2"></th>
@@ -228,7 +229,10 @@ export function BenchmarkPage() {
           <tbody>
             {jobs.map(job => (
               <tr key={job.job_id} className="border-t border-gray-100">
-                <td className="px-4 py-2 font-mono text-xs text-gray-500">{job.job_id.slice(-8)}</td>
+                <td className="px-4 py-2 text-xs text-gray-500">
+                  <div className="font-mono">{formatJobDate(job.created_at)}</div>
+                  <div className="text-gray-400 font-mono text-xs">{job.job_id.slice(-8)}</div>
+                </td>
                 <td className="px-4 py-2 text-gray-700">{job.label || <span className="text-gray-400 italic text-xs">bez popisu</span>}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-1">
@@ -237,6 +241,11 @@ export function BenchmarkPage() {
                       <span className="text-xs font-mono text-blue-600">{job.progress_percent}%</span>
                     )}
                   </div>
+                </td>
+                <td className="px-4 py-2">
+                  {job.status === 'completed' && job.run_id
+                    ? <BestModelBadge runId={job.run_id} />
+                    : <span className="text-gray-400 text-xs">–</span>}
                 </td>
                 <td className="px-4 py-2 text-xs">
                   {job.pre_cpu != null || job.pre_ram_mb != null ? (
@@ -273,12 +282,92 @@ export function BenchmarkPage() {
               </tr>
             ))}
             {jobs.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400 text-sm">Zatím žádné joby.</td></tr>
+              <tr><td colSpan={7} className="px-4 py-6 text-center text-gray-400 text-sm">Zatím žádné joby.</td></tr>
             )}
           </tbody>
         </table>
       </div>
       </>}
+    </div>
+  )
+}
+
+function formatJobDate(iso: string | null | undefined): string {
+  if (!iso) return '–'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  return d.toLocaleString('cs-CZ', {
+    day: '2-digit', month: '2-digit', year: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function BestModelBadge({ runId }: { runId: string }) {
+  const [data, setData] = useState<RunDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    try {
+      const run = await api.runs.get(runId)
+      setData(run)
+    } catch { /* run ještě neexistuje nebo chyba */ }
+    setLoading(false)
+  }, [runId])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <span className="text-gray-400 text-xs">…</span>
+  if (!data) return <span className="text-gray-400 text-xs">–</span>
+
+  // Najdi nejlepší: nejnižší WER při RTF < 1.2
+  const candidates = data.results
+    .filter(r => r.aggregate.wer != null && (r.aggregate.rtf == null || r.aggregate.rtf <= 1.2))
+    .sort((a, b) => (a.aggregate.wer ?? 99) - (b.aggregate.wer ?? 99))
+
+  if (!candidates.length) {
+    // Všechny mají RTF > 1.2 — ukázat alespoň nejlepší WER
+    const best = [...data.results].sort((a, b) => (a.aggregate.wer ?? 99) - (b.aggregate.wer ?? 99))[0]
+    if (!best) return <span className="text-gray-400 text-xs">–</span>
+    return (
+      <div className="text-xs space-y-0.5">
+        <div className="font-mono text-gray-700">{best.model_id}</div>
+        <div className="text-gray-500">{best.setting_label}</div>
+        {best.aggregate.wer != null && (
+          <span className="text-orange-500 font-bold">WER {(best.aggregate.wer * 100).toFixed(1)} %</span>
+        )}
+        {best.aggregate.rtf != null && (
+          <span className="ml-1 text-red-400">RTF {best.aggregate.rtf.toFixed(2)} ⚠</span>
+        )}
+      </div>
+    )
+  }
+
+  const best = candidates[0]
+  const werPct = best.aggregate.wer != null ? (best.aggregate.wer * 100).toFixed(1) : null
+  const werColor = !werPct ? 'text-gray-500'
+    : +werPct < 10 ? 'text-green-600'
+    : +werPct < 20 ? 'text-yellow-600'
+    : +werPct < 35 ? 'text-orange-500'
+    : 'text-red-600'
+
+  return (
+    <div className="text-xs space-y-0.5">
+      <div className="font-mono text-gray-800 font-medium">{best.model_id}</div>
+      <div className="text-gray-500">{best.setting_label}</div>
+      <div className="flex items-center gap-2 flex-wrap">
+        {werPct && <span className={`font-bold ${werColor}`}>WER {werPct} %</span>}
+        {best.aggregate.latency_ms != null && (
+          <span className="text-gray-400 font-mono">{best.aggregate.latency_ms.toFixed(0)} ms</span>
+        )}
+        {best.aggregate.rtf != null && (
+          <span className={best.aggregate.rtf > 1 ? 'text-red-500' : 'text-green-600'}>
+            RTF {best.aggregate.rtf.toFixed(2)}
+          </span>
+        )}
+      </div>
+      {candidates.length > 1 && (
+        <div className="text-gray-400">+{candidates.length - 1} dalších</div>
+      )}
     </div>
   )
 }

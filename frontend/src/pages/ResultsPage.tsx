@@ -98,6 +98,319 @@ export function ResultsPage() {
       {!run && !error && (
         <p className="text-gray-400 text-sm">Zadej Run ID z Benchmark stránky.</p>
       )}
+
+      {/* Legenda metrik — vždy viditelná */}
+      <MetricsLegend />
+    </div>
+  )
+}
+
+function MetricsLegend() {
+  const metrics = [
+    {
+      key: 'WER',
+      name: 'Word Error Rate',
+      formula: '(S + D + I) / N',
+      color: 'blue',
+      bg: 'bg-blue-50',
+      border: 'border-blue-200',
+      badge: 'bg-blue-100 text-blue-800',
+      desc: 'Základní metrika přesnosti. Počítá, kolik procent slov bylo přepsáno chybně — jako záměna, vynechání nebo přidání. Citlivá na interpunkci a velká písmena.',
+      tiers: [
+        { label: '< 10 %', color: 'text-green-600', note: 'výborný' },
+        { label: '10–20 %', color: 'text-yellow-600', note: 'dobrý' },
+        { label: '20–35 %', color: 'text-orange-500', note: 'použitelný' },
+        { label: '> 35 %', color: 'text-red-600', note: 'slabý' },
+      ],
+    },
+    {
+      key: 'CER',
+      name: 'Character Error Rate',
+      formula: '(edit distance) / len(reference)',
+      color: 'purple',
+      bg: 'bg-purple-50',
+      border: 'border-purple-200',
+      badge: 'bg-purple-100 text-purple-800',
+      desc: 'Jemnější pohled než WER — měří chyby na úrovni znaků. Lépe zachytí drobné překlepy nebo chyby v diakritice. Nižší CER při stejném WER = model si píše slovní tvar „skoro správně".',
+      tiers: [
+        { label: '< 5 %', color: 'text-green-600', note: 'výborný' },
+        { label: '5–10 %', color: 'text-yellow-600', note: 'dobrý' },
+        { label: '10–20 %', color: 'text-orange-500', note: 'použitelný' },
+        { label: '> 20 %', color: 'text-red-600', note: 'slabý' },
+      ],
+    },
+    {
+      key: 'WER norm.',
+      name: 'WER normalizovaný',
+      formula: 'WER bez interpunkce a šumu',
+      color: 'teal',
+      bg: 'bg-teal-50',
+      border: 'border-teal-200',
+      badge: 'bg-teal-100 text-teal-800',
+      desc: 'WER po agresivní normalizaci — odstraní interpunkci, velká písmena a šumové tagy jako [hudba]. Odhalí skutečnou sémantickou přesnost modelu, bez penalizace za stylové rozdíly.',
+      tiers: [
+        { label: 'WER norm. ≪ WER', color: 'text-teal-700', note: 'model se plete jen v interpunkci' },
+        { label: 'WER norm. ≈ WER', color: 'text-gray-600', note: 'chyby jsou ve skutečných slovech' },
+      ],
+    },
+    {
+      key: 'MER',
+      name: 'Match Error Rate',
+      formula: 'Chyby / (H + Chyby)',
+      color: 'orange',
+      bg: 'bg-orange-50',
+      border: 'border-orange-200',
+      badge: 'bg-orange-100 text-orange-800',
+      desc: 'Alternativa WER — chyby se dělí počtem správně rozpoznaných slov plus chybami (nikoli celkovým počtem referenčních slov). Méně citlivá na delší referenci, vhodná pro srovnání přes různě dlouhé klipy.',
+      tiers: [
+        { label: '< 10 %', color: 'text-green-600', note: 'výborný' },
+        { label: '10–25 %', color: 'text-yellow-600', note: 'dobrý' },
+        { label: '> 25 %', color: 'text-red-600', note: 'slabý' },
+      ],
+    },
+    {
+      key: 'WIL',
+      name: 'Word Information Lost',
+      formula: '1 − (H/N) · (H/P)',
+      color: 'rose',
+      bg: 'bg-rose-50',
+      border: 'border-rose-200',
+      badge: 'bg-rose-100 text-rose-800',
+      desc: 'Měří ztrátu informace z pohledu teorie informace. Penalizuje jak vynechání (recall), tak přidání slov navíc (precision). WIL = 0 je perfektní, WIL = 1 je totální selhání.',
+      tiers: [
+        { label: '< 0.15', color: 'text-green-600', note: 'výborný' },
+        { label: '0.15–0.35', color: 'text-yellow-600', note: 'dobrý' },
+        { label: '> 0.35', color: 'text-red-600', note: 'slabý' },
+      ],
+    },
+    {
+      key: 'RTF',
+      name: 'Real-Time Factor',
+      formula: 'čas přepisu / délka audia',
+      color: 'green',
+      bg: 'bg-green-50',
+      border: 'border-green-200',
+      badge: 'bg-green-100 text-green-800',
+      desc: 'Klíčová metrika pro živý přepis. RTF = 0.3 znamená, že přepis trvá 30 % délky audia — model stíhá s rezervou. RTF > 1.0 = model nestíhá, není použitelný pro real-time dialog.',
+      tiers: [
+        { label: '< 0.5', color: 'text-green-600', note: 'výborný — velká rezerva' },
+        { label: '0.5–0.8', color: 'text-yellow-600', note: 'dobrý' },
+        { label: '0.8–1.0', color: 'text-orange-500', note: 'na hraně' },
+        { label: '> 1.0', color: 'text-red-600', note: 'nestíhá živý přepis' },
+      ],
+    },
+    {
+      key: 'Latence',
+      name: 'First-word latency',
+      formula: 'čas do prvního výstupu (ms)',
+      color: 'indigo',
+      bg: 'bg-indigo-50',
+      border: 'border-indigo-200',
+      badge: 'bg-indigo-100 text-indigo-800',
+      desc: 'Jak dlouho po začátku audia model vydá první přepsané slovo. Závisí na délce chunků a rychlosti dekódování. Pro dialog je nízká latence klíčová — uživatel nechce čekat.',
+      tiers: [
+        { label: '< 3 s', color: 'text-green-600', note: 'přijatelné pro dialog' },
+        { label: '3–10 s', color: 'text-yellow-600', note: 'záleží na kontextu' },
+        { label: '> 10 s', color: 'text-red-600', note: 'příliš pomalé' },
+      ],
+    },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3">
+        <h2 className="text-base font-semibold text-gray-800">Metriky hodnocení přepisu</h2>
+        <span className="text-xs text-gray-400">Jak interpretovat hodnoty v tabulce</span>
+      </div>
+
+      {/* Přehledová tabulka */}
+      <div className="bg-white rounded border border-gray-200 overflow-hidden">
+        <div className="grid grid-cols-7 text-xs font-medium text-gray-500 bg-gray-50 px-4 py-2 border-b border-gray-200">
+          <span>Metrika</span>
+          <span className="col-span-2">Co měří</span>
+          <span>Vzorec</span>
+          <span className="col-span-3">Hodnocení</span>
+        </div>
+        {metrics.map(m => (
+          <div key={m.key} className={`grid grid-cols-7 text-xs px-4 py-3 border-b border-gray-100 last:border-0 items-start gap-2 hover:bg-gray-50`}>
+            <div>
+              <span className={`inline-block px-2 py-0.5 rounded font-bold font-mono ${m.badge}`}>{m.key}</span>
+            </div>
+            <div className="col-span-2 text-gray-700 leading-relaxed">
+              <span className="font-medium text-gray-900 block">{m.name}</span>
+              {m.desc}
+            </div>
+            <div className="font-mono text-gray-400 text-xs leading-tight pt-0.5">{m.formula}</div>
+            <div className="col-span-3 flex flex-wrap gap-x-4 gap-y-1">
+              {m.tiers.map(t => (
+                <span key={t.label} className="flex items-center gap-1">
+                  <span className={`font-mono font-bold ${t.color}`}>{t.label}</span>
+                  <span className="text-gray-400">= {t.note}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Zkratky a legenda operací */}
+      <div className="bg-gray-50 border border-gray-200 rounded px-4 py-3 flex flex-wrap gap-6 text-xs text-gray-600">
+        <span className="font-medium text-gray-700 self-center">Zkratky ve vzorcích:</span>
+        <span><strong>N</strong> = počet slov v referenci</span>
+        <span><strong>P</strong> = počet slov v hypotéze (přepis)</span>
+        <span><strong>H</strong> = správně rozpoznaná slova</span>
+        <span><strong>S</strong> = záměny (substitutions)</span>
+        <span><strong>D</strong> = vynechání (deletions)</span>
+        <span><strong>I</strong> = přidání navíc (insertions)</span>
+      </div>
+
+      {/* Sekce D — Segment-level WER */}
+      <div className="bg-white border border-gray-200 rounded overflow-hidden">
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center gap-3">
+          <span className="bg-amber-100 text-amber-800 font-bold font-mono text-xs px-2 py-0.5 rounded">D</span>
+          <span className="font-semibold text-gray-800 text-sm">Segment-level WER — přesnost po časových úsecích</span>
+        </div>
+        <div className="px-4 py-4 space-y-4 text-sm text-gray-700">
+          <p>
+            Globální WER říká <em>kolik procent slov bylo špatně celkem</em>, ale neříká <em>kde</em>.
+            Segment-level WER rozdělí audio na časové úseky a pro každý úsek zvlášť porovná přepis modelu
+            s referenčními titulky. Lze tak přesně vidět, ve které části rozhovoru model selhal.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div className="bg-amber-50 border border-amber-200 rounded p-3">
+              <div className="font-semibold text-amber-900 mb-1">1. Whisper segmenty</div>
+              <p className="text-amber-800">
+                Whisper vrací každý přepsaný úsek s časovými razítky — <code className="font-mono bg-white px-1 rounded">offsets.from</code> a <code className="font-mono bg-white px-1 rounded">offsets.to</code> v ms od začátku klipu.
+                Tyto segmenty jsou uloženy jako <code className="font-mono bg-white px-1 rounded">_segments</code> ve výsledku přepisu.
+              </p>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded p-3">
+              <div className="font-semibold text-blue-900 mb-1">2. VTT titulky</div>
+              <p className="text-blue-800">
+                Referenční titulky ve formátu <code className="font-mono bg-white px-1 rounded">.vtt</code> mají přesná časová razítka.
+                Pro každý Whisper segment se z VTT extrahuje text, který v daném časovém okně zazní —
+                to je ground truth pro daný úsek.
+              </p>
+            </div>
+            <div className="bg-green-50 border border-green-200 rounded p-3">
+              <div className="font-semibold text-green-900 mb-1">3. Per-segment WER</div>
+              <p className="text-green-800">
+                Pro každý segment se spočítá WER zvlášť. Výsledek je seznam
+                <code className="font-mono bg-white px-1 rounded mx-1">{'{ start_s, end_s, asr_text, ref_text, wer }'}</code>
+                — vidíš přesně kde model zaváhal.
+              </p>
+            </div>
+          </div>
+
+          {/* Vizuální příklad segment timeline */}
+          <div>
+            <div className="text-xs font-medium text-gray-500 mb-2">Příklad segment timeline:</div>
+            <div className="space-y-1 font-mono text-xs">
+              {[
+                { start: '0.0s', end: '5.2s', wer: 0.0, asr: 'Dobrý den, vítám vás v pořadu', ref: 'Dobrý den, vítám vás v pořadu' },
+                { start: '5.2s', end: '11.8s', wer: 0.08, asr: 'dnes budeme mluvit o autizmu', ref: 'dnes budeme mluvit o autismu' },
+                { start: '11.8s', end: '19.4s', wer: 0.33, asr: 'Vrženého ochránce práv pro oblast', ref: 'veřejného ochránce práv pro oblast' },
+                { start: '19.4s', end: '26.0s', wer: 0.5, asr: 'Pod louhem hledání se má dospila', ref: 'Po dlouhém hledání sama dospěla' },
+              ].map((seg, i) => {
+                const color = seg.wer === 0 ? 'bg-green-100 border-green-300 text-green-800'
+                  : seg.wer < 0.15 ? 'bg-yellow-100 border-yellow-300 text-yellow-800'
+                  : seg.wer < 0.3 ? 'bg-orange-100 border-orange-300 text-orange-800'
+                  : 'bg-red-100 border-red-300 text-red-800'
+                const werLabel = seg.wer === 0 ? 'WER 0 %' : `WER ${(seg.wer * 100).toFixed(0)} %`
+                return (
+                  <div key={i} className="border border-gray-200 rounded overflow-hidden">
+                    <div className="flex items-center gap-2 bg-gray-50 px-3 py-1 border-b border-gray-200">
+                      <span className="text-gray-400">{seg.start} – {seg.end}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${color}`}>{werLabel}</span>
+                    </div>
+                    <div className="grid grid-cols-2 divide-x divide-gray-200">
+                      <div className="px-3 py-1.5">
+                        <span className="text-gray-400 text-xs">ASR: </span>
+                        <span className="text-gray-700">{seg.asr}</span>
+                      </div>
+                      <div className="px-3 py-1.5">
+                        <span className="text-gray-400 text-xs">REF: </span>
+                        <span className="text-gray-700">{seg.ref}</span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Sekce — Word Diff vizualizace */}
+      <div className="bg-white border border-gray-200 rounded overflow-hidden">
+        <div className="bg-violet-50 border-b border-violet-200 px-4 py-3 flex items-center gap-3">
+          <span className="bg-violet-100 text-violet-800 font-bold font-mono text-xs px-2 py-0.5 rounded">Viz</span>
+          <span className="font-semibold text-gray-800 text-sm">Word Diff — vizualizace chyb na úrovni slov</span>
+        </div>
+        <div className="px-4 py-4 space-y-4 text-sm text-gray-700">
+          <p>
+            Word diff zobrazí přepis modelu vedle referenčního textu, přičemž každé slovo je obarveno podle toho,
+            jak ho model přepsal. Jde o Levenshteinovo zarovnání na úrovni slov — stejný algoritmus jako WER, ale vizuálně.
+          </p>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded px-3 py-2">
+              <span className="bg-green-200 text-green-900 px-2 py-0.5 rounded font-mono font-bold">slovo</span>
+              <span className="text-green-800">Správně (=)</span>
+            </div>
+            <div className="flex items-center gap-2 bg-yellow-50 border border-yellow-200 rounded px-3 py-2">
+              <span className="bg-yellow-200 text-yellow-900 px-2 py-0.5 rounded font-mono font-bold line-through">ref</span>
+              <span className="text-yellow-800">Záměna: ref→hyp (S)</span>
+            </div>
+            <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded px-3 py-2">
+              <span className="bg-red-200 text-red-900 px-2 py-0.5 rounded font-mono font-bold line-through">slovo</span>
+              <span className="text-red-800">Vynecháno (D)</span>
+            </div>
+            <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+              <span className="bg-blue-200 text-blue-900 px-2 py-0.5 rounded font-mono font-bold">[navíc]</span>
+              <span className="text-blue-800">Přidáno navíc (I)</span>
+            </div>
+          </div>
+
+          {/* Vizuální příklad word diff */}
+          <div>
+            <div className="text-xs font-medium text-gray-500 mb-2">Příklad — jeden segment:</div>
+            <div className="bg-gray-50 border border-gray-200 rounded p-3 leading-7 font-mono text-sm space-y-2">
+              <div>
+                <span className="text-gray-400 text-xs mr-2">REF:</span>
+                <span className="bg-green-100 text-green-900 rounded px-1 mx-0.5">Po</span>
+                <span className="bg-green-100 text-green-900 rounded px-1 mx-0.5">dlouhém</span>
+                <span className="bg-green-100 text-green-900 rounded px-1 mx-0.5">hledání</span>
+                <span className="bg-green-100 text-green-900 rounded px-1 mx-0.5">sama</span>
+                <span className="bg-green-100 text-green-900 rounded px-1 mx-0.5">dospěla</span>
+              </div>
+              <div>
+                <span className="text-gray-400 text-xs mr-2">HYP:</span>
+                <span className="bg-yellow-100 text-yellow-900 rounded px-1 mx-0.5 line-through">Pod</span>
+                <span className="bg-yellow-100 text-yellow-900 rounded px-1 mx-0.5">↓</span>
+                <span className="bg-green-100 text-green-900 rounded px-1 mx-0.5">louhem</span>
+                <span className="bg-green-100 text-green-900 rounded px-1 mx-0.5">hledání</span>
+                <span className="bg-blue-100 text-blue-900 rounded px-1 mx-0.5">[se]</span>
+                <span className="bg-blue-100 text-blue-900 rounded px-1 mx-0.5">[má]</span>
+                <span className="bg-red-100 text-red-900 rounded px-1 mx-0.5 line-through">dospila</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-4 text-xs text-gray-500 mt-2 px-1">
+              <span>„Po" → „Pod" = záměna (S)</span>
+              <span>„dlouhém" → „louhem" = záměna (S)</span>
+              <span>„se", „má" = přidáno navíc (I)</span>
+              <span>„sama" = vynecháno (D)</span>
+              <span>„dospěla" → „dospila" = záměna (S)</span>
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-500">
+            Word diff je dostupný v detailu výsledku po kliknutí na <strong>▼ diff</strong> v tabulce výsledků,
+            nebo v záložce přepisu na stránce Benchmark.
+          </p>
+        </div>
+      </div>
     </div>
   )
 }
