@@ -47,6 +47,7 @@ const PROMPT_LIBRARY: PromptTemplate[] = [
       { label: 'Praktický lékař', text: 'Ordinace praktického lékaře. Pacient popisuje potíže, lékař doporučuje vyšetření a léčbu.' },
       { label: 'Onkologie', text: 'Onkologická konzultace. Lékař diskutuje o diagnóze nádorového onemocnění, chemoterapii a prognóze.' },
       { label: 'Operace / chirurgie', text: 'Chirurgické pracoviště. Lékaři diskutují o operačním zákroku, přípravě pacienta a postoperační péči.' },
+      { label: 'Alergologie a imunologie', text: 'Alergologická a imunologická konzultace. Lékař hodnotí alergické reakce, imunitní systém, přecitlivělost a imunoterapii pacienta.' },
     ],
   },
   {
