@@ -129,14 +129,6 @@ export function TuningPage() {
   function allSelectedPrompts(): string[] {
     const prompts = new Set(selectedPrompts)
     if (customPrompt.trim()) prompts.add(customPrompt.trim())
-    // Auto-prompt: přidej pro každé vybrané video
-    const autoTemplate = PROMPT_LIBRARY.find(p => p.id === 'topic_auto')
-    if (autoTemplate && selectedVideos.length > 0) {
-      for (const vid of selectedVideos) {
-        const item = library.find(l => l.video_id === vid)
-        if (item) prompts.add(autoPromptFromTitle(item.title))
-      }
-    }
     return [...prompts]
   }
 
