@@ -4,7 +4,8 @@ import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Responsive
 import { api } from '../api/client'
 import type { RunDetail, RunResult, SourceMetric, ChunkMetric } from '../types'
 import { WerBadge } from '../components/WerBadge'
-import { WerDiff } from '../components/WerDiff'
+
+type RunSummary = { run_id: string; created_at_utc: string; sample_seconds: number; result_count: number; label?: string }
 
 export function ResultsPage() {
   const [params] = useSearchParams()
@@ -12,8 +13,12 @@ export function ResultsPage() {
   const [runIdInput, setRunIdInput] = useState(runId)
   const [run, setRun] = useState<RunDetail | null>(null)
   const [error, setError] = useState('')
+  const [runList, setRunList] = useState<RunSummary[]>([])
 
-  useEffect(() => { if (runId) loadRun(runId) }, [runId])
+  useEffect(() => {
+    if (runId) loadRun(runId)
+    fetch('/api/runs').then(r => r.ok ? r.json() : []).then(setRunList).catch(() => {})
+  }, [runId])
 
   async function loadRun(id: string) {
     setError('')
@@ -39,17 +44,35 @@ export function ResultsPage() {
       <h1 className="text-xl font-bold">Výsledky</h1>
 
       {/* Načtení runu */}
-      <div className="flex gap-2 items-end">
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">Run ID</label>
-          <input value={runIdInput} onChange={e => setRunIdInput(e.target.value)}
-            placeholder="run_20260320_..." className="border rounded px-2 py-1 text-sm w-72" />
+      <div className="space-y-2">
+        {runList.length > 0 && (
+          <div className="bg-white border border-gray-200 rounded p-3">
+            <div className="text-xs text-gray-500 font-medium mb-2">Historie runů ({runList.length})</div>
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {runList.map(r => (
+                <button key={r.run_id} onClick={() => { setRunIdInput(r.run_id); loadRun(r.run_id) }}
+                  className={`w-full text-left text-xs px-3 py-1.5 rounded flex items-center gap-3 hover:bg-blue-50 ${run?.run_id === r.run_id ? 'bg-blue-100 text-blue-800' : 'text-gray-700'}`}>
+                  <span className="font-mono text-gray-400 w-36 shrink-0">{r.run_id.slice(-16)}</span>
+                  <span className="text-gray-500 shrink-0">{new Date(r.created_at_utc).toLocaleString('cs-CZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                  <span className="text-gray-400">{r.sample_seconds}s · {r.result_count} výsl.</span>
+                  {r.label && <span className="text-gray-600 italic">{r.label}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="flex gap-2 items-end">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Run ID</label>
+            <input value={runIdInput} onChange={e => setRunIdInput(e.target.value)}
+              placeholder="run_20260320_..." className="border rounded px-2 py-1 text-sm w-72" />
+          </div>
+          <button onClick={() => loadRun(runIdInput)}
+            className="bg-blue-600 text-white px-4 py-1.5 rounded text-sm">
+            Načíst
+          </button>
+          {error && <span className="text-sm text-red-500">{error}</span>}
         </div>
-        <button onClick={() => loadRun(runIdInput)}
-          className="bg-blue-600 text-white px-4 py-1.5 rounded text-sm">
-          Načíst
-        </button>
-        {error && <span className="text-sm text-red-500">{error}</span>}
       </div>
 
       {run && (
@@ -64,7 +87,7 @@ export function ResultsPage() {
           </div>
 
           {/* Tabulka výsledků */}
-          <ResultsTable results={run.results} />
+          <ResultsTable results={run.results} runId={run.run_id} />
 
           {/* Grafy */}
           {scatterData.length > 0 && (
@@ -415,7 +438,7 @@ function MetricsLegend() {
   )
 }
 
-function ResultsTable({ results }: { results: RunResult[] }) {
+function ResultsTable({ results, runId }: { results: RunResult[]; runId: string }) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const allKeys = results.map(r => `${r.model_id}-${r.setting_id}`)
   const [visible, setVisible] = useState<Set<string>>(new Set(allKeys))
@@ -466,26 +489,18 @@ function ResultsTable({ results }: { results: RunResult[] }) {
           <tr>
             <th className="px-4 py-2 text-left">Model</th>
             <th className="px-4 py-2 text-left">Nastavení</th>
-            <th className="px-4 py-2"
-              title="Word Error Rate — % slov přepsaných chybně. 0% = perfektní, 100% = nic nesedí.">
-              WER ⓘ
-            </th>
-            <th className="px-4 py-2"
-              title="Character Error Rate — % znaků přepsaných chybně. Citlivější než WER na drobné chyby.">
-              CER ⓘ
-            </th>
+            <th className="px-4 py-2" title="Word Error Rate">WER ⓘ</th>
+            <th className="px-4 py-2" title="Character Error Rate">CER ⓘ</th>
+            <th className="px-4 py-2" title="WER po odstranění interpunkce a šumu">WER norm. ⓘ</th>
+            <th className="px-4 py-2" title="Match Error Rate">MER ⓘ</th>
+            <th className="px-4 py-2" title="Word Information Lost">WIL ⓘ</th>
             <th className="px-4 py-2">Latence</th>
-            <th className="px-4 py-2"
-              title="Real-Time Factor — poměr délky přepisu ku délce audia. RTF < 1.0 = model stíhá živý přepis.">
-              RTF ⓘ
-            </th>
-            <th className="px-4 py-2">CPU%</th>
-            <th className="px-4 py-2">RAM MB</th>
+            <th className="px-4 py-2" title="Real-Time Factor — RTF < 1.0 = stíhá živý přepis">RTF ⓘ</th>
             <th className="px-4 py-2"></th>
           </tr>
         </thead>
         <tbody>
-          {filtered.map(r => {
+          {filtered.map((r, ri) => {
             const key = `${r.model_id}-${r.setting_id}`
             const isOpen = expanded === key
             const hasDiff = r.source_metrics?.some(
@@ -498,6 +513,15 @@ function ResultsTable({ results }: { results: RunResult[] }) {
                   <td className="px-4 py-2 text-gray-600">{r.setting_label}</td>
                   <td className="px-4 py-2 text-center"><WerBadge value={r.aggregate.wer} label="" /></td>
                   <td className="px-4 py-2 text-center"><WerBadge value={r.aggregate.cer} label="" /></td>
+                  <td className="px-4 py-2 text-center"><WerBadge value={r.aggregate.wer_normalized} label="" /></td>
+                  <td className="px-4 py-2 text-center"><WerBadge value={r.aggregate.mer} label="" /></td>
+                  <td className="px-4 py-2 text-center">
+                    {r.aggregate.wil != null
+                      ? <span className={r.aggregate.wil > 0.35 ? 'text-red-500' : r.aggregate.wil > 0.15 ? 'text-yellow-600' : 'text-green-600'}>
+                          {r.aggregate.wil.toFixed(3)}
+                        </span>
+                      : <span className="text-gray-400">–</span>}
+                  </td>
                   <td className="px-4 py-2 text-center text-xs font-mono">
                     {r.aggregate.latency_ms != null ? `${r.aggregate.latency_ms.toFixed(0)}ms` : '–'}
                   </td>
@@ -508,8 +532,6 @@ function ResultsTable({ results }: { results: RunResult[] }) {
                         </span>
                       : '–'}
                   </td>
-                  <td className="px-4 py-2 text-center text-xs">{r.aggregate.cpu_percent?.toFixed(0) ?? '–'}%</td>
-                  <td className="px-4 py-2 text-center text-xs">{r.aggregate.ram_mb?.toFixed(0) ?? '–'}</td>
                   <td className="px-4 py-2 text-center">
                     {hasDiff && (
                       <button
@@ -523,8 +545,8 @@ function ResultsTable({ results }: { results: RunResult[] }) {
                 </tr>
                 {isOpen && r.source_metrics?.map((s: SourceMetric, si: number) => (
                   <tr key={`${key}-diff-${si}`} className="border-t border-blue-50 bg-blue-50/30">
-                    <td colSpan={9} className="px-4 py-3 space-y-3">
-                      {/* Hlavička zdroje */}
+                    <td colSpan={10} className="px-4 py-3 space-y-3">
+                      {/* Hlavička zdroje + per-source metriky */}
                       <div className="flex items-center gap-4 text-xs text-gray-500 font-medium flex-wrap">
                         <span>
                           Zdroj {si + 1}{s.video_id ? ` — ${s.video_id}` : ''}
@@ -542,6 +564,9 @@ function ResultsTable({ results }: { results: RunResult[] }) {
                             )}
                           </span>
                         )}
+                        {s.wer_normalized != null && <span className="bg-teal-50 border border-teal-200 rounded px-2 py-0.5">WER norm. {(s.wer_normalized * 100).toFixed(1)} %</span>}
+                        {s.mer != null && <span className="bg-orange-50 border border-orange-200 rounded px-2 py-0.5">MER {(s.mer * 100).toFixed(1)} %</span>}
+                        {s.wil != null && <span className="bg-rose-50 border border-rose-200 rounded px-2 py-0.5">WIL {s.wil.toFixed(3)}</span>}
                       </div>
 
                       {/* Tabulka chunk metrik */}
@@ -549,13 +574,9 @@ function ResultsTable({ results }: { results: RunResult[] }) {
                         <ChunkMetricsTable chunks={s.chunk_metrics} />
                       )}
 
-                      {/* WER diff */}
+                      {/* Word diff přes API */}
                       {s.transcript && s.reference_text && (
-                        <WerDiff
-                          reference={s.reference_text}
-                          transcript={s.transcript}
-                          wer={s.wer}
-                        />
+                        <ApiWordDiff runId={runId} resultIdx={ri} sourceIdx={si} />
                       )}
                     </td>
                   </tr>
@@ -661,6 +682,70 @@ function ChunkMetricsTable({ chunks }: { chunks: ChunkMetric[] }) {
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+type DiffEntry = { op: string; ref: string | null; hyp: string | null }
+type DiffResult = { diff: DiffEntry[]; stats: { total: number; correct: number; substitutions: number; deletions: number; insertions: number } }
+
+function ApiWordDiff({ runId, resultIdx, sourceIdx }: { runId: string; resultIdx: number; sourceIdx: number }) {
+  const [data, setData] = useState<DiffResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function load() {
+    setLoading(true); setErr('')
+    try {
+      const d = await api.runs.wordDiff(runId, resultIdx, sourceIdx)
+      setData(d)
+    } catch (e: any) { setErr(e.message) }
+    setLoading(false)
+  }
+
+  if (!data && !loading && !err) {
+    return (
+      <button onClick={load} className="text-xs text-violet-600 hover:underline">
+        Načíst word diff (API)
+      </button>
+    )
+  }
+  if (loading) return <span className="text-xs text-gray-400">Načítám diff…</span>
+  if (err) return <span className="text-xs text-red-500">Chyba diffu: {err}</span>
+  if (!data) return null
+
+  const { diff, stats } = data
+  const wer = stats.total > 0 ? ((stats.substitutions + stats.deletions + stats.insertions) / (stats.total - stats.insertions) * 100).toFixed(1) : '–'
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-3 text-xs font-mono bg-gray-50 border border-gray-200 rounded px-3 py-2">
+        <span>Správně: <strong className="text-green-600">{stats.correct}</strong></span>
+        <span>Záměny: <strong className="text-yellow-600">{stats.substitutions}</strong></span>
+        <span>Vynecháno: <strong className="text-red-500">{stats.deletions}</strong></span>
+        <span>Přidáno: <strong className="text-blue-500">{stats.insertions}</strong></span>
+        <span>WER: <strong>{wer} %</strong></span>
+      </div>
+      <div className="bg-white border border-gray-200 rounded p-3 leading-7 font-mono text-sm flex flex-wrap gap-0.5">
+        {diff.map((d, i) => {
+          if (d.op === '=') return (
+            <span key={i} className="bg-green-100 text-green-900 rounded px-1">{d.hyp}</span>
+          )
+          if (d.op === 'S') return (
+            <span key={i} className="inline-flex flex-col items-center">
+              <span className="bg-yellow-100 text-yellow-900 rounded px-1 line-through text-xs">{d.ref}</span>
+              <span className="bg-yellow-200 text-yellow-900 rounded px-1">{d.hyp}</span>
+            </span>
+          )
+          if (d.op === 'D') return (
+            <span key={i} className="bg-red-100 text-red-900 rounded px-1 line-through opacity-70">{d.ref}</span>
+          )
+          if (d.op === 'I') return (
+            <span key={i} className="bg-blue-100 text-blue-900 rounded px-1 italic">[{d.hyp}]</span>
+          )
+          return null
+        })}
       </div>
     </div>
   )

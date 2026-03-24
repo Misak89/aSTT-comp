@@ -64,7 +64,7 @@ export function LiveJobPanel({ job, onCancel }: Props) {
         const live = await api.benchmark.getLive(job.job_id)
         setPercent(live.percent)
         setMessageLog(live.message_log ?? [])
-        setHwSeries(live.hw_series.slice(-60))
+        setHwSeries((live.hw_series ?? []).slice(-60))
         setTranscript(live.transcript ?? '')
         if (live.transcript_ts) setTranscriptTs(live.transcript_ts)
         if (live.pre_cpu != null) setPreCpu(live.pre_cpu)
