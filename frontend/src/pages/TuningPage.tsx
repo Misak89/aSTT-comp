@@ -110,6 +110,7 @@ export function TuningPage() {
     () => new Set(cfg.selectedPrompts ?? [''])
   )
   const [customPrompt, setCustomPrompt] = useState<string>(cfg.customPrompt ?? '')
+  const [clipSeed, setClipSeed] = useState<number>(cfg.clipSeed ?? 42)
   const [videoSortBy, setVideoSortBy] = useState<'title' | 'language' | 'duration' | 'upload_date'>(
     cfg.videoSortBy ?? 'title'
   )
@@ -140,7 +141,7 @@ export function TuningPage() {
   // Uložit konfiguraci do localStorage při každé změně
   useEffect(() => {
     const cfg = {
-      selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label,
+      selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
       paramValues: Object.fromEntries(
         Object.entries(paramValues).map(([k, v]) => [k, [...v]])
       ),
@@ -148,7 +149,7 @@ export function TuningPage() {
       customPrompt, videoSortBy, videoSortDir,
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
-  }, [selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label,
+  }, [selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
       paramValues, selectedPrompts, customPrompt, videoSortBy, videoSortDir])
 
   function toggleParamValue(paramName: string, value: unknown) {
@@ -219,6 +220,7 @@ export function TuningPage() {
         model_id: selectedModel,
         video_ids: selectedVideos,
         sample_seconds: sampleSeconds,
+        clip_seed: clipSeed,
         strategy,
         max_trials: maxTrials,
         param_space: paramSpace,
@@ -247,6 +249,7 @@ export function TuningPage() {
 
   const whisperModels = registry.filter(m => m.adapter === 'whisper_cpp')
   const trialCount = countTrials()
+  const isSlowModel = selectedModel.includes('large')
 
   return (
     <div className="space-y-6">
@@ -268,6 +271,11 @@ export function TuningPage() {
               <span>{m.label}</span>
             </label>
           ))}
+          {isSlowModel && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mt-1">
+              ⚠ large modely mají RTF &gt; 2.0 na CPU — pro live mikrofon nepoužitelné. Doporučujeme small nebo medium.
+            </div>
+          )}
           <p className="text-xs text-gray-400 pt-1">Tuning aktuálně podporuje whisper.cpp modely.</p>
         </div>
 
@@ -323,11 +331,19 @@ export function TuningPage() {
               ))}
             </div>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
             <div>
               <label className="text-xs text-gray-500">Délka klipu (s)</label>
               <input type="number" value={sampleSeconds} min={20} max={300}
                 onChange={e => setSampleSeconds(+e.target.value)}
+                className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500" title="Seed pro výběr pozice v klipu — stejný seed = stejný úsek">
+                Clip seed
+              </label>
+              <input type="number" value={clipSeed} min={0} max={9999}
+                onChange={e => setClipSeed(+e.target.value)}
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
             {strategy === 'random' && (
@@ -593,7 +609,17 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
 
         {best && (
           <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded">
-            <div className="text-xs font-semibold text-green-800 mb-2">🏆 Nejlepší konfigurace (nejnižší WER, RTF ≤ 1.2)</div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-semibold text-green-800">🏆 Nejlepší konfigurace (nejnižší WER, RTF ≤ 1.2)</span>
+              <button
+                onClick={() => {
+                  localStorage.setItem('tuning_recommendation_v1', JSON.stringify({ model_id: job.model_id, params: best.params, wer: best.wer, rtf: best.rtf }))
+                  alert(`Nastavení uloženo.\nModel: ${job.model_id}\nParams: ${JSON.stringify(best.params)}`)
+                }}
+                className="ml-auto text-xs bg-green-700 hover:bg-green-800 text-white px-3 py-1 rounded">
+                Použít toto nastavení
+              </button>
+            </div>
             <div className="flex flex-wrap gap-2">
               {Object.entries(best.params).map(([k, v]) => (
                 <span key={k} className="bg-white border border-green-200 rounded px-2 py-0.5 text-xs font-mono">
@@ -605,6 +631,7 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
               <WerBadge value={best.wer} />
               {best.cer != null && <span className="text-gray-600">CER {(best.cer * 100).toFixed(1)} %</span>}
               {best.rtf != null && <span className={best.rtf > 1 ? 'text-red-500' : 'text-green-600'}>RTF {best.rtf.toFixed(2)}</span>}
+              {best.perceived_delay_s != null && <span className="text-gray-500" title="Čas od promluvení do zobrazení přepisu">⏱ {best.perceived_delay_s.toFixed(1)}s zpoždění</span>}
               {best.latency_ms != null && <span className="text-gray-500">{best.latency_ms.toFixed(0)} ms latence</span>}
             </div>
           </div>
@@ -690,6 +717,7 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                 <th className="px-3 py-2 text-center">WER norm.</th>
                 <th className="px-3 py-2 text-center">RTF</th>
                 <th className="px-3 py-2 text-center">Live mic</th>
+                <th className="px-3 py-2 text-center" title="Čas od promluvení do zobrazení přepisu = chunk + chunk×RTF">Zpoždění</th>
                 <th className="px-3 py-2 text-center">Latence</th>
                 <th className="px-3 py-2 text-center">Pareto</th>
               </tr>
@@ -728,6 +756,9 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                           : <span className="text-red-600 font-bold" title="✗ Nestíhá live přepis (RTF &gt; 1.0)">✗ Pomalý</span>
                         : '–'}
                     </td>
+                    <td className="px-3 py-2 text-center font-mono text-gray-600" title="Čas od promluvení do zobrazení přepisu">
+                      {r.perceived_delay_s != null ? `${r.perceived_delay_s.toFixed(1)}s` : '–'}
+                    </td>
                     <td className="px-3 py-2 text-center font-mono text-gray-600">
                       {r.latency_ms != null ? `${r.latency_ms.toFixed(0)}ms` : '–'}
                     </td>
@@ -737,7 +768,7 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                   </tr>
                   {expandedTrial === r.trial_idx && (
                     <tr key={`${r.trial_idx}-detail`} className={r.trial_idx === job.best_trial_idx ? 'bg-green-50' : 'bg-gray-50'}>
-                      <td colSpan={8} className="px-4 py-3 border-t border-gray-100">
+                      <td colSpan={10} className="px-4 py-3 border-t border-gray-100">
                         <div className="space-y-4 text-xs">
                           {r.error && (
                             <div className="bg-red-50 border border-red-200 rounded p-2 text-red-700 font-mono">{r.error}</div>
@@ -754,6 +785,11 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                               RTF: <strong>{r.rtf?.toFixed(3) ?? '–'}</strong>
                             </span>
                             <span>Latence: <strong>{r.latency_ms != null ? r.latency_ms.toFixed(0)+'ms' : '–'}</strong></span>
+                            {r.perceived_delay_s != null && (
+                              <span title="Čas od promluvení do zobrazení přepisu = chunk + chunk×RTF">
+                                Zpoždění: <strong>{r.perceived_delay_s.toFixed(1)}s</strong>
+                              </span>
+                            )}
                             {r.elapsed_s != null && <span>Engine: <strong>{r.elapsed_s.toFixed(1)}s</strong></span>}
                             {r.total_audio_s != null && <span>Audio: <strong>{r.total_audio_s.toFixed(1)}s</strong></span>}
                             {r.word_count != null && <span>Slov: <strong>{r.word_count}</strong></span>}

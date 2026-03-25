@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -92,12 +93,39 @@ def _compute_pareto_and_best(results: list[dict]) -> tuple[int | None, list[int]
     return best["trial_idx"], pareto_idxs
 
 
+def _compute_clip_starts(video_ids: list[str], sample_seconds: int, clip_seed: int | None, items_json: Path) -> dict[str, float]:
+    """Pro každé video spočítá clip_start_s z clip_seed. Konzistentní pro všechny trialy."""
+    durations: dict[str, float | None] = {}
+    if items_json.exists():
+        try:
+            items = json.loads(items_json.read_text(encoding="utf-8"))
+            for item in items:
+                vid = item.get("video_id")
+                if vid:
+                    durations[vid] = item.get("duration_seconds")
+        except Exception:
+            pass
+
+    rng = random.Random(clip_seed if clip_seed is not None else 42)
+    result: dict[str, float] = {}
+    for video_id in video_ids:
+        duration = durations.get(video_id)
+        if duration and duration > sample_seconds + 60:
+            max_start = duration - sample_seconds - 30
+            clip_start = rng.uniform(60.0, max_start)
+        else:
+            clip_start = 0.0
+        result[video_id] = clip_start
+    return result
+
+
 def _run_one_video(
     video_id: str,
     model_id: str,
     model_params: dict,
     chunk_seconds: int,
     sample_seconds: int,
+    clip_start_s: float,
     job_dir: Path,
     trial_idx: int,
     subtitles_root: Path,
@@ -139,6 +167,7 @@ def _run_one_video(
             yt_url,
             chunk_seconds=0.1,
             max_seconds=float(sample_seconds),
+            start_offset_seconds=clip_start_s,
         ),
         config=run_config,
     )
@@ -146,8 +175,8 @@ def _run_one_video(
     transcript = result.get("transcript") or result.get("transcript_text") or result.get("text") or ""
     ref_text = extract_vtt_clip_text(
         video_id=video_id,
-        clip_start_s=0,
-        clip_end_s=sample_seconds,
+        clip_start_s=clip_start_s,
+        clip_end_s=clip_start_s + sample_seconds,
         subtitles_root=subtitles_root,
     )
 
@@ -207,8 +236,13 @@ def main() -> int:
     model_id: str = config["model_id"]
     video_ids: list[str] = config["video_ids"]
     sample_seconds: int = config["sample_seconds"]
+    clip_seed: int | None = config.get("clip_seed")
     subtitles_root = Path(config["subtitles_root"])
     model_store_root = Path(config["model_store_root"])
+    items_json = subtitles_root.parent / "items.json"
+
+    # Pre-compute clip_start per video — stejný offset pro všechny trialy (férovné srovnání)
+    clip_starts = _compute_clip_starts(video_ids, sample_seconds, clip_seed, items_json)
 
     if not video_ids:
         _update_status(status_file, {"status": "failed", "error": "Žádná video_ids v konfiguraci"})
@@ -231,6 +265,24 @@ def main() -> int:
             trial_params = dict(trial_params_raw)
             chunk_seconds = int(trial_params.pop("_chunk_seconds", trial_params.pop("chunk_seconds", 30)))
 
+            # Validace: best_of nesmí být větší než beam_size
+            beam_size = trial_params.get("beam_size", 5)
+            best_of = trial_params.get("best_of", 1)
+            if isinstance(best_of, int) and isinstance(beam_size, int) and best_of > beam_size:
+                _set_progress(status_file, f"Trial {trial_idx+1}/{len(trials)}: SKIP — best_of={best_of} > beam_size={beam_size}")
+                _append_result(status_file, {
+                    "trial_idx": trial_idx,
+                    "params": {**trial_params, "chunk_seconds": chunk_seconds},
+                    "chunk_seconds": chunk_seconds,
+                    "wer": None, "cer": None, "wer_normalized": None, "mer": None, "wil": None,
+                    "rtf": None, "latency_ms": None, "source_metrics": [],
+                    "transcript": None, "reference_text": None, "word_diff": None,
+                    "chunk_metrics": None, "word_count": 0,
+                    "error": f"Přeskočeno: best_of={best_of} > beam_size={beam_size}",
+                    "is_pareto": False, "rtf_viable": False, "perceived_delay_s": None,
+                })
+                continue
+
             param_str = ", ".join(f"{k}={v}" for k, v in trial_params.items() if k != "initial_prompt")
             if trial_params.get("initial_prompt"):
                 param_str += f", prompt='{str(trial_params['initial_prompt'])[:30]}...'"
@@ -251,6 +303,7 @@ def main() -> int:
                         model_params=dict(trial_params),  # kopie — nesmí se mutovat
                         chunk_seconds=chunk_seconds,
                         sample_seconds=sample_seconds,
+                        clip_start_s=clip_starts.get(video_id, 0.0),
                         job_dir=job_dir,
                         trial_idx=trial_idx,
                         subtitles_root=subtitles_root,
@@ -283,6 +336,8 @@ def main() -> int:
                     traceback.print_exc(file=sys.stderr)
 
             # Průměr metrik přes všechna videa
+            avg_rtf = _avg([m.get("rtf") for m in source_metrics])
+            perceived_delay_s = round(chunk_seconds + chunk_seconds * avg_rtf, 3) if avg_rtf is not None else None
             trial_result = {
                 "trial_idx": trial_idx,
                 "params": {**trial_params, "chunk_seconds": chunk_seconds},
@@ -293,8 +348,9 @@ def main() -> int:
                 "wer_normalized": _avg([m.get("wer_normalized") for m in source_metrics]),
                 "mer": _avg([m.get("mer") for m in source_metrics]),
                 "wil": _avg([m.get("wil") for m in source_metrics]),
-                "rtf": _avg([m.get("rtf") for m in source_metrics]),
+                "rtf": avg_rtf,
                 "latency_ms": _avg([m.get("latency_ms") for m in source_metrics]),
+                "perceived_delay_s": perceived_delay_s,
                 # Detail per video
                 "source_metrics": source_metrics,
                 # Pro UI — zobraz první video jako ukázku

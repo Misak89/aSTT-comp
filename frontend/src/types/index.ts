@@ -256,6 +256,7 @@ export interface TuningTrialResult {
   wil: number | null
   rtf: number | null
   latency_ms: number | null
+  perceived_delay_s: number | null
   error: string | null
   is_pareto: boolean
   rtf_viable: boolean  // RTF < 1.0 = použitelné pro live mikrofon

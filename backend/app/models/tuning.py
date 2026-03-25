@@ -35,6 +35,8 @@ class TuningTrialResult(BaseModel):
     latency_ms: Optional[float]
     error: Optional[str]
     is_pareto: bool = False         # vypočítáno na frontendu / při GET
+    rtf_viable: bool = False        # RTF < 1.0 = použitelné pro live mikrofon
+    perceived_delay_s: Optional[float] = None  # chunk_s + chunk_s * RTF
     transcript: Optional[str] = None
     reference_text: Optional[str] = None
     elapsed_s: Optional[float] = None
@@ -42,6 +44,7 @@ class TuningTrialResult(BaseModel):
     word_count: Optional[int] = None
     word_diff: Optional[list] = None   # [{op, ref, hyp}] — barevný diff
     chunk_metrics: Optional[list] = None  # per-chunk RTF/timing
+    source_metrics: Optional[list] = None  # per-video metriky
 
 
 class TuningJobStatus(BaseModel):
