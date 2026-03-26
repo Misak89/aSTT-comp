@@ -256,7 +256,8 @@ def _run_buffered(
     word_count = len(full_transcript.split()) if full_transcript else 0
     _cb(config.progress_callback,
         f"✓ Přepis hotov | zprac.: {whisper_elapsed}s | RTF: {whisper_rtf_val} | slov: {word_count}")
-    time.sleep(0.1)  # krátká pauza aby polling stihl zaznamenat zprávu
+    if config.transcript_callback is not None:
+        time.sleep(0.1)  # pauza jen pokud UI čeká na replay — při tuningu zbytečné
 
     # Timestamp replay — emituje po skupinách chunk_seconds (plynulý nárůst textu)
     if segments and config.transcript_callback:

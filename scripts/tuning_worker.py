@@ -286,10 +286,20 @@ def _run_one_video(
     )
 
     transcript = result.get("transcript") or result.get("transcript_text") or result.get("text") or ""
+
+    # Skutečná délka audia z WAV — může být kratší než sample_seconds (konec videa, výpadek YT)
+    # Bez toho by reference text zahrnoval slova která model nikdy neslyšel → nafouklé WER
+    try:
+        import wave as _wave
+        with _wave.open(str(audio_wav), "rb") as _wf:
+            actual_audio_s = _wf.getnframes() / max(1, _wf.getframerate())
+    except Exception:
+        actual_audio_s = float(sample_seconds)
+
     ref_text = extract_vtt_clip_text(
         video_id=video_id,
         clip_start_s=clip_start_s,
-        clip_end_s=clip_start_s + sample_seconds,
+        clip_end_s=clip_start_s + min(actual_audio_s, float(sample_seconds)),
         subtitles_root=subtitles_root,
     )
 
@@ -403,10 +413,16 @@ def _validate_beam_sizes(
                         break
                     # Jiná chyba (model path atd.) — nevylučuj, může být jen setup issue
                 finally:
-                    try:
-                        tmp.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                    # Maž input WAV i whisper output soubory (json, txt) aby nezůstaly v temp
+                    for _cleanup in [
+                        tmp,
+                        tmp.parent / f"val_{video_id}_whisper.json",
+                        tmp.parent / f"val_{video_id}_whisper.txt",
+                    ]:
+                        try:
+                            _cleanup.unlink(missing_ok=True)
+                        except Exception:
+                            pass
 
             if all_ok:
                 validated.add((m_id, bs))
@@ -659,11 +675,15 @@ def main() -> int:
             data["best_trial_idx"] = best_idx
             data["results"] = results
             data["status"] = "completed"
-            data["progress_message"] = (
-                f"Hotovo: {len(results)} trialů, nejlepší #{best_idx} "
-                f"(WER={results[best_idx]['wer']}, RTF={results[best_idx]['rtf']})"
-                if best_idx is not None else f"Hotovo: {len(results)} trialů"
-            )
+            if best_idx is not None:
+                best_result = next((r for r in results if r["trial_idx"] == best_idx), None)
+                data["progress_message"] = (
+                    f"Hotovo: {len(results)} trialů, nejlepší #{best_idx} "
+                    f"(WER={best_result['wer']}, RTF={best_result['rtf']})"
+                    if best_result is not None else f"Hotovo: {len(results)} trialů"
+                )
+            else:
+                data["progress_message"] = f"Hotovo: {len(results)} trialů"
             _atomic_write(status_file, json.dumps(data, ensure_ascii=False, indent=2))
         return 0
 
