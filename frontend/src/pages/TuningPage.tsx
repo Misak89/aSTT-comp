@@ -11,11 +11,24 @@ type Strategy = 'grid' | 'ablation' | 'random'
 
 // Parametry (bez initial_prompt — ten má vlastní UI)
 const WHISPER_PARAM_DEFS = [
-  { name: 'beam_size',     label: 'Beam size',       type: 'int',  values: [1, 2, 3, 5, 8],          default: 5 },
-  { name: 'best_of',       label: 'Best of',         type: 'int',  values: [1, 2, 3, 5],              default: 5 },
-  { name: 'threads',       label: 'Vlákna CPU',      type: 'int',  values: [2, 4, 6, 8],              default: 4 },
-  { name: 'no_fallback',   label: 'Bez fallbacku',   type: 'bool', values: [true, false],             default: true },
-  { name: 'chunk_seconds', label: 'Chunk délka (s)', type: 'int',  values: [10, 15, 20, 30, 45, 60],  default: 30 },
+  {
+    name: 'beam_size', label: 'Beam size', type: 'int', values: [1, 2, 3, 5, 8, 10, 12], default: 5,
+    description: 'Počet kandidátních sekvencí při beam search. Vyšší = přesnější přepis, pomalejší. beam=1 je greedy (nejrychlejší, nejhorší WER). beam=5 je dobrý kompromis. ⚠ Hodnoty 10 a 12 mohou selhat u menších modelů (small, base) — whisper-cli vrátí "failed to process audio".',
+  },
+  {
+    name: 'best_of', label: 'Best of', type: 'int', values: [1, 2, 3, 5], default: 5,
+    description: 'Počet vzorkování při temperature > 0. Má vliv jen pokud model použije temperature fallback (ne při beam search s no_fallback=true). Při no_fallback=true nemá žádný efekt.',
+    valueDescriptions: { 1: 'bez vzorkování', 5: 'výchozí whisper.cpp' },
+  },
+  {
+    name: 'threads', label: 'Vlákna CPU', type: 'int', values: [2, 4, 6, 8], default: 4,
+    description: 'Počet CPU vláken pro inference. Více vláken = nižší RTF (rychlejší zpracování). Optimum závisí na CPU — obvykle polovina fyzických jader.',
+  },
+  {
+    name: 'no_fallback', label: 'Bez fallbacku', type: 'bool', values: [true, false], default: true,
+    description: 'Zakáže temperature fallback. Pokud je true, whisper nikdy nezkusí vyšší temperature při nejistém výsledku — rychlejší, deterministické. false = whisper může zopakovat dekódování s vyšší teplotou.',
+    valueDescriptions: { true: 'deterministické, rychlejší', false: 'může opakovat s vyšší temp.' },
+  },
 ]
 
 // Doménová knihovna initial_prompt šablon
@@ -28,9 +41,9 @@ const PROMPT_LIBRARY: PromptTemplate[] = [
   {
     id: 'czech_general', label: 'Čeština — obecně', domain: 'general', color: 'blue',
     prompts: [
-      { label: 'Obecný rozhovor', text: 'Rozhovor v češtině:' },
-      { label: 'Kontext + pozdrav', text: 'Dobrý den, toto je rozhovor v češtině.' },
-      { label: 'Delší kontext', text: 'Toto je rozhovor dvou lidí v českém jazyce. Mluví plynně česky.' },
+      { label: 'Obecný rozhovor', text: 'Rozhovor v cestine:' },
+      { label: 'Kontext krátký', text: 'Dobry den, toto je rozhovor v cestine.' },
+      { label: 'Delší kontext', text: 'Toto je rozhovor dvou lidi v ceskem jazyce. Mluvi plynne cesky.' },
     ],
   },
   {
@@ -40,40 +53,40 @@ const PROMPT_LIBRARY: PromptTemplate[] = [
   {
     id: 'medicine', label: 'Medicína', domain: 'medical', color: 'red',
     prompts: [
-      { label: 'Obecné lékařské vyšetření', text: 'Toto je lékařské vyšetření. Lékař hovoří s pacientem o zdravotním stavu, symptomech a léčbě.' },
-      { label: 'Kardiologie', text: 'Toto je kardiologické vyšetření. Lékař kardiolog diskutuje o srdečních onemocněních, EKG, krevním tlaku a léčbě.' },
-      { label: 'Neurologie', text: 'Toto je neurologické vyšetření. Neurolog hodnotí reflexy, pohybové funkce a neurologické symptomy pacienta.' },
-      { label: 'Psychiatrie', text: 'Toto je psychiatrická konzultace. Psychiatr hovoří s pacientem o duševním zdraví, náladě a psychologických symptomech.' },
-      { label: 'Praktický lékař', text: 'Ordinace praktického lékaře. Pacient popisuje potíže, lékař doporučuje vyšetření a léčbu.' },
-      { label: 'Onkologie', text: 'Onkologická konzultace. Lékař diskutuje o diagnóze nádorového onemocnění, chemoterapii a prognóze.' },
-      { label: 'Operace / chirurgie', text: 'Chirurgické pracoviště. Lékaři diskutují o operačním zákroku, přípravě pacienta a postoperační péči.' },
-      { label: 'Alergologie a imunologie', text: 'Alergologická a imunologická konzultace. Lékař hodnotí alergické reakce, imunitní systém, přecitlivělost a imunoterapii pacienta.' },
+      { label: 'Obecné lékařské vyšetření', text: 'Toto je lekarske vysetreni. Lekar hovori s pacientem o zdravotnim stavu, symptomech a lecbe.' },
+      { label: 'Kardiologie', text: 'Toto je kardiologicke vysetreni. Lekar kardiolog diskutuje o srdecnich onemocnenich, EKG, krevnim tlaku a lecbe.' },
+      { label: 'Neurologie', text: 'Toto je neurologicke vysetreni. Neurolog hodnoti reflexy, pohybove funkce a neurologicke symptomy pacienta.' },
+      { label: 'Psychiatrie', text: 'Toto je psychiatricka konzultace. Psychiatr hovori s pacientem o dusevnim zdravi, nalade a psychologickych symptomech.' },
+      { label: 'Praktický lékař', text: 'Ordinace praktickeho lekare. Pacient popisuje potize, lekar doporucuje vysetreni a lecbu.' },
+      { label: 'Onkologie', text: 'Onkologicka konzultace. Lekar diskutuje o diagnoze nadoroveho onemocneni, chemoterapii a prognoze.' },
+      { label: 'Operace / chirurgie', text: 'Chirurgicke pracoviste. Lekari diskutuji o operacnim zakroku, priprave pacienta a postoperacni peci.' },
+      { label: 'Alergologie a imunologie', text: 'Alergologicka a imunologicka konzultace. Lekar hodnoti alergicke reakce, imunitni system, precitlivelos a imunoterapii pacienta.' },
     ],
   },
   {
     id: 'technology', label: 'Technologie', domain: 'tech', color: 'indigo',
     prompts: [
-      { label: 'IT a software', text: 'Technický rozhovor o softwaru, programování a informatice.' },
-      { label: 'Hardware a počítače', text: 'Rozhovor o počítačovém hardwaru, procesorech, grafických kartách a technologiích.' },
-      { label: 'Herní průmysl', text: 'Rozhovor o videohrách, vývoji her a herním průmyslu.' },
-      { label: 'Umělá inteligence', text: 'Diskuse o umělé inteligenci, strojovém učení a neuronových sítích.' },
+      { label: 'IT a software', text: 'Technicky rozhovor o softwaru, programovani a informatice.' },
+      { label: 'Hardware a počítače', text: 'Rozhovor o pocitacovem hardwaru, procesorech, grafickych kartach a technologiich.' },
+      { label: 'Herní průmysl', text: 'Rozhovor o videohrach, vyvoji her a hernim prumyslu.' },
+      { label: 'Umělá inteligence', text: 'Diskuse o umele inteligenci, strojovem uceni a neuronovych sitich.' },
     ],
   },
   {
     id: 'sport', label: 'Sport', domain: 'sport', color: 'green',
     prompts: [
-      { label: 'Obecný sport', text: 'Sportovní rozhovor. Sportovci a trenéři diskutují o výkonu, tréninku a soutěžích.' },
-      { label: 'Fotbal', text: 'Fotbalový rozhovor. Hráči a trenéři diskutují o zápasech, taktice a lize.' },
-      { label: 'Esport', text: 'Rozhovor s profesionálním hráčem esportu o turnajích, strategii a týmové spolupráci.' },
+      { label: 'Obecný sport', text: 'Sportovni rozhovor. Sportovci a treneri diskutuji o vykonu, treninku a soutezich.' },
+      { label: 'Fotbal', text: 'Fotbalovy rozhovor. Hraci a treneri diskutuji o zapasech, taktice a lize.' },
+      { label: 'Esport', text: 'Rozhovor s profesionalnim hracem esportu o turnajich, strategii a tymove spolupraci.' },
     ],
   },
   {
     id: 'podcast', label: 'Podcast / pořad', domain: 'media', color: 'orange',
     prompts: [
-      { label: 'Obecný podcast', text: 'Podcastový rozhovor. Moderátor diskutuje s hostem o různých tématech.' },
-      { label: 'Věda a vzdělávání', text: 'Vzdělávací pořad. Odborník vysvětluje vědecká témata srozumitelně pro veřejnost.' },
-      { label: 'Byznys a ekonomika', text: 'Obchodní rozhovor o ekonomice, podnikání, investicích a finančních trzích.' },
-      { label: 'Politika a společnost', text: 'Politická diskuse. Politici a novináři hovoří o společenských otázkách a vládní politice.' },
+      { label: 'Obecný podcast', text: 'Podcastovy rozhovor. Moderator diskutuje s hostem o ruznych tematech.' },
+      { label: 'Věda a vzdělávání', text: 'Vzdelavaci porad. Odbornik vysvetluje vedecka temata srozumitelne pro verejnost.' },
+      { label: 'Byznys a ekonomika', text: 'Obchodni rozhovor o ekonomice, podnikani, investicich a financnich trzich.' },
+      { label: 'Politika a společnost', text: 'Politicka diskuse. Politici a novinari hovori o spolecenskych otazkach a vladni politice.' },
     ],
   },
 ]
@@ -90,7 +103,11 @@ export function TuningPage() {
   const [jobs, setJobs] = useState<TuningJobStatus[]>([])
 
   const cfg = loadConfig()
-  const [selectedModel, setSelectedModel] = useState<string>(cfg.selectedModel ?? 'whisper_cpp_small')
+  const [selectedModels, setSelectedModels] = useState<string[]>(() => {
+    if (cfg.selectedModels?.length) return cfg.selectedModels
+    if (cfg.selectedModel) return [cfg.selectedModel]  // backward compat
+    return ['whisper_cpp_small']
+  })
   const [selectedVideos, setSelectedVideos] = useState<string[]>(cfg.selectedVideos ?? [])
   const [strategy, setStrategy] = useState<Strategy>(cfg.strategy ?? 'ablation')
   const [sampleSeconds, setSampleSeconds] = useState<number>(cfg.sampleSeconds ?? 60)
@@ -106,10 +123,16 @@ export function TuningPage() {
     )
   })
   // Prompt management
-  const [selectedPrompts, setSelectedPrompts] = useState<Set<string>>(
-    () => new Set(cfg.selectedPrompts ?? [''])
-  )
-  const [customPrompt, setCustomPrompt] = useState<string>(cfg.customPrompt ?? '')
+  const [selectedPrompts, setSelectedPrompts] = useState<Set<string>>(() => {
+    // Odfiltruj uložené prompty s diakritikou (staré hodnoty z localStorage)
+    const saved: string[] = cfg.selectedPrompts ?? ['']
+    const clean = saved.filter((p: string) => /^[\x00-\x7F]*$/.test(p))
+    return new Set(clean.length > 0 ? clean : [''])
+  })
+  const [customPrompt, setCustomPrompt] = useState<string>(() => {
+    const p = cfg.customPrompt ?? ''
+    return /^[\x00-\x7F]*$/.test(p) ? p : ''
+  })
   const [clipSeed, setClipSeed] = useState<number>(cfg.clipSeed ?? 42)
   const [videoSortBy, setVideoSortBy] = useState<'title' | 'language' | 'duration' | 'upload_date'>(
     cfg.videoSortBy ?? 'title'
@@ -141,7 +164,7 @@ export function TuningPage() {
   // Uložit konfiguraci do localStorage při každé změně
   useEffect(() => {
     const cfg = {
-      selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
+      selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
       paramValues: Object.fromEntries(
         Object.entries(paramValues).map(([k, v]) => [k, [...v]])
       ),
@@ -149,7 +172,7 @@ export function TuningPage() {
       customPrompt, videoSortBy, videoSortDir,
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
-  }, [selectedModel, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
+  }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
       paramValues, selectedPrompts, customPrompt, videoSortBy, videoSortDir])
 
   function toggleParamValue(paramName: string, value: unknown) {
@@ -171,7 +194,9 @@ export function TuningPage() {
   }
 
   function autoPromptFromTitle(title: string): string {
-    return `Toto je rozhovor v češtině. Téma: ${title}.`
+    // ASCII-only — whisper-cli na Windows crashuje při non-ASCII v -p
+    const ascii = title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x00-\x7F]/g, '')
+    return `Toto je rozhovor v cestine. Tema: ${ascii}.`
   }
 
   function allSelectedPrompts(): string[] {
@@ -181,6 +206,7 @@ export function TuningPage() {
   }
 
   function countTrials(): number {
+    const modelCount = Math.max(1, selectedModels.length)
     const promptCount = Math.max(1, allSelectedPrompts().length)
     if (strategy === 'ablation') {
       let n = 1
@@ -188,15 +214,27 @@ export function TuningPage() {
         n += Math.max(0, (paramValues[p.name]?.size ?? 1) - 1)
       }
       n += Math.max(0, promptCount - 1)
-      return n
+      return n * modelCount
     }
     if (strategy === 'grid') {
-      return WHISPER_PARAM_DEFS.reduce((acc, p) => acc * (paramValues[p.name]?.size ?? 1), 1) * promptCount
+      const chunkCount = paramValues['chunk_seconds']?.size ?? 1
+      const beamValues = [...(paramValues['beam_size'] ?? [5])] as number[]
+      const bestOfValues = [...(paramValues['best_of'] ?? [5])] as number[]
+      const otherCount = WHISPER_PARAM_DEFS
+        .filter(p => p.name !== 'chunk_seconds' && p.name !== 'beam_size' && p.name !== 'best_of')
+        .reduce((acc, p) => acc * (paramValues[p.name]?.size ?? 1), 1)
+      // Odfiltruj neplatné kombinace beam_size × best_of (best_of > beam_size)
+      let validBeamBestOf = 0
+      for (const beam of beamValues)
+        for (const bestOf of bestOfValues)
+          if (bestOf <= beam) validBeamBestOf++
+      return validBeamBestOf * otherCount * chunkCount * promptCount * modelCount
     }
-    return maxTrials
+    return maxTrials * modelCount
   }
 
   async function startTuning() {
+    if (!selectedModels.length) { setMsg('Vyber alespoň jeden model.'); return }
     if (!selectedVideos.length) { setMsg('Vyber alespoň jedno video.'); return }
     setMsg('')
     const paramSpace = WHISPER_PARAM_DEFS
@@ -217,7 +255,7 @@ export function TuningPage() {
 
     try {
       const job = await api.tuning.createJob({
-        model_id: selectedModel,
+        model_ids: selectedModels,
         video_ids: selectedVideos,
         sample_seconds: sampleSeconds,
         clip_seed: clipSeed,
@@ -249,7 +287,7 @@ export function TuningPage() {
 
   const whisperModels = registry.filter(m => m.adapter === 'whisper_cpp')
   const trialCount = countTrials()
-  const isSlowModel = selectedModel.includes('large')
+  const isSlowModel = selectedModels.some(m => m.includes('large'))
 
   return (
     <div className="space-y-6">
@@ -262,12 +300,20 @@ export function TuningPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Model */}
         <div className="bg-white rounded border border-gray-200 p-4 space-y-2">
-          <h2 className="font-semibold text-sm text-gray-700">Model</h2>
+          <button
+            className="font-semibold text-sm text-gray-700 hover:text-blue-600 hover:underline text-left"
+            title="Otevřít adresář s modely"
+            onClick={() => api.openDir.modelStore().catch(() => {})}
+          >Modely ↗</button>
           {whisperModels.map(m => (
             <label key={m.model_id} className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="radio" name="model" value={m.model_id}
-                checked={selectedModel === m.model_id}
-                onChange={() => setSelectedModel(m.model_id)} />
+              <input type="checkbox" value={m.model_id}
+                checked={selectedModels.includes(m.model_id)}
+                onChange={() => setSelectedModels(prev =>
+                  prev.includes(m.model_id)
+                    ? prev.filter(id => id !== m.model_id)
+                    : [...prev, m.model_id]
+                )} />
               <span>{m.label}</span>
             </label>
           ))}
@@ -365,144 +411,93 @@ export function TuningPage() {
 
       {/* Parametrický prostor */}
       <div className="bg-white rounded border border-gray-200 p-4 space-y-4">
-        <h2 className="font-semibold text-sm text-gray-700">Parametrický prostor</h2>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h2 className="font-semibold text-sm text-gray-700">Parametrický prostor</h2>
+          <span className="text-xs text-gray-400">— klikni na hodnoty, které chceš testovat (modre = vybráno)</span>
+          <div className="ml-auto flex gap-2">
+            <button onClick={() => {
+              setParamValues(Object.fromEntries(
+                WHISPER_PARAM_DEFS.map(p => [p.name, new Set<unknown>([p.default])])
+              ))
+            }} className="px-2.5 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50">
+              Reset
+            </button>
+            <button onClick={() => {
+              // Doporučený rozsah pro typický tuning run
+              setParamValues({
+                beam_size: new Set<unknown>([1, 3, 5]),
+                best_of: new Set<unknown>([1, 3, 5]),
+                threads: new Set<unknown>([2, 4]),
+                no_fallback: new Set<unknown>([true, false]),
+                chunk_seconds: new Set<unknown>([15, 30]),
+              })
+            }} className="px-2.5 py-1 text-xs rounded border border-blue-400 text-blue-700 hover:bg-blue-50">
+              Doporuceny rozsah
+            </button>
+            <button onClick={() => {
+              setParamValues(Object.fromEntries(
+                WHISPER_PARAM_DEFS.map(p => [p.name, new Set<unknown>(p.values)])
+              ))
+            }} className="px-2.5 py-1 text-xs rounded border border-gray-300 hover:bg-gray-50">
+              Vse
+            </button>
+          </div>
+        </div>
 
         {/* Numerické / bool parametry */}
         <div className="space-y-3">
           {WHISPER_PARAM_DEFS.map(p => (
             <div key={p.name} className="flex items-start gap-4">
-              <div className="w-36 shrink-0 text-xs font-medium text-gray-600 pt-1">{p.label}</div>
+              <div className="w-36 shrink-0 pt-1 relative group/label">
+                <span className="text-xs font-medium text-gray-600 cursor-help underline decoration-dotted decoration-gray-400">
+                  {p.label}
+                </span>
+                <div className="pointer-events-none absolute left-0 top-5 z-20 hidden group-hover/label:block w-72 bg-gray-900 text-white text-xs rounded px-2.5 py-2 shadow-xl leading-relaxed">
+                  {p.description}
+                </div>
+              </div>
               <div className="flex flex-wrap gap-1.5">
-                {p.values.map(v => {
+                {(p.values as readonly unknown[]).map(v => {
                   const selected = paramValues[p.name]?.has(v) ?? false
                   const isDefault = v === p.default
+                  const vStr = p.type === 'bool' ? (v ? 'true' : 'false') : String(v)
+                  const vDesc = (p as { valueDescriptions?: Record<string, string> }).valueDescriptions?.[String(v)]
                   return (
-                    <button key={String(v)}
-                      onClick={() => toggleParamValue(p.name, v)}
-                      className={`px-2.5 py-1 rounded text-xs font-mono border transition-colors ${
-                        selected ? 'bg-blue-600 text-white border-blue-600'
-                               : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
-                      }`}
-                    >
-                      {p.type === 'bool' ? (v ? 'true' : 'false') : String(v)}
-                      {isDefault && <span className="ml-1 opacity-50">●</span>}
-                    </button>
+                    <div key={vStr} className="relative group/val">
+                      <button
+                        onClick={() => toggleParamValue(p.name, v)}
+                        className={`px-2.5 py-1 rounded text-xs font-mono border transition-colors ${
+                          selected ? 'bg-blue-600 text-white border-blue-600'
+                                 : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
+                        }`}
+                      >
+                        {vStr}
+                        {isDefault && <span className="ml-1 opacity-50">●</span>}
+                      </button>
+                      {vDesc && (
+                        <div className="pointer-events-none absolute left-0 top-7 z-20 hidden group-hover/val:block whitespace-nowrap bg-gray-900 text-white text-xs rounded px-2 py-1 shadow-xl">
+                          {vDesc}
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
               </div>
               <div className="text-xs text-gray-400 pt-1">
-                {paramValues[p.name]?.size ?? 1} hod.
+                {paramValues[p.name]?.size ?? 1} hodnot
               </div>
             </div>
           ))}
         </div>
 
-        {/* Initial prompt — doménová knihovna */}
+        {/* Initial prompt — zakázáno, binárka crashuje */}
         <div className="border-t border-gray-100 pt-4">
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-medium text-gray-700">Initial prompt</span>
-            <span className="text-xs text-gray-400">— kontext pro model (co čekat za obsah a slovní zásobu)</span>
-            <span className="ml-auto text-xs text-blue-600 font-medium">{allSelectedPrompts().length} vybráno</span>
+            <span className="text-xs text-gray-400">— kontext pro model</span>
           </div>
-
-          <div className="space-y-3">
-            {PROMPT_LIBRARY.map(group => {
-              const colorMap: Record<string, string> = {
-                gray: 'border-gray-200 bg-gray-50',
-                blue: 'border-blue-200 bg-blue-50',
-                violet: 'border-violet-200 bg-violet-50',
-                red: 'border-red-200 bg-red-50',
-                indigo: 'border-indigo-200 bg-indigo-50',
-                green: 'border-green-200 bg-green-50',
-                orange: 'border-orange-200 bg-orange-50',
-              }
-              const tagMap: Record<string, string> = {
-                gray: 'bg-gray-200 text-gray-700',
-                blue: 'bg-blue-200 text-blue-800',
-                violet: 'bg-violet-200 text-violet-800',
-                red: 'bg-red-200 text-red-800',
-                indigo: 'bg-indigo-200 text-indigo-800',
-                green: 'bg-green-200 text-green-800',
-                orange: 'bg-orange-200 text-orange-800',
-              }
-              const btnSel = 'border-2 font-semibold'
-              const btnUnsel = 'border opacity-70 hover:opacity-100'
-
-              // Auto-prompt skupinu zobrazíme jinak
-              if (group.id === 'topic_auto') {
-                const autoPrompts = selectedVideos.map(vid => {
-                  const item = library.find(l => l.video_id === vid)
-                  return item ? { label: item.title, text: autoPromptFromTitle(item.title) } : null
-                }).filter(Boolean) as { label: string; text: string }[]
-
-                const isActive = selectedVideos.length > 0 && autoPrompts.some(p => selectedPrompts.has(p.text) || allSelectedPrompts().includes(p.text))
-
-                return (
-                  <div key={group.id} className={`rounded border p-3 ${colorMap[group.color]}`}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${tagMap[group.color]}`}>{group.label}</span>
-                      <span className="text-xs text-gray-500">automaticky z názvu vybraného videa</span>
-                    </div>
-                    {selectedVideos.length === 0
-                      ? <p className="text-xs text-gray-400 italic">Vyber video — prompt se vygeneruje automaticky z jeho názvu.</p>
-                      : autoPrompts.map(p => (
-                          <div key={p.text} className="flex items-start gap-2 mt-1">
-                            <button onClick={() => togglePrompt(p.text)}
-                              className={`shrink-0 text-xs px-2 py-0.5 rounded border ${selectedPrompts.has(p.text) ? `${btnSel} border-violet-500 bg-violet-100 text-violet-800` : `${btnUnsel} border-violet-300 bg-white text-violet-700`}`}>
-                              {selectedPrompts.has(p.text) ? '✓' : '+'}
-                            </button>
-                            <div>
-                              <div className="text-xs font-medium text-gray-700">{p.label}</div>
-                              <div className="text-xs text-gray-500 font-mono mt-0.5 italic">„{p.text}"</div>
-                            </div>
-                          </div>
-                        ))
-                    }
-                  </div>
-                )
-              }
-
-              return (
-                <div key={group.id} className={`rounded border p-3 ${colorMap[group.color]}`}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${tagMap[group.color]}`}>{group.label}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {group.prompts.map(p => {
-                      const sel = selectedPrompts.has(p.text)
-                      return (
-                        <button key={p.text} onClick={() => togglePrompt(p.text)}
-                          title={`"${p.text}"`}
-                          className={`text-xs px-2.5 py-1.5 rounded border transition-all text-left ${
-                            sel ? `${btnSel} border-blue-500 bg-white text-blue-800 shadow-sm`
-                                : `${btnUnsel} border-gray-300 bg-white text-gray-700`
-                          }`}>
-                          {sel && <span className="mr-1">✓</span>}
-                          {p.label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  {/* Zobraz text vybraných promptů v téhle skupině */}
-                  {group.prompts.filter(p => selectedPrompts.has(p.text)).map(p => (
-                    <div key={p.text} className="mt-2 text-xs text-gray-500 font-mono bg-white/70 rounded px-2 py-1 italic">
-                      „{p.text}"
-                    </div>
-                  ))}
-                </div>
-              )
-            })}
-
-            {/* Vlastní prompt */}
-            <div className="rounded border border-dashed border-gray-300 p-3">
-              <label className="text-xs font-medium text-gray-600 block mb-1">Vlastní prompt</label>
-              <input value={customPrompt} onChange={e => setCustomPrompt(e.target.value)}
-                placeholder="Napiš vlastní kontext pro model…"
-                className="w-full border rounded px-2 py-1.5 text-xs font-mono text-gray-700" />
-              {customPrompt.trim() && (
-                <div className="text-xs text-green-600 mt-1">✓ Bude přidán jako jeden trial</div>
-              )}
-            </div>
+          <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+            ✗ Nefunkční s touto binárkou whisper-cli — <code>-p</code> způsobuje crash při jakémkoliv neprázdném promptu (0 z 229 pokusů prošlo). Prompty jsou z tuningu vyřazeny. Oprava vyžaduje upgrade whisper-cli.
           </div>
         </div>
 
@@ -513,7 +508,7 @@ export function TuningPage() {
             <span className="text-gray-400 ml-1">(RTF≈0.5)</span>
           </div>
           <button onClick={startTuning}
-            className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded text-sm font-medium">
+            className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-medium">
             ▶ Spustit tuning
           </button>
           {msg && <span className="text-sm text-red-500">{msg}</span>}
@@ -552,15 +547,66 @@ export function TuningPage() {
       )}
 
       {/* Detail vybraného jobu */}
-      {selectedJob && <TuningJobDetail job={selectedJob} />}
+      {selectedJob && <TuningJobDetail job={selectedJob} onCancel={async () => {
+        await api.tuning.cancelJob(selectedJob.job_id)
+        const cancelled = { ...selectedJob, status: 'cancelled' as const }
+        setSelectedJob(cancelled)
+        setJobs(prev => prev.map((j: TuningJobStatus) => j.job_id === selectedJob.job_id ? cancelled : j))
+        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+      }} />}
     </div>
   )
 }
 
-function TuningJobDetail({ job }: { job: TuningJobStatus }) {
+type SortCol = 'wer' | 'cer' | 'wer_normalized' | 'rtf' | 'rtf_viable' | 'perceived_delay_s' | 'latency_ms' | 'is_pareto'
+
+function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: () => void }) {
   const [expandedTrial, setExpandedTrial] = useState<number | null>(null)
+  const [msgAge, setMsgAge] = useState<number>(0)
+  const [sortCol, setSortCol] = useState<SortCol>('wer')
+  const [sortDir, setSortDir] = useState<1 | -1>(1)
+  const [ram, setRam] = useState<{ used: number; total: number; pct: number } | null>(null)
+
+  useEffect(() => {
+    if (job.status !== 'running') { setMsgAge(0); return }
+    const tick = () => {
+      const ts = job.updated_ts
+      if (ts) setMsgAge(Math.floor((Date.now() - new Date(ts).getTime()) / 1000))
+    }
+    tick()
+    const iv = setInterval(tick, 1000)
+    return () => clearInterval(iv)
+  }, [job.status, job.updated_ts])
+
+  useEffect(() => {
+    if (job.status !== 'running') return
+    const fetchRam = () => fetch('/api/health').then(r => r.json()).then(d => {
+      if (d.ram_total_mb) setRam({ used: d.ram_used_mb, total: d.ram_total_mb, pct: d.ram_percent })
+    }).catch(() => {})
+    fetchRam()
+    const iv = setInterval(fetchRam, 3000)
+    return () => clearInterval(iv)
+  }, [job.status])
+
+  function toggleSort(col: SortCol) {
+    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
+    else { setSortCol(col); setSortDir(1) }
+  }
+
   const best = job.best_trial_idx != null ? job.results[job.best_trial_idx] : null
-  const sorted = [...job.results].filter(r => r.wer != null).sort((a, b) => (a.wer ?? 99) - (b.wer ?? 99))
+  const sorted = [...job.results].filter(r => r.wer != null).sort((a, b) => {
+    const av = (a as any)[sortCol]
+    const bv = (b as any)[sortCol]
+    if (typeof av === 'boolean' || typeof bv === 'boolean') {
+      // true (viable/pareto) = "better" → sort ascending puts false first, so flip for booleans
+      const an = av === true ? 1 : av === false ? 0 : -1
+      const bn = bv === true ? 1 : bv === false ? 0 : -1
+      return (bn - an) * sortDir  // descending by default (true first)
+    }
+    const an = av ?? Infinity
+    const bn = bv ?? Infinity
+    return (an - bn) * sortDir
+  })
 
   const scatterData = job.results
     .filter(r => r.wer != null && r.rtf != null)
@@ -593,17 +639,41 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                 style={{ width: `${Math.round(job.completed_trials / job.total_trials * 100)}%` }} />
             </div>
           )}
+          {(job.status === 'running' || job.status === 'pending') && (
+            <button onClick={onCancel}
+              className="text-xs text-red-600 hover:text-red-800 border border-red-200 hover:border-red-400 rounded px-2 py-0.5">
+              ⏹ Zastavit
+            </button>
+          )}
+          {job.status === 'running' && ram && (
+            <span className={`text-xs font-mono px-2 py-0.5 rounded border ${ram.pct > 90 ? 'text-red-700 bg-red-50 border-red-200' : ram.pct > 75 ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-gray-600 bg-gray-50 border-gray-200'}`}
+              title="RAM systému">
+              RAM {ram.used.toLocaleString()} / {ram.total.toLocaleString()} MB ({ram.pct}%)
+            </span>
+          )}
           <button onClick={() => api.tuning.openJobDir(job.job_id)}
             className="ml-auto text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-0.5">
             📁 Otevřít složku
           </button>
         </div>
+        {job.audio_ready?.length > 0 && (
+          <div className="mt-2 text-xs px-3 py-1.5 bg-green-50 text-green-800 rounded flex gap-3 flex-wrap">
+            {job.audio_ready.map(vid => (
+              <span key={vid}>✓ Audio {vid} staženo</span>
+            ))}
+          </div>
+        )}
         {job.progress_message && (
           <div className={`mt-2 text-xs font-mono px-3 py-2 rounded ${
             job.status === 'running' ? 'bg-blue-50 text-blue-800' : 'bg-gray-50 text-gray-600'
           }`}>
             {job.status === 'running' && <span className="animate-pulse mr-2">⌛</span>}
             {job.progress_message}
+            {job.status === 'running' && msgAge > 0 && (
+              <span className={`ml-3 ${msgAge > 60 ? 'text-red-600 font-bold' : msgAge > 30 ? 'text-amber-600' : 'text-blue-400'}`}>
+                {msgAge > 60 ? '⚠ zaseknuté?' : `+${msgAge}s`}
+              </span>
+            )}
           </div>
         )}
 
@@ -711,15 +781,17 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
             <thead className="bg-gray-50 text-gray-500 uppercase">
               <tr>
                 <th className="px-3 py-2 text-center">#</th>
+                {job.model_ids?.length > 1 && <th className="px-3 py-2 text-left">Model</th>}
                 <th className="px-3 py-2 text-left">Parametry</th>
-                <th className="px-3 py-2 text-center">WER</th>
-                <th className="px-3 py-2 text-center">CER</th>
-                <th className="px-3 py-2 text-center">WER norm.</th>
-                <th className="px-3 py-2 text-center">RTF</th>
-                <th className="px-3 py-2 text-center">Live mic</th>
-                <th className="px-3 py-2 text-center" title="Čas od promluvení do zobrazení přepisu = chunk + chunk×RTF">Zpoždění</th>
-                <th className="px-3 py-2 text-center">Latence</th>
-                <th className="px-3 py-2 text-center">Pareto</th>
+                {([ ['wer','WER'], ['cer','CER'], ['wer_normalized','WER norm.'], ['rtf','RTF'],
+                    ['rtf_viable','Live mic'], ['perceived_delay_s','Zpoždění'], ['latency_ms','Latence'], ['is_pareto','Pareto']
+                ] as [SortCol, string][]).map(([col, label], i) => (
+                  <th key={i} onClick={() => toggleSort(col)}
+                    className="px-3 py-2 text-center cursor-pointer select-none hover:bg-gray-100 whitespace-nowrap"
+                    title={col === 'perceived_delay_s' ? 'Čas od promluvení do zobrazení přepisu = chunk + chunk×RTF' : undefined}>
+                    {label}{sortCol === col ? (sortDir === 1 ? ' ▲' : ' ▼') : ''}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -731,6 +803,11 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                     <td className="px-3 py-2 text-center text-gray-400 font-mono">
                       {rank === 0 ? '🏆' : rank + 1}
                     </td>
+                    {job.model_ids?.length > 1 && (
+                      <td className="px-3 py-2 text-xs font-mono text-blue-700 whitespace-nowrap">
+                        {r.model_id?.replace('whisper_cpp_', '') ?? '—'}
+                      </td>
+                    )}
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1 items-center">
                         <span className="text-blue-500 mr-1 text-xs font-bold">{expandedTrial === r.trial_idx ? '▼' : '▶'}</span>
@@ -741,7 +818,12 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                         ))}
                       </div>
                     </td>
-                    <td className="px-3 py-2 text-center"><WerBadge value={r.wer} label="" /></td>
+                    <td className="px-3 py-2 text-center">
+                      <WerBadge value={r.wer} label="" />
+                      {r.error && r.wer != null && (
+                        <span className="ml-1 text-orange-500 text-xs" title={`Částečný výsledek — trial selhal: ${r.error}`}>⚠</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-center"><WerBadge value={r.cer} label="" /></td>
                     <td className="px-3 py-2 text-center"><WerBadge value={r.wer_normalized} label="" /></td>
                     <td className="px-3 py-2 text-center font-mono">
@@ -823,10 +905,11 @@ function TuningJobDetail({ job }: { job: TuningJobStatus }) {
                               <div className="font-semibold text-gray-600 mb-1">Word diff (přepis vs reference):</div>
                               <div className="bg-white border border-gray-200 rounded p-2 leading-6 max-h-48 overflow-y-auto">
                                 {r.word_diff.map((d, i) => {
-                                  if (d.op === 'equal') return <span key={i} className="text-gray-700">{d.hyp} </span>
-                                  if (d.op === 'replace') return <span key={i}><span className="bg-yellow-100 text-yellow-800 rounded px-0.5">{d.hyp}</span><span className="bg-gray-100 text-gray-400 line-through rounded px-0.5 ml-0.5 text-xs">{d.ref}</span> </span>
-                                  if (d.op === 'insert') return <span key={i} className="bg-red-100 text-red-700 rounded px-0.5 line-through">{d.hyp} </span>
-                                  if (d.op === 'delete') return <span key={i} className="bg-blue-100 text-blue-700 rounded px-0.5">[{d.ref}] </span>
+                                  const op = d.op
+                                  if (op === '=' || op === 'equal') return <span key={i} className="text-gray-700">{d.hyp} </span>
+                                  if (op === 'S' || op === 'replace') return <span key={i}><span className="bg-yellow-100 text-yellow-800 rounded px-0.5">{d.hyp}</span><span className="bg-gray-100 text-gray-400 line-through rounded px-0.5 ml-0.5 text-xs">{d.ref}</span> </span>
+                                  if (op === 'I' || op === 'insert') return <span key={i} className="bg-red-100 text-red-700 rounded px-0.5 line-through">{d.hyp} </span>
+                                  if (op === 'D' || op === 'delete') return <span key={i} className="bg-blue-100 text-blue-700 rounded px-0.5">[{d.ref}] </span>
                                   return null
                                 })}
                               </div>

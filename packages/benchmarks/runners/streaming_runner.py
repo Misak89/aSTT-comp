@@ -37,6 +37,7 @@ class StreamingRunConfig:
     chunk_seconds: int = 15      # délka jednoho chunku — z toho se odvozují milníky
     progress_callback: Callable[[str], None] | None = None
     transcript_callback: Callable[[str, int, str], None] | None = None  # (plain_text, percent, timestamped_text)
+    source_wav_path: str | None = None  # přímá cesta k WAV — přeskočí double int16→float→int16 konverzi
 
 
 def run_streaming_benchmark(
@@ -163,43 +164,55 @@ def _run_buffered(
     s prodlevami odvozenými z časových razítek (20× zrychleno), takže UI vidí živý přepis.
     """
     out_dir = Path(config.output_dir)
-    sample_rate = 16000
 
     started = datetime.now(UTC)
     started_at = time.perf_counter()
 
-    all_pcm: list[int] = []
-    total_pcm_samples = 0
-    last_progress_s = 0.0
+    _temp_wav_created = False  # True jen pokud jsme vytvořili dočasný WAV (nutno smazat)
 
-    _cb(config.progress_callback, f"⬇ Stahuji audio ({config.sample_seconds}s)...")
+    if config.source_wav_path:
+        # Přímá cesta k WAV — žádná double konverze int16→float32→int16
+        src_wav = Path(config.source_wav_path)
+        with wave.open(str(src_wav), "rb") as wf:
+            clip_duration = wf.getnframes() / max(1, wf.getframerate())
+        temp_wav = src_wav
+        _cb(config.progress_callback,
+            f"▶ Spouštím {adapter} batch přepis ({round(clip_duration, 1)}s audia)...")
+    else:
+        # Bufferuj z generátoru → zapiš temp WAV
+        sample_rate = 16000
+        all_pcm: list[int] = []
+        total_pcm_samples = 0
+        last_progress_s = 0.0
 
-    for samples, sr in audio_generator:
-        sample_rate = sr
-        for s in samples:
-            all_pcm.append(int(max(-32768, min(32767, s * 32767.0))))
-        total_pcm_samples += len(samples)
-        audio_pos_s = total_pcm_samples / max(1, sample_rate)
-        if audio_pos_s - last_progress_s >= 10.0:
-            last_progress_s = audio_pos_s
-            _cb(config.progress_callback,
-                f"⬇ Stahuji audio... {int(audio_pos_s)}s / {config.sample_seconds}s")
-        if audio_pos_s >= config.sample_seconds:
-            break
+        _cb(config.progress_callback, f"⬇ Stahuji audio ({config.sample_seconds}s)...")
 
-    # Zapiš celé audio do temp WAV
-    temp_wav = out_dir / f"{source.source_id}_{adapter}_full.wav"
-    if all_pcm:
-        pcm_array = array("h", all_pcm)
-        with wave.open(str(temp_wav), "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(pcm_array.tobytes())
+        for samples, sr in audio_generator:
+            sample_rate = sr
+            for s in samples:
+                all_pcm.append(int(max(-32768, min(32767, s * 32767.0))))
+            total_pcm_samples += len(samples)
+            audio_pos_s = total_pcm_samples / max(1, sample_rate)
+            if audio_pos_s - last_progress_s >= 10.0:
+                last_progress_s = audio_pos_s
+                _cb(config.progress_callback,
+                    f"⬇ Stahuji audio... {int(audio_pos_s)}s / {config.sample_seconds}s")
+            if audio_pos_s >= config.sample_seconds:
+                break
 
-    clip_duration = total_pcm_samples / max(1, sample_rate)
-    _cb(config.progress_callback,
-        f"▶ Spouštím {adapter} batch přepis ({round(clip_duration, 1)}s audia)...")
+        temp_wav = out_dir / f"{source.source_id}_{adapter}_full.wav"
+        if all_pcm:
+            pcm_array = array("h", all_pcm)
+            with wave.open(str(temp_wav), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(pcm_array.tobytes())
+            _temp_wav_created = True
+
+        clip_duration = total_pcm_samples / max(1, sample_rate)
+        _cb(config.progress_callback,
+            f"▶ Spouštím {adapter} batch přepis ({round(clip_duration, 1)}s audia)...")
 
     batch_source = SourceEntry(
         source_id=source.source_id,
@@ -222,14 +235,18 @@ def _run_buffered(
                 f"⏳ Přepisuji... ({int(elapsed)}s zprac. / ~{int(clip_duration)}s audia)")
     threading.Thread(target=_heartbeat, daemon=True).start()
 
-    batch_result = _run_batch_adapter(source=batch_source, adapter=adapter, config=config)
-    _stop_heartbeat.set()
+    try:
+        batch_result = _run_batch_adapter(source=batch_source, adapter=adapter, config=config)
+    finally:
+        _stop_heartbeat.set()  # vždy zastav heartbeat — i při výjimce
+
     whisper_elapsed = round(time.perf_counter() - whisper_start, 2)
 
-    try:
-        temp_wav.unlink()
-    except Exception:
-        pass
+    if _temp_wav_created:
+        try:
+            temp_wav.unlink()
+        except Exception:
+            pass
 
     elapsed_s = max(0.001, time.perf_counter() - started_at)
     full_transcript = batch_result.get("transcript_text", "")

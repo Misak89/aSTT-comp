@@ -247,6 +247,7 @@ export interface ModelStatus {
 // Tuning
 export interface TuningTrialResult {
   trial_idx: number
+  model_id?: string
   params: Record<string, unknown>
   chunk_seconds: number
   wer: number | null
@@ -274,6 +275,7 @@ export interface TuningJobStatus {
   job_id: string
   status: string
   model_id: string
+  model_ids: string[]
   label: string | null
   created_at: string
   total_trials: number
@@ -282,4 +284,6 @@ export interface TuningJobStatus {
   error: string | null
   best_trial_idx: number | null
   progress_message: string | null
+  audio_ready: string[]
+  updated_ts?: string  // timestamp poslední aktualizace workeru (pro detekci zaseknutí)
 }

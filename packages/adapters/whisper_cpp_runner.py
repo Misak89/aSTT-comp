@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -97,37 +98,51 @@ def run_whisper_source(
         except Exception:
             proc_handle = None
 
-    # Timeout: max 10× délka audia nebo 600s — aby whisper nepřeběhl donekonečna
-    timeout_s = max(600, sample_seconds * 10)
-    deadline = time.perf_counter() + timeout_s
+    # Timeout: max 3× délka audia nebo 120s — aby whisper nepřeběhl donekonečna
+    timeout_s = max(120, sample_seconds * 3)
 
-    while proc.poll() is None:
-        if proc_handle is not None:
+    # Sbírání psutil metrik v separátním vlákně — bez busy-loop v hlavním vlákně
+    _stop_monitor = threading.Event()
+
+    def _monitor_proc():
+        nonlocal peak_rss_mb, process_cpu_seconds
+        cpu_idle_since: float | None = None
+        while not _stop_monitor.wait(0.5):
+            if proc_handle is None:
+                break
             try:
                 mem = proc_handle.memory_info().rss / (1024 * 1024)
                 peak_rss_mb = max(peak_rss_mb, mem)
                 cpu_times = proc_handle.cpu_times()
                 process_cpu_seconds = float(cpu_times.user + cpu_times.system)
+                cpu_pct = proc_handle.cpu_percent(interval=None)
+                # CPU idle detekce: pokud whisper nezabírá CPU > 30s → pravděpodobně zamrzl
+                if cpu_pct is not None and cpu_pct < 1.0:
+                    if cpu_idle_since is None:
+                        cpu_idle_since = time.perf_counter()
+                    elif time.perf_counter() - cpu_idle_since > 30.0:
+                        proc.kill()
+                        break
+                else:
+                    cpu_idle_since = None
             except Exception:
-                pass
-        if time.perf_counter() > deadline:
-            proc.kill()
-            raise RuntimeError(
-                f"whisper-cli timeout po {timeout_s}s (audio={sample_seconds}s) — proces zabit"
-            )
-        time.sleep(0.05)
+                break
+
+    threading.Thread(target=_monitor_proc, daemon=True).start()
+
+    try:
+        proc.wait(timeout=timeout_s)
+    except Exception:  # subprocess.TimeoutExpired nebo jiná chyba
+        proc.kill()
+        proc.wait()
+        raise RuntimeError(
+            f"whisper-cli timeout po {timeout_s}s (audio={sample_seconds}s) — proces zabit"
+        )
+    finally:
+        _stop_monitor.set()
 
     stdout_text, stderr_text = proc.communicate()
     elapsed_s = max(0.001, time.perf_counter() - started_perf)
-
-    if proc_handle is not None:
-        try:
-            mem = proc_handle.memory_info().rss / (1024 * 1024)
-            peak_rss_mb = max(peak_rss_mb, mem)
-            cpu_times = proc_handle.cpu_times()
-            process_cpu_seconds = float(cpu_times.user + cpu_times.system)
-        except Exception:
-            pass
 
     if proc.returncode != 0:
         raise RuntimeError(
@@ -235,10 +250,13 @@ def resolve_whisper_model_file(model_store_root: str | Path, model_id: str) -> P
             root / "whisper_cpp_large_v3" / "ggml-large-v3.bin",
             root / "whisper_cpp_large_v3" / "ggml-large-v3-q5_0.bin",
             root / "whisper_cpp_large_v3" / "ggml-large-v3-q8_0.bin",
-            root / "whisper_cpp_large_v3" / "ggml-large-v3-turbo.bin",
             root / "whisper_large_v3" / "ggml-large-v3.bin",
             root / "whisper_large_v3" / "ggml-large-v3-q5_0.bin",
             root / "whisper_large_v3" / "ggml-large-v3-q8_0.bin",
+        ],
+        "whisper_cpp_large_v3_turbo": [
+            root / "whisper_cpp_large_v3_turbo" / "ggml-large-v3-turbo-q5_0.bin",
+            root / "whisper_cpp_large_v3_turbo" / "ggml-large-v3-turbo.bin",
         ],
     }
     for candidate in candidates_by_model.get(str(model_id or "").strip(), []):
@@ -288,8 +306,8 @@ def _build_cmd(
         cmd.extend(["-bo", str(max(1, best_of))])
     if no_fallback:
         cmd.append("-nf")
-    if initial_prompt:
-        cmd.extend(["-p", initial_prompt])
+    # initial_prompt (-p) disabled: whisper-cli crashes (0xC0000409 STATUS_STACK_BUFFER_OVERRUN)
+    # with ANY non-empty value — 0/203 trials succeeded. Re-enable after binary upgrade.
     return cmd
 
 

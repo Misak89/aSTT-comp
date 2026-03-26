@@ -11,7 +11,8 @@ class TuningParamSpace(BaseModel):
 
 
 class TuningJobRequest(BaseModel):
-    model_id: str
+    model_id: str = ""              # backward compat — použij model_ids místo toho
+    model_ids: list[str] = []       # více modelů najednou (nové pole)
     video_ids: list[str]
     sample_seconds: int = 60
     clip_seed: Optional[int] = None
@@ -24,6 +25,7 @@ class TuningJobRequest(BaseModel):
 
 class TuningTrialResult(BaseModel):
     trial_idx: int
+    model_id: Optional[str] = None  # model použitý pro tento trial
     params: dict                    # kombinace parametrů tohoto trialu
     chunk_seconds: int
     wer: Optional[float]
@@ -50,7 +52,8 @@ class TuningTrialResult(BaseModel):
 class TuningJobStatus(BaseModel):
     job_id: str
     status: str                     # pending | running | completed | failed
-    model_id: str
+    model_id: str = ""              # backward compat — první z model_ids
+    model_ids: list[str] = []       # všechny modely v tomto jobu
     label: Optional[str]
     created_at: str
     total_trials: int
@@ -59,3 +62,5 @@ class TuningJobStatus(BaseModel):
     error: Optional[str] = None
     best_trial_idx: Optional[int] = None
     progress_message: Optional[str] = None
+    audio_ready: list[str] = []       # video_ids pro která je audio staženo
+    updated_ts: Optional[str] = None  # timestamp poslední aktualizace workeru (pro detekci zaseknutí)
