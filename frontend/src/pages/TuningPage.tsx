@@ -217,18 +217,17 @@ export function TuningPage() {
       return n * modelCount
     }
     if (strategy === 'grid') {
-      const chunkCount = paramValues['chunk_seconds']?.size ?? 1
       const beamValues = [...(paramValues['beam_size'] ?? [5])] as number[]
       const bestOfValues = [...(paramValues['best_of'] ?? [5])] as number[]
       const otherCount = WHISPER_PARAM_DEFS
-        .filter(p => p.name !== 'chunk_seconds' && p.name !== 'beam_size' && p.name !== 'best_of')
+        .filter(p => p.name !== 'beam_size' && p.name !== 'best_of')
         .reduce((acc, p) => acc * (paramValues[p.name]?.size ?? 1), 1)
       // Odfiltruj neplatné kombinace beam_size × best_of (best_of > beam_size)
       let validBeamBestOf = 0
       for (const beam of beamValues)
         for (const bestOf of bestOfValues)
           if (bestOf <= beam) validBeamBestOf++
-      return validBeamBestOf * otherCount * chunkCount * promptCount * modelCount
+      return validBeamBestOf * otherCount * promptCount * modelCount
     }
     return maxTrials * modelCount
   }
@@ -238,10 +237,9 @@ export function TuningPage() {
     if (!selectedVideos.length) { setMsg('Vyber alespoň jedno video.'); return }
     setMsg('')
     const paramSpace = WHISPER_PARAM_DEFS
-      .filter(p => p.name !== 'chunk_seconds')
       .map(p => ({ name: p.name, values: [...(paramValues[p.name] ?? [p.default])] }))
-    const chunkValues = [...(paramValues['chunk_seconds'] ?? [30])]
-    paramSpace.push({ name: 'chunk_seconds', values: chunkValues })
+    // chunk_seconds je ghost param — nemá vliv na whisper_cpp (batch mode), ale backend ho očekává
+    paramSpace.push({ name: 'chunk_seconds', values: [30] })
     // Přidej initial_prompt jako parametr
     const prompts = allSelectedPrompts()
     if (prompts.length > 0) {

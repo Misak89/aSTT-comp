@@ -131,17 +131,17 @@ def run_whisper_source(
     threading.Thread(target=_monitor_proc, daemon=True).start()
 
     try:
-        proc.wait(timeout=timeout_s)
+        # communicate() drainuje pipe ve vlastních threadech — zabrání deadlocku při plném pipe bufferu
+        stdout_text, stderr_text = proc.communicate(timeout=timeout_s)
     except Exception:  # subprocess.TimeoutExpired nebo jiná chyba
         proc.kill()
-        proc.wait()
+        stdout_text, stderr_text = proc.communicate()  # dočisti pipes po kill
         raise RuntimeError(
             f"whisper-cli timeout po {timeout_s}s (audio={sample_seconds}s) — proces zabit"
         )
     finally:
         _stop_monitor.set()
 
-    stdout_text, stderr_text = proc.communicate()
     elapsed_s = max(0.001, time.perf_counter() - started_perf)
 
     if proc.returncode != 0:

@@ -331,80 +331,88 @@ def _avg(values: list) -> float | None:
 
 
 def _validate_beam_sizes(
-    beam_sizes: set,
+    model_beam_pairs: set[tuple[str, int]],
     audio_wavs: dict[str, Path],
-    model_id: str,
     model_store_root: Path,
     status_file: Path,
     run_streaming_benchmark,
     StreamingRunConfig,
-) -> set:
+) -> set[tuple[str, int]]:
     """
-    Před spuštěním trialů ověří každou unikátní beam_size hodnotou na 5s klipu.
-    Vrátí množinu beam_size hodnot, které prošly validací.
-    Zabrání stovkám timeoutů při degenererovaném chování whisper-cli.
+    Před spuštěním trialů ověří každou unikátní (model_id, beam_size) kombinaci na 5s klipu.
+    Vrátí množinu dvojic (model_id, beam_size), které prošly validací.
+
+    Testuje per-model: beam_size=5 může selhat na large_v3 ale fungovat na small —
+    proto se nevylučuje beam_size globálně, ale konkrétní kombinace.
+    Zabrání stovkám timeoutů při degenerovaném chování whisper-cli.
     """
     import wave
     import tempfile
-    import os
+    from collections import defaultdict
 
-    validated: set = set()
-    for bs in sorted(beam_sizes):
-        _set_progress(status_file, f"Validace beam_size={bs} (5s test)...")
-        all_ok = True
-        for video_id, wav_path in list(audio_wavs.items())[:2]:  # max 2 videa
-            # Vyřízni 5s klipu
-            tmp = Path(tempfile.mktemp(suffix=".wav"))
-            try:
-                with wave.open(str(wav_path), "rb") as wf:
-                    sr = wf.getframerate()
-                    raw = wf.readframes(min(5 * sr, wf.getnframes()))
-                    sw = wf.getsampwidth()
-                    nc = wf.getnchannels()
-                with wave.open(str(tmp), "wb") as wf_out:
-                    wf_out.setnchannels(nc)
-                    wf_out.setsampwidth(sw)
-                    wf_out.setframerate(sr)
-                    wf_out.writeframes(raw)
+    validated: set[tuple[str, int]] = set()
 
-                from packages.ingest.source_resolver import SourceEntry
-                src = SourceEntry(
-                    source_id=f"val_{video_id}",
-                    label=video_id,
-                    origin_type="youtube",
-                    value=f"https://www.youtube.com/watch?v={video_id}",
-                    exists=True,
-                    canonical_url=f"https://www.youtube.com/watch?v={video_id}",
-                    video_id=video_id,
-                )
-                cfg = StreamingRunConfig(
-                    model_id=model_id,
-                    model_params={"beam_size": bs, "best_of": 1, "threads": 4, "no_fallback": True},
-                    model_store_root=str(model_store_root),
-                    output_dir=str(tmp.parent),
-                    sample_seconds=5,
-                    chunk_seconds=5,
-                    source_wav_path=str(tmp),
-                )
-                run_streaming_benchmark(source=src, audio_generator=_wav_generator(tmp), config=cfg)
-            except Exception as e:
-                err = str(e)
-                if "timeout" in err.lower() or "zabit" in err.lower():
-                    _set_progress(status_file, f"WARN: beam_size={bs} TIMEOUT na {video_id} — vynecháno z trialu")
-                    all_ok = False
-                    break
-                # Jiná chyba (model path atd.) — nevylučuj, může být jen setup issue
-            finally:
+    # Seskup beam_sizes podle model_id — testujeme každý model zvlášť
+    by_model: dict[str, list[int]] = defaultdict(list)
+    for m_id, bs in model_beam_pairs:
+        by_model[m_id].append(bs)
+
+    for m_id, beam_list in by_model.items():
+        for bs in sorted(beam_list):
+            _set_progress(status_file, f"Validace {m_id} beam_size={bs} (5s test)...")
+            all_ok = True
+            for video_id, wav_path in list(audio_wavs.items())[:2]:  # max 2 videa
+                tmp = Path(tempfile.mktemp(suffix=".wav"))
                 try:
-                    tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                    with wave.open(str(wav_path), "rb") as wf:
+                        sr = wf.getframerate()
+                        raw = wf.readframes(min(5 * sr, wf.getnframes()))
+                        sw = wf.getsampwidth()
+                        nc = wf.getnchannels()
+                    with wave.open(str(tmp), "wb") as wf_out:
+                        wf_out.setnchannels(nc)
+                        wf_out.setsampwidth(sw)
+                        wf_out.setframerate(sr)
+                        wf_out.writeframes(raw)
 
-        if all_ok:
-            validated.add(bs)
-            _set_progress(status_file, f"beam_size={bs} OK")
-        else:
-            _set_progress(status_file, f"beam_size={bs} FAIL — trialy s touto hodnotou budou preskoceny")
+                    from packages.ingest.source_resolver import SourceEntry
+                    src = SourceEntry(
+                        source_id=f"val_{video_id}",
+                        label=video_id,
+                        origin_type="youtube",
+                        value=f"https://www.youtube.com/watch?v={video_id}",
+                        exists=True,
+                        canonical_url=f"https://www.youtube.com/watch?v={video_id}",
+                        video_id=video_id,
+                    )
+                    cfg = StreamingRunConfig(
+                        model_id=m_id,
+                        model_params={"beam_size": bs, "best_of": 1, "threads": 4, "no_fallback": True},
+                        model_store_root=str(model_store_root),
+                        output_dir=str(tmp.parent),
+                        sample_seconds=5,
+                        chunk_seconds=5,
+                        source_wav_path=str(tmp),
+                    )
+                    run_streaming_benchmark(source=src, audio_generator=_wav_generator(tmp), config=cfg)
+                except Exception as e:
+                    err = str(e)
+                    if "timeout" in err.lower() or "zabit" in err.lower():
+                        _set_progress(status_file, f"WARN: {m_id} beam_size={bs} TIMEOUT na {video_id} — vynecháno")
+                        all_ok = False
+                        break
+                    # Jiná chyba (model path atd.) — nevylučuj, může být jen setup issue
+                finally:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+            if all_ok:
+                validated.add((m_id, bs))
+                _set_progress(status_file, f"{m_id} beam_size={bs} OK")
+            else:
+                _set_progress(status_file, f"{m_id} beam_size={bs} FAIL — trialy s touto kombinací budou přeskočeny")
 
     return validated
 
@@ -478,19 +486,25 @@ def main() -> int:
             return 1
 
         # Validace beam_size hodnot před spuštěním trialů — zabrání stovkám timeoutů
-        beam_sizes = {t.get("beam_size") for t in trials if t.get("beam_size") is not None}
-        if beam_sizes:
-            validated_beam_sizes = _validate_beam_sizes(
-                beam_sizes=beam_sizes,
+        # Testujeme per-model: (model_id, beam_size) — beam_size=5 může selhat jen na large_v3, ne na small
+        model_beam_pairs: set[tuple[str, int]] = set()
+        for t in trials:
+            t_model_id = str(t.get("_model_id", model_id))
+            bs = t.get("beam_size")
+            if bs is not None:
+                model_beam_pairs.add((t_model_id, int(bs)))
+
+        if model_beam_pairs:
+            validated_pairs = _validate_beam_sizes(
+                model_beam_pairs=model_beam_pairs,
                 audio_wavs=audio_wavs,
-                model_id=model_id,
                 model_store_root=model_store_root,
                 status_file=status_file,
                 run_streaming_benchmark=run_streaming_benchmark,
                 StreamingRunConfig=StreamingRunConfig,
             )
         else:
-            validated_beam_sizes = None  # žádné beam_size v trialech — validaci přeskoč
+            validated_pairs = None  # žádné beam_size v trialech — validaci přeskoč
 
         for trial_idx, trial_params_raw in enumerate(trials):
             # Kontrola cancel flagu
@@ -504,13 +518,13 @@ def main() -> int:
             chunk_seconds = int(trial_params.pop("_chunk_seconds", trial_params.pop("chunk_seconds", 30)))
             trial_model_id = str(trial_params.pop("_model_id", model_id))  # per-trial model, fallback na job-level
 
-            # Validace: beam_size musí projít pre-flight testem
+            # Validace: (model_id, beam_size) musí projít pre-flight testem
             beam_size = trial_params.get("beam_size", 5)
             best_of = trial_params.get("best_of", 1)
-            if (validated_beam_sizes is not None
+            if (validated_pairs is not None
                     and isinstance(beam_size, int)
-                    and beam_size not in validated_beam_sizes):
-                _set_progress(status_file, f"Trial {trial_idx+1}/{len(trials)}: SKIP — beam_size={beam_size} selhalo při validaci (timeout)")
+                    and (trial_model_id, beam_size) not in validated_pairs):
+                _set_progress(status_file, f"Trial {trial_idx+1}/{len(trials)}: SKIP — {trial_model_id} beam_size={beam_size} selhalo při validaci (timeout)")
                 _append_result(status_file, {
                     "trial_idx": trial_idx,
                     "model_id": trial_model_id,
@@ -520,7 +534,7 @@ def main() -> int:
                     "rtf": None, "latency_ms": None, "source_metrics": [],
                     "transcript": None, "reference_text": None, "word_diff": None,
                     "chunk_metrics": None, "word_count": 0,
-                    "error": f"Přeskočeno: beam_size={beam_size} selhalo při validaci (timeout)",
+                    "error": f"Přeskočeno: {trial_model_id} beam_size={beam_size} selhalo při validaci (timeout)",
                     "is_pareto": False, "rtf_viable": False, "perceived_delay_s": None,
                 })
                 continue
