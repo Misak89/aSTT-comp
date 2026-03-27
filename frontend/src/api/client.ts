@@ -99,6 +99,7 @@ export const api = {
     createJob: (req: unknown) => post<TuningJobStatus>('/tuning/jobs', req),
     listJobs: () => get<TuningJobStatus[]>('/tuning/jobs'),
     getJob: (id: string) => get<TuningJobStatus>(`/tuning/jobs/${id}`),
+    cancelJob: (id: string) => post<TuningJobStatus>(`/tuning/jobs/${id}/cancel`),
     openJobDir: (id: string) => post<{ path: string }>(`/tuning/jobs/${id}/open-dir`),
   },
   mic: {

@@ -20,6 +20,7 @@ class LibraryItem(BaseModel):
     subtitle_files: list[SubtitleFile] = []
     added_at: Optional[str] = None
     upload_date: Optional[str] = None  # datum vydání na YouTube (YYYY-MM-DD)
+    audio_cached: bool = False  # True pokud je full WAV v runtime/audio_cache/
 
 
 class LatestResult(BaseModel):

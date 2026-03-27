@@ -46,7 +46,8 @@ _WORKER = Path(__file__).parent.parent.parent.parent / "scripts" / "benchmark_wo
 DEFAULT_MODELS = [
     {"id": "whisper_cpp_base",      "label": "whisper.cpp base"},
     {"id": "whisper_cpp_small",     "label": "whisper.cpp small"},
-    {"id": "whisper_cpp_large_v3",  "label": "whisper.cpp large-v3"},
+    {"id": "whisper_cpp_large_v3",        "label": "whisper.cpp large-v3"},
+    {"id": "whisper_cpp_large_v3_turbo", "label": "whisper.cpp large-v3-turbo"},
     {"id": "sherpa_onnx_small",     "label": "sherpa-onnx small"},
     {"id": "vosk_small_cs_0_4",     "label": "VOSK small cs-0.4"},
     {"id": "qwen3_asr_0_6b",        "label": "Qwen3-ASR 0.6B"},

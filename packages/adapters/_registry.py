@@ -99,6 +99,24 @@ REGISTRY: dict[str, ModelDescriptor] = {
         ),
 
         ModelDescriptor(
+            model_id="whisper_cpp_large_v3_turbo",
+            label="whisper.cpp large-v3-turbo",
+            adapter="whisper_cpp",
+            languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
+            supports_streaming=False,
+            supports_microphone=False,
+            notes="Rychlá varianta large-v3 (~547 MB q5_0). ~6× rychlejší než large-v3, podobná přesnost. RTF < 1 reálné na CPU.",
+            params=[
+                ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
+                ParamSpec("threads",        "Vlákna CPU",     "int",  4,     "Počet CPU vláken", min=1, max=16),
+                ParamSpec("beam_size",      "Beam size",      "int",  5,     "Větší = přesnější, pomalejší", min=1, max=10),
+                ParamSpec("best_of",        "Best of",        "int",  5,     "Počet kandidátů dekódování", min=1, max=10),
+                ParamSpec("no_fallback",    "Bez fallbacku",  "bool", True,  "Zakáže fallback na menší model"),
+                ParamSpec("initial_prompt", "Počáteční text", "str",  "",    "Kontext pro model"),
+            ],
+        ),
+
+        ModelDescriptor(
             model_id="vosk_small_cs_0_4",
             label="VOSK small cs-0.4",
             adapter="vosk",

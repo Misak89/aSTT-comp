@@ -43,7 +43,7 @@ class StreamingRunConfig:
 def run_streaming_benchmark(
     *,
     source: SourceEntry,
-    audio_generator: Generator[tuple[list[float], int], None, None],
+    audio_generator: Generator[tuple[list[float], int], None, None] | None,
     config: StreamingRunConfig,
 ) -> dict[str, Any]:
     """
@@ -52,6 +52,8 @@ def run_streaming_benchmark(
     Args:
         source: Metadata zdroje (video_id, URL, label).
         audio_generator: Generátor (samples, sample_rate) — z stream_pipe nebo mic.
+            Může být None pro buffered adaptery (whisper_cpp, qwen_asr) pokud je
+            config.source_wav_path nastaven — WAV se čte přímo ze souboru.
         config: Konfigurace modelu a parametrů.
 
     Returns:
@@ -62,6 +64,8 @@ def run_streaming_benchmark(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if adapter in ("vosk", "sherpa_onnx", "moonshine"):
+        if audio_generator is None:
+            raise ValueError(f"audio_generator je povinný pro live-session adapter '{adapter}'")
         return _run_live_session(
             source=source,
             audio_generator=audio_generator,
@@ -69,6 +73,10 @@ def run_streaming_benchmark(
             adapter=adapter,
         )
     elif adapter in ("whisper_cpp", "qwen_asr"):
+        if audio_generator is None and not config.source_wav_path:
+            raise ValueError(
+                f"Pro buffered adapter '{adapter}' musí být zadán audio_generator nebo source_wav_path"
+            )
         return _run_buffered(
             source=source,
             audio_generator=audio_generator,
@@ -154,7 +162,7 @@ def _run_live_session(
 def _run_buffered(
     *,
     source: SourceEntry,
-    audio_generator: Generator[tuple[list[float], int], None, None],
+    audio_generator: Generator[tuple[list[float], int], None, None] | None,
     config: StreamingRunConfig,
     adapter: str,
 ) -> dict[str, Any]:
@@ -329,6 +337,7 @@ def _run_buffered(
         latency_mode="single_batch_replay",
     )
     result["chunk_metrics"] = chunk_metrics
+    result["total_audio_s"] = round(clip_duration, 2)
     if segments:
         result["_segments"] = segments
     return result

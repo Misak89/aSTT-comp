@@ -16,6 +16,8 @@ class TuningJobRequest(BaseModel):
     video_ids: list[str]
     sample_seconds: int = 60
     clip_seed: Optional[int] = None
+    clip_start_seconds: Optional[int] = None  # pevný start pro všechna videa (přepíše clip_seed)
+    evaluation_mode: str = "heuristic"        # heuristic | heuristic+llm
     strategy: str = "grid"          # grid | random | ablation
     max_trials: int = 20            # max pro random search
     param_space: list[TuningParamSpace]  # které params a jaké hodnoty
@@ -31,6 +33,8 @@ class TuningTrialResult(BaseModel):
     wer: Optional[float]
     cer: Optional[float]
     wer_normalized: Optional[float]
+    wer_soft: Optional[float] = None    # WER ignorující drobné záměny (char edit dist < 0.40)
+    wer_llm: Optional[float] = None     # LLM hodnocení — zatím vždy None (vyžaduje Ollamu)
     mer: Optional[float]
     wil: Optional[float]
     rtf: Optional[float]

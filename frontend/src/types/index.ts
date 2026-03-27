@@ -43,6 +43,7 @@ export interface LibraryItem {
   subtitle_files: SubtitleFile[]
   added_at: string | null
   upload_date: string | null
+  audio_cached: boolean
   latest_results?: LatestResult[]
 }
 
@@ -253,6 +254,8 @@ export interface TuningTrialResult {
   wer: number | null
   cer: number | null
   wer_normalized: number | null
+  wer_soft: number | null   // WER ignorující drobné záměny (char edit dist < 0.40)
+  wer_llm: number | null    // LLM hodnocení — zatím vždy null
   mer: number | null
   wil: number | null
   rtf: number | null
@@ -267,7 +270,7 @@ export interface TuningTrialResult {
   elapsed_s: number | null
   total_audio_s: number | null
   word_count: number | null
-  word_diff: { op: string; ref: string | null; hyp: string | null }[] | null
+  word_diff: { op: string; ref: string | null; hyp: string | null; is_soft: boolean }[] | null
   chunk_metrics: { chunk_start_s: number; chunk_end_s: number; rtf: number; processing_s: number }[] | null
 }
 

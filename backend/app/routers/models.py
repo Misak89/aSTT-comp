@@ -96,6 +96,13 @@ def add_note(model_id: str, req: NoteRequest):
     return m
 
 
+@router.post("/open-store")
+def open_store():
+    """Otevře kořenový adresář runtime/model_store/ v průzkumníku."""
+    _open_in_explorer(MODEL_STORE_ROOT)
+    return {"path": str(MODEL_STORE_ROOT)}
+
+
 @router.post("/open-logs-dir")
 def open_logs_dir():
     """Otevře adresář s logy instalací modelů (docs/models/) v průzkumníku."""

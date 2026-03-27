@@ -156,3 +156,46 @@ Memory soubory Claude Code nepotřebují být v git historii.
 | Střední | Přidat qwen3_asr_1_7b junction (4.5 GB) |
 | Nízká | Lazy import recharts |
 | Nízká | Testy pro models router a live endpoint |
+
+---
+
+## Session 2026-03-27 (03:54–13:00 CET)
+
+### Kontext
+Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spuštěn v 03:54 CET, dokončen ~13:00 CET (9 h reálného času).
+
+### Implementováno
+- **WER soft metrika** — `_char_levenshtein` + `_is_soft_sub` (threshold 0.40) v `packages/benchmarks/metrics/text_metrics.py`; `word_error_rate_soft` v `tuning_worker.py`; sloupec v UI
+- **clip_start_seconds** — manuální override startu klipu (vedle clip_seed) v UI i backendu
+- **evaluation_mode** — heuristic / heuristic+llm stub (Ollama zatím ne)
+- **Initial prompt UI oprava** — template picker místo červeného error bloku (Vite nebežel → stale bundle)
+- **Filtry v TuningJobDetail** — threads, "pouze live mic", RAM limit (MODEL_RAM_MB lookup table)
+- **Bug nalezen:** `elapsed_s` měří jen transkripci, ne model loading → odhad jobu 2× příliš krátký
+
+### Analýzy provedené v session
+- Detailní analýza tuning v2: `docs/tuning_analyza_2026-03-27.md`
+- Kompletní data (CSV 160 triálů): `docs/tuning_v2_kompletni_data.md`
+- Meta-kritika analýzy (v konverzaci + shrnutí v memory)
+
+### Klíčové výsledky tuning v2 (tune_20260327_025443_6200bb)
+- `large_v3_turbo` WER=0.1757 vs `small` WER=0.2758 — rozdíl signifikantní (z=4.70)
+- beam=2 zdánlivě nejlepší, ale NENÍ statisticky signifikantní (z=0.07, n=763 slov)
+- no_fallback + best_of: irelevantní parametry (nafouknuly prostor 4×)
+- Všechny triály bez initial_prompt — výsledky nejsou produkční
+- threads=2: large model nepoužitelný (RTF 1.52–2.0); threads≥6: OK (RTF 0.77–0.93)
+- Pareto body: pouze threads=8 konfigurace
+- Per-video WER rozdíl 45%: výsledky nejsou robustní pro beam ranking
+
+### Plán tuning v3 (uložen v memory/tuning_v2_findings.md)
+- Vynechat: no_fallback, best_of
+- Přidat: initial_prompt jako parametr, chunk_seconds {15,30}, RAM měření (psutil)
+- Opravit: model caching mezi triály (ušetří ~4.5 h z 9 h celkového času)
+- Min. 4 videa různých žánrů
+- Cíl: ~128 smysluplných triálů místo 160 redundantních
+
+### Otevřené otázky / TODO
+- [ ] perceived_delay_s — ověřit výpočet (pravděpodobně kumulativní, nenormalizované na délku audia)
+- [ ] Model caching v tuning_worker.py (velký dopad na dobu jobu)
+- [ ] RAM měření per trial
+- [ ] Baseline trial (defaultní parametry) pro srovnání
+- [ ] Tuning v3 spustit s promptem a min. 4 videi

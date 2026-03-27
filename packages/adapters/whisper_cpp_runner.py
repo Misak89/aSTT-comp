@@ -306,8 +306,8 @@ def _build_cmd(
         cmd.extend(["-bo", str(max(1, best_of))])
     if no_fallback:
         cmd.append("-nf")
-    # initial_prompt (-p) disabled: whisper-cli crashes (0xC0000409 STATUS_STACK_BUFFER_OVERRUN)
-    # with ANY non-empty value — 0/203 trials succeeded. Re-enable after binary upgrade.
+    if initial_prompt:
+        cmd.extend(["--prompt", initial_prompt])
     return cmd
 
 

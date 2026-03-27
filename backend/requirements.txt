@@ -1,7 +1,15 @@
-fastapi==0.115.11
-uvicorn==0.34.0
-pydantic==2.10.6
+# Přímé závislosti projektu — přesné verze, bez hashů
+# Lock file s hashi pro všechny (včetně transitivních): backend/requirements.lock
+# Instalace: pip install --require-hashes -r backend/requirements.lock
+# Audit:     pip-audit --path .venv
+# Update:    pip-compile --generate-hashes backend/requirements.txt -o backend/requirements.lock
+
+fastapi==0.135.1
+# starlette explicitně: fastapi<0.116 táhl 0.46.2 (CVE-2025-54121, CVE-2025-62727)
+starlette==0.52.1
+uvicorn==0.42.0
+pydantic==2.12.5
 psutil==7.2.2
 python-multipart==0.0.22
-yt-dlp>=2024.1.1
-vosk>=0.3.45
+yt-dlp==2026.3.17
+vosk==0.3.45

@@ -83,6 +83,15 @@ DEFAULT_MODELS: dict[str, ModelPreset] = {
         diarization_factor=0.81,
         cpu_factor=1.62,
     ),
+    "whisper_cpp_large_v3_turbo": ModelPreset(
+        model_id="whisper_cpp_large_v3_turbo",
+        label="whisper.cpp large-v3-turbo",
+        quality_factor=0.95,
+        speed_factor=1.15,
+        memory_factor=1.50,
+        diarization_factor=0.80,
+        cpu_factor=0.95,
+    ),
     "sherpa_onnx_small": ModelPreset(
         model_id="sherpa_onnx_small",
         label="sherpa-onnx small",

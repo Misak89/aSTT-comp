@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..config import LIBRARY_ROOT, SUBTITLES_ROOT, RESULTS_ROOT, MODEL_STORE_ROOT
+from ..config import LIBRARY_ROOT, SUBTITLES_ROOT, RESULTS_ROOT, MODEL_STORE_ROOT, AUDIO_CACHE_ROOT
 from ..models.library import LibraryItem, SubtitleFile, LatestResult, UpsertLibraryItemRequest
 
 _ITEMS_FILE = LIBRARY_ROOT / "items.json"
@@ -66,6 +66,7 @@ def list_items() -> list[LibraryItem]:
             subtitle_files=subtitle_files,
             added_at=r.get("added_at"),
             upload_date=r.get("upload_date"),
+            audio_cached=(AUDIO_CACHE_ROOT / f"{video_id}.wav").exists(),
         ))
     return result
 
@@ -162,6 +163,54 @@ def _detect_and_save_language(video_id: str, url: str) -> None:
         pass
 
 
+def _download_and_cache_audio(video_id: str, url: str) -> None:
+    """Background: stáhne plné audio videa do runtime/audio_cache/{video_id}.wav.
+    Po úspěšném stažení aktualizuje duration_seconds v items.json ze skutečné délky WAV.
+    """
+    out_path = AUDIO_CACHE_ROOT / f"{video_id}.wav"
+    if out_path.exists():
+        return
+    try:
+        ytdlp_cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--quiet", "--no-playlist",
+            "--format", "bestaudio/best",
+            "-o", "-",
+            url,
+        ]
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0",
+            "-vn", "-ac", "1", "-ar", "16000",
+            str(out_path),
+        ]
+        ytdlp = subprocess.Popen(ytdlp_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        ffmpeg = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=ytdlp.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        ytdlp.stdout.close()  # type: ignore[union-attr]
+        _, ffmpeg_err = ffmpeg.communicate()
+        ytdlp.wait()
+        if ffmpeg.returncode != 0 or not out_path.exists():
+            out_path.unlink(missing_ok=True)
+            return
+        # Přečti skutečnou délku ze WAV a ulož do items.json
+        # (YouTube metadata mohou být nepřesná, WAV je autoritativní zdroj)
+        try:
+            import wave as _wave
+            with _wave.open(str(out_path), "rb") as wf:
+                duration_s = round(wf.getnframes() / max(1, wf.getframerate()), 1)
+            _update_item_fields(video_id, {"duration_seconds": duration_s})
+        except Exception:
+            pass
+    except Exception:
+        out_path.unlink(missing_ok=True)
+
+
 def upsert_item(req: UpsertLibraryItemRequest) -> LibraryItem:
     with _ITEMS_LOCK:
         raw = _load_raw()
@@ -196,6 +245,14 @@ def upsert_item(req: UpsertLibraryItemRequest) -> LibraryItem:
         ).start()
         threading.Thread(
             target=_fetch_and_save_upload_date,
+            args=(req.video_id, req.url),
+            daemon=True,
+        ).start()
+
+    # Background: stažení audio cache (pro nová i existující videa bez audio)
+    if not (AUDIO_CACHE_ROOT / f"{req.video_id}.wav").exists():
+        threading.Thread(
+            target=_download_and_cache_audio,
             args=(req.video_id, req.url),
             daemon=True,
         ).start()

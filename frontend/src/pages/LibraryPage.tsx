@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { LibraryItem, LatestResult, YTSearchResult } from '../types'
 import { WerBadge } from '../components/WerBadge'
+import { videoLabel } from '../utils'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -359,7 +360,7 @@ export function LibraryPage() {
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
   const [showSearch, setShowSearch] = useState(false)
-  const [sortBy, setSortBy] = useState<'title' | 'language' | 'duration' | 'subtitles' | 'added_at' | 'wer'>('added_at')
+  const [sortBy, setSortBy] = useState<'title' | 'language' | 'duration' | 'subtitles' | 'audio' | 'added_at' | 'wer'>('added_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   function handleSort(col: typeof sortBy) {
@@ -374,6 +375,7 @@ export function LibraryPage() {
     else if (sortBy === 'language') { va = a.language; vb = b.language }
     else if (sortBy === 'duration') { va = a.duration_seconds ?? -1; vb = b.duration_seconds ?? -1 }
     else if (sortBy === 'subtitles') { va = a.subtitles_local ? 1 : 0; vb = b.subtitles_local ? 1 : 0 }
+    else if (sortBy === 'audio') { va = a.audio_cached ? 1 : 0; vb = b.audio_cached ? 1 : 0 }
     else if (sortBy === 'added_at') { va = a.upload_date ?? a.added_at ?? ''; vb = b.upload_date ?? b.added_at ?? '' }
     else if (sortBy === 'wer') {
       va = results[a.video_id]?.[0]?.wer ?? 999
@@ -487,6 +489,7 @@ export function LibraryPage() {
                 ['language', 'Jazyk', 'text-left'],
                 ['duration', 'Délka', 'text-left'],
                 ['subtitles', 'Titulky', 'text-left'],
+                ['audio', 'Audio', 'text-left'],
                 ['added_at', 'Datum', 'text-left'],
                 ['wer', 'Nejlepší WER', 'text-left'],
               ] as [typeof sortBy, string, string][]).map(([col, label, align]) => (
@@ -504,7 +507,7 @@ export function LibraryPage() {
                 <tr key={item.video_id}
                   className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer"
                   onClick={() => expand(item)}>
-                  <td className="px-4 py-2 font-medium text-gray-800 max-w-xs truncate">{item.title}</td>
+                  <td className="px-4 py-2 font-medium text-gray-800 max-w-xs truncate" title={item.title}>{videoLabel(item.title, item.video_id)}</td>
                   <td className="px-4 py-2">
                     <LangBadge code={item.language} />
                   </td>
@@ -532,6 +535,11 @@ export function LibraryPage() {
                           className="text-blue-600 underline text-xs">Stáhnout</button>
                       )}
                   </td>
+                  <td className="px-4 py-2">
+                    {item.audio_cached
+                      ? <span className="text-green-600 text-xs font-medium" title="Plné audio staženo v cache">✓ WAV</span>
+                      : <span className="text-gray-300 text-xs" title="Audio se stahuje na pozadí…">⏳</span>}
+                  </td>
                   <td className="px-4 py-2 text-gray-500 text-xs">
                     {item.upload_date
                       ? <span title={`Vydáno: ${item.upload_date}${item.added_at ? `\nPřidáno: ${item.added_at.slice(0, 10)}` : ''}`}>{item.upload_date}</span>
@@ -552,7 +560,7 @@ export function LibraryPage() {
                 {/* Titulky inline */}
                 {subtitleOpen === item.video_id && subtitleContent[item.video_id] && (
                   <tr key={`${item.video_id}-subs`} className="bg-yellow-50">
-                    <td colSpan={7} className="px-6 py-3">
+                    <td colSpan={8} className="px-6 py-3">
                       <p className="text-xs font-semibold text-yellow-700 mb-1">
                         📄 {item.subtitle_files?.[0]?.filename} — {item.subtitle_files?.[0]?.size_bytes
                           ? `${Math.round(item.subtitle_files[0].size_bytes / 1024)} KB`
@@ -568,7 +576,7 @@ export function LibraryPage() {
                 {/* Detail — rozbalené výsledky */}
                 {expanded === item.video_id && (
                   <tr key={`${item.video_id}-detail`} className="bg-blue-50">
-                    <td colSpan={7} className="px-6 py-3">
+                    <td colSpan={8} className="px-6 py-3">
                       <div className="text-xs font-semibold text-gray-600 mb-2">
                         video_id: {item.video_id} &nbsp;|&nbsp;
                         <a href={item.url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
@@ -584,7 +592,7 @@ export function LibraryPage() {
               </>
             ))}
             {items.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Knihovna je prázdná.</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Knihovna je prázdná.</td></tr>
             )}
           </tbody>
         </table>

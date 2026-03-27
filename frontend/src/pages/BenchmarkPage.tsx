@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { api } from '../api/client'
 import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor, RunDetail } from '../types'
+import { videoLabel } from '../utils'
 import { StatusBadge } from '../components/StatusBadge'
 import { LiveJobPanel } from '../components/LiveJobPanel'
 import { MicSession } from '../components/MicSession'
@@ -115,7 +116,7 @@ export function BenchmarkPage() {
                   onChange={() => setSelectedVideos(v => toggleItem(v, item.video_id))} />
                 <span className={`shrink-0 px-1 rounded font-mono font-bold text-xs ${item.language === 'cs' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`} title={item.language === 'cs' ? 'Čeština' : item.language === 'en' ? 'Angličtina' : item.language}>{item.language.toUpperCase()}</span>
                 <span className="truncate" title={item.title}>
-                  {item.title}
+                  {videoLabel(item.title, item.video_id)}
                   {!item.subtitles_local && <span className="text-orange-400 ml-1 text-xs">(bez titulků)</span>}
                 </span>
               </label>
@@ -126,7 +127,11 @@ export function BenchmarkPage() {
 
         {/* Modely */}
         <div className="bg-white rounded border border-gray-200 p-4">
-          <h2 className="font-semibold text-sm mb-3 text-gray-700">Modely</h2>
+          <button
+            className="font-semibold text-sm mb-3 text-gray-700 hover:text-blue-600 hover:underline text-left"
+            title="Otevřít adresář s modely"
+            onClick={() => api.openDir.modelStore().catch(() => {})}
+          >Modely ↗</button>
           <div className="space-y-1">
             {options?.models.map(m => (
               <label key={m.id} className="flex items-center gap-2 text-sm cursor-pointer">

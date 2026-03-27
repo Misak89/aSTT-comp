@@ -144,16 +144,57 @@ def word_information_lost(reference: str, hypothesis: str) -> float:
     return 1.0 - (H / N) * (H / P)
 
 
+def _char_levenshtein(a: str, b: str) -> int:
+    """Znaková Levenshteinova vzdálenost."""
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for ch_a in a:
+        curr = [prev[0] + 1]
+        for j, ch_b in enumerate(b, start=1):
+            curr.append(min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + (0 if ch_a == ch_b else 1)))
+        prev = curr
+    return prev[-1]
+
+
+def _is_soft_sub(ref_word: str, hyp_word: str, threshold: float = 0.40) -> bool:
+    """True pokud je záměna „drobná" — normalizovaná znaková vzdálenost < threshold."""
+    if not ref_word or not hyp_word:
+        return False
+    dist = _char_levenshtein(ref_word, hyp_word) / max(len(ref_word), len(hyp_word))
+    return dist < threshold
+
+
+def word_error_rate_soft(reference: str, hypothesis: str, threshold: float = 0.40) -> float:
+    """WER ignorující drobné záměny (normalizovaná char vzdálenost < threshold)."""
+    ref_tokens = _WORD_RE.findall(normalize_for_wer(reference))
+    hyp_tokens = _WORD_RE.findall(normalize_for_wer(hypothesis))
+    if not ref_tokens:
+        return 0.0 if not hyp_tokens else 1.0
+    ops = _alignment_ops(ref_tokens, hyp_tokens)
+    errors = sum(
+        1 for op, r, h in ops
+        if op != '=' and not (op == 'S' and r and h and _is_soft_sub(r, h, threshold))
+    )
+    return errors / float(len(ref_tokens))
+
+
 def word_diff(reference: str, hypothesis: str) -> list[dict]:
     """
     Word-level alignment pro vizualizaci.
-    Každý prvek: {'op': '='|'S'|'D'|'I', 'ref': str|None, 'hyp': str|None}
-    Vstup je normalizovaný (bez interpunkce, bez tagů).
+    Každý prvek: {'op': '='|'S'|'D'|'I', 'ref': str|None, 'hyp': str|None, 'is_soft': bool}
+    is_soft=True: záměna s nízkou znakovou vzdáleností (drobná chyba, čtenář porozumí).
     """
     ref_tokens = _WORD_RE.findall(normalize_for_wer(reference))
     hyp_tokens = _WORD_RE.findall(normalize_for_wer(hypothesis))
     ops = _alignment_ops(ref_tokens, hyp_tokens)
-    return [{'op': op, 'ref': r, 'hyp': h} for op, r, h in ops]
+    result = []
+    for op, r, h in ops:
+        is_soft = op == 'S' and r is not None and h is not None and _is_soft_sub(r, h)
+        result.append({'op': op, 'ref': r, 'hyp': h, 'is_soft': is_soft})
+    return result
 
 
 def segment_level_wer(

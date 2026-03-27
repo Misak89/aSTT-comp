@@ -6,6 +6,7 @@ import {
 import { api } from '../api/client'
 import type { LibraryItem, ModelDescriptor, TuningJobStatus, TuningTrialResult } from '../types'
 import { WerBadge } from '../components/WerBadge'
+import { videoLabel } from '../utils'
 
 type Strategy = 'grid' | 'ablation' | 'random'
 
@@ -134,6 +135,8 @@ export function TuningPage() {
     return /^[\x00-\x7F]*$/.test(p) ? p : ''
   })
   const [clipSeed, setClipSeed] = useState<number>(cfg.clipSeed ?? 42)
+  const [clipStartSeconds, setClipStartSeconds] = useState<number | null>(cfg.clipStartSeconds ?? null)
+  const [evaluationMode, setEvaluationMode] = useState<'heuristic' | 'heuristic+llm'>(cfg.evaluationMode ?? 'heuristic')
   const [videoSortBy, setVideoSortBy] = useState<'title' | 'language' | 'duration' | 'upload_date'>(
     cfg.videoSortBy ?? 'title'
   )
@@ -164,7 +167,7 @@ export function TuningPage() {
   // Uložit konfiguraci do localStorage při každé změně
   useEffect(() => {
     const cfg = {
-      selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
+      selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, evaluationMode,
       paramValues: Object.fromEntries(
         Object.entries(paramValues).map(([k, v]) => [k, [...v]])
       ),
@@ -172,7 +175,7 @@ export function TuningPage() {
       customPrompt, videoSortBy, videoSortDir,
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
-  }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed,
+  }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, evaluationMode,
       paramValues, selectedPrompts, customPrompt, videoSortBy, videoSortDir])
 
   function toggleParamValue(paramName: string, value: unknown) {
@@ -256,12 +259,14 @@ export function TuningPage() {
         model_ids: selectedModels,
         video_ids: selectedVideos,
         sample_seconds: sampleSeconds,
-        clip_seed: clipSeed,
+        clip_seed: clipStartSeconds != null ? undefined : clipSeed,
+        clip_start_seconds: clipStartSeconds ?? undefined,
         strategy,
         max_trials: maxTrials,
         param_space: paramSpace,
         baseline_params: baseline,
         label: label || undefined,
+        evaluation_mode: evaluationMode,
       })
       setJobs(prev => [job, ...prev])
       setSelectedJob(job)
@@ -347,7 +352,7 @@ export function TuningPage() {
                   title={v.language === 'cs' ? 'Čeština' : v.language === 'en' ? 'Angličtina' : v.language}>
                   {v.language.toUpperCase()}
                 </span>
-                <span className="truncate" title={v.title}>{v.title}</span>
+                <span className="truncate" title={v.title}>{videoLabel(v.title, v.video_id)}</span>
                 {v.upload_date && <span className="shrink-0 text-gray-400">{v.upload_date}</span>}
                 {v.duration_seconds && <span className="shrink-0 text-gray-400">{Math.round(v.duration_seconds)}s</span>}
               </label>
@@ -383,11 +388,23 @@ export function TuningPage() {
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
             <div>
-              <label className="text-xs text-gray-500" title="Seed pro výběr pozice v klipu — stejný seed = stejný úsek">
+              <label className="text-xs text-gray-500" title="Seed pro výběr pozice v klipu — stejný seed = stejný úsek. Ignorováno pokud je nastaven Pevný start.">
                 Clip seed
               </label>
               <input type="number" value={clipSeed} min={0} max={9999}
                 onChange={e => setClipSeed(+e.target.value)}
+                disabled={clipStartSeconds != null}
+                className="border rounded px-2 py-1 text-sm w-20 block mt-0.5 disabled:opacity-40" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500" title="Pevný start klipu v sekundách od začátku videa. Přepíše clip seed. Prázdné = automaticky ze seedu.">
+                Pevný start (s)
+              </label>
+              <input type="number"
+                value={clipStartSeconds ?? ''}
+                min={0}
+                placeholder="auto"
+                onChange={e => setClipStartSeconds(e.target.value === '' ? null : +e.target.value)}
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
             {strategy === 'random' && (
@@ -488,14 +505,107 @@ export function TuningPage() {
           ))}
         </div>
 
-        {/* Initial prompt — zakázáno, binárka crashuje */}
-        <div className="border-t border-gray-100 pt-4">
-          <div className="flex items-center gap-2 mb-1">
+        {/* Initial prompt */}
+        <div className="border-t border-gray-100 pt-4 space-y-3">
+          <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-gray-700">Initial prompt</span>
-            <span className="text-xs text-gray-400">— kontext pro model</span>
+            <span className="text-xs text-gray-400">— kontext pro model (každý vybraný prompt = 1 varianta trialu)</span>
+            <span className="text-xs text-gray-400 ml-auto">{allSelectedPrompts().length} variant{allSelectedPrompts().length === 1 ? 'a' : allSelectedPrompts().length < 5 ? 'y' : ''}</span>
           </div>
-          <div className="rounded bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
-            ✗ Nefunkční s touto binárkou whisper-cli — <code>-p</code> způsobuje crash při jakémkoliv neprázdném promptu (0 z 229 pokusů prošlo). Prompty jsou z tuningu vyřazeny. Oprava vyžaduje upgrade whisper-cli.
+          {PROMPT_LIBRARY.map(group => {
+            const dynamicPrompts = group.id === 'topic_auto'
+              ? selectedVideos.slice(0, 3).map(vid => {
+                  const item = library.find(l => l.video_id === vid)
+                  if (!item) return null
+                  return { label: item.title.slice(0, 30), text: autoPromptFromTitle(item.title) }
+                }).filter(Boolean) as { label: string; text: string }[]
+              : group.prompts
+            if (group.id === 'topic_auto' && dynamicPrompts.length === 0) return null
+            const colorMap: Record<string, string> = {
+              gray: 'border-gray-300 text-gray-600',
+              blue: 'border-blue-300 text-blue-700',
+              violet: 'border-violet-300 text-violet-700',
+              red: 'border-red-300 text-red-700',
+              indigo: 'border-indigo-300 text-indigo-700',
+              green: 'border-green-300 text-green-700',
+              orange: 'border-orange-300 text-orange-700',
+            }
+            const selectedColor: Record<string, string> = {
+              gray: 'bg-gray-600 text-white border-gray-600',
+              blue: 'bg-blue-600 text-white border-blue-600',
+              violet: 'bg-violet-600 text-white border-violet-600',
+              red: 'bg-red-600 text-white border-red-600',
+              indigo: 'bg-indigo-600 text-white border-indigo-600',
+              green: 'bg-green-600 text-white border-green-600',
+              orange: 'bg-orange-600 text-white border-orange-600',
+            }
+            return (
+              <div key={group.id}>
+                <div className="text-xs text-gray-400 mb-1">{group.label}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {dynamicPrompts.map(p => {
+                    const isSelected = selectedPrompts.has(p.text)
+                    return (
+                      <div key={p.text} className="relative group/pt">
+                        <button
+                          onClick={() => togglePrompt(p.text)}
+                          className={`px-2.5 py-1 rounded text-xs border transition-colors ${
+                            isSelected ? selectedColor[group.color] : `bg-white hover:bg-gray-50 ${colorMap[group.color]}`
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                        {p.text && (
+                          <div className="pointer-events-none absolute left-0 top-7 z-20 hidden group-hover/pt:block w-80 bg-gray-900 text-white text-xs rounded px-2.5 py-2 shadow-xl leading-relaxed font-mono break-all">
+                            {p.text}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          <div className="flex items-center gap-2">
+            <input
+              value={customPrompt}
+              onChange={e => setCustomPrompt(e.target.value)}
+              placeholder="Vlastní prompt (ASCII)..."
+              className="border rounded px-2 py-1 text-xs flex-1"
+            />
+            {customPrompt.trim() && (
+              <span className={`text-xs px-2 py-1 rounded border ${selectedPrompts.has(customPrompt.trim()) || allSelectedPrompts().includes(customPrompt.trim()) ? 'text-blue-600' : 'text-gray-400'}`}>
+                {allSelectedPrompts().includes(customPrompt.trim()) ? '✓ v trialu' : 'přidá se automaticky'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Hodnocení */}
+        <div className="border-t border-gray-100 pt-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-gray-700">Hodnocení chyb</span>
+            <div className="flex rounded border border-gray-200 overflow-hidden text-xs ml-2">
+              <button
+                onClick={() => setEvaluationMode('heuristic')}
+                className={`px-3 py-1 transition-colors ${evaluationMode === 'heuristic' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
+                Heuristika
+              </button>
+              <button
+                disabled
+                title="Vyžaduje Ollamu (připraveno, zatím nedostupné)"
+                className="px-3 py-1 bg-white text-gray-300 cursor-not-allowed border-l border-gray-200"
+              >
+                Heuristika + LLM
+              </button>
+            </div>
+            <span className="text-xs text-gray-400">
+              {evaluationMode === 'heuristic'
+                ? '— znaková vzdálenost, práh 0.40'
+                : '— heuristika + Ollama'}
+            </span>
           </div>
         </div>
 
@@ -545,7 +655,7 @@ export function TuningPage() {
       )}
 
       {/* Detail vybraného jobu */}
-      {selectedJob && <TuningJobDetail job={selectedJob} onCancel={async () => {
+      {selectedJob && <TuningJobDetail job={selectedJob} library={library} onCancel={async () => {
         await api.tuning.cancelJob(selectedJob.job_id)
         const cancelled = { ...selectedJob, status: 'cancelled' as const }
         setSelectedJob(cancelled)
@@ -556,14 +666,27 @@ export function TuningPage() {
   )
 }
 
-type SortCol = 'wer' | 'cer' | 'wer_normalized' | 'rtf' | 'rtf_viable' | 'perceived_delay_s' | 'latency_ms' | 'is_pareto'
+type SortCol = 'wer' | 'cer' | 'wer_normalized' | 'wer_soft' | 'rtf' | 'rtf_viable' | 'perceived_delay_s' | 'latency_ms' | 'is_pareto'
 
-function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: () => void }) {
+// Přibližná RAM náročnost modelů (MB) — pro filtr HW limitů
+const MODEL_RAM_MB: Record<string, number> = {
+  'whisper_cpp_tiny':           300,
+  'whisper_cpp_base':           350,
+  'whisper_cpp_small':          600,
+  'whisper_cpp_medium':        1500,
+  'whisper_cpp_large_v3_turbo':1600,
+  'whisper_cpp_large_v3':      3100,
+}
+
+function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; library: LibraryItem[]; onCancel: () => void }) {
   const [expandedTrial, setExpandedTrial] = useState<number | null>(null)
   const [msgAge, setMsgAge] = useState<number>(0)
   const [sortCol, setSortCol] = useState<SortCol>('wer')
   const [sortDir, setSortDir] = useState<1 | -1>(1)
   const [ram, setRam] = useState<{ used: number; total: number; pct: number } | null>(null)
+  const [filterThreads, setFilterThreads] = useState<number | null>(null)
+  const [filterViableOnly, setFilterViableOnly] = useState(false)
+  const [filterRamMb, setFilterRamMb] = useState<string>('')
 
   useEffect(() => {
     if (job.status !== 'running') { setMsgAge(0); return }
@@ -592,7 +715,13 @@ function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: ()
   }
 
   const best = job.best_trial_idx != null ? job.results[job.best_trial_idx] : null
-  const sorted = [...job.results].filter(r => r.wer != null).sort((a, b) => {
+  const ramLimitMb = filterRamMb !== '' ? parseInt(filterRamMb) : null
+  const sorted = [...job.results]
+    .filter(r => r.wer != null)
+    .filter(r => filterThreads == null || (r.params as any).threads === filterThreads)
+    .filter(r => !filterViableOnly || r.rtf_viable)
+    .filter(r => ramLimitMb == null || (MODEL_RAM_MB[r.model_id ?? ''] ?? 0) <= ramLimitMb)
+    .sort((a, b) => {
     const av = (a as any)[sortCol]
     const bv = (b as any)[sortCol]
     if (typeof av === 'boolean' || typeof bv === 'boolean') {
@@ -772,6 +901,64 @@ function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: ()
         </div>
       )}
 
+      {/* Filtry HW */}
+      {job.results.some(r => r.wer != null) && (() => {
+        const threadOptions = [...new Set(
+          job.results.filter(r => r.wer != null).map(r => (r.params as any).threads).filter(Boolean)
+        )].sort((a, b) => a - b) as number[]
+        const modelRams = [...new Set(job.results.map(r => r.model_id).filter(Boolean))]
+          .map(mid => ({ mid: mid!, ram: MODEL_RAM_MB[mid!] }))
+          .filter(x => x.ram)
+        return (
+          <div className="bg-white rounded border border-gray-200 p-3 flex flex-wrap gap-4 items-center text-xs">
+            {/* Vlákna CPU */}
+            {threadOptions.length > 1 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500 whitespace-nowrap">Vlákna CPU:</span>
+                <button onClick={() => setFilterThreads(null)}
+                  className={`px-2 py-0.5 rounded border text-xs ${filterThreads == null ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}>
+                  Vše
+                </button>
+                {threadOptions.map(t => (
+                  <button key={t} onClick={() => setFilterThreads(filterThreads === t ? null : t)}
+                    className={`px-2 py-0.5 rounded border text-xs ${filterThreads === t ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* Live mic only */}
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" checked={filterViableOnly} onChange={e => setFilterViableOnly(e.target.checked)}
+                className="accent-green-600" />
+              <span className="text-gray-600">Pouze live mic (RTF &lt; 1.0)</span>
+            </label>
+            {/* RAM limit */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-500 whitespace-nowrap">Max RAM:</span>
+              <input type="number" value={filterRamMb} onChange={e => setFilterRamMb(e.target.value)}
+                placeholder="bez limitu"
+                className="w-28 border border-gray-300 rounded px-2 py-0.5 text-xs text-gray-700 placeholder-gray-400"
+              />
+              <span className="text-gray-400">MB</span>
+              {modelRams.length > 0 && (
+                <span className="text-gray-400 ml-1">
+                  ({modelRams.map(x => `${x.mid!.replace('whisper_cpp_','')} ~${x.ram} MB`).join(', ')})
+                </span>
+              )}
+            </div>
+            {/* Reset */}
+            {(filterThreads != null || filterViableOnly || filterRamMb !== '') && (
+              <button onClick={() => { setFilterThreads(null); setFilterViableOnly(false); setFilterRamMb('') }}
+                className="text-gray-400 hover:text-gray-700 text-xs underline">
+                reset filtrů
+              </button>
+            )}
+            <span className="ml-auto text-gray-400">{sorted.length} / {job.results.filter(r => r.wer != null).length} triálů</span>
+          </div>
+        )
+      })()}
+
       {/* Tabulka výsledků */}
       {sorted.length > 0 && (
         <div className="bg-white rounded border border-gray-200 overflow-x-auto">
@@ -781,7 +968,7 @@ function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: ()
                 <th className="px-3 py-2 text-center">#</th>
                 {job.model_ids?.length > 1 && <th className="px-3 py-2 text-left">Model</th>}
                 <th className="px-3 py-2 text-left">Parametry</th>
-                {([ ['wer','WER'], ['cer','CER'], ['wer_normalized','WER norm.'], ['rtf','RTF'],
+                {([ ['wer','WER'], ['wer_soft','WER soft'], ['cer','CER'], ['wer_normalized','WER norm.'], ['rtf','RTF'],
                     ['rtf_viable','Live mic'], ['perceived_delay_s','Zpoždění'], ['latency_ms','Latence'], ['is_pareto','Pareto']
                 ] as [SortCol, string][]).map(([col, label], i) => (
                   <th key={i} onClick={() => toggleSort(col)}
@@ -822,6 +1009,9 @@ function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: ()
                         <span className="ml-1 text-orange-500 text-xs" title={`Částečný výsledek — trial selhal: ${r.error}`}>⚠</span>
                       )}
                     </td>
+                    <td className="px-3 py-2 text-center" title="WER ignorující drobné záměny (znaková vzdálenost &lt; 0.40)">
+                      <WerBadge value={r.wer_soft} label="" />
+                    </td>
                     <td className="px-3 py-2 text-center"><WerBadge value={r.cer} label="" /></td>
                     <td className="px-3 py-2 text-center"><WerBadge value={r.wer_normalized} label="" /></td>
                     <td className="px-3 py-2 text-center font-mono">
@@ -857,6 +1047,16 @@ function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: ()
                           {/* Statistiky */}
                           <div className="flex flex-wrap gap-4 text-gray-600 bg-white border border-gray-200 rounded px-3 py-2">
                             <span>WER: <strong>{r.wer != null ? (r.wer*100).toFixed(1)+'%' : '–'}</strong></span>
+                            <span title="WER ignorující drobné záměny (znaková vzdálenost &lt; 0.40)">
+                              WER soft: <strong className={r.wer_soft != null && r.wer != null && r.wer_soft < r.wer ? 'text-green-700' : ''}>
+                                {r.wer_soft != null ? (r.wer_soft*100).toFixed(1)+'%' : '–'}
+                              </strong>
+                              {r.wer != null && r.wer_soft != null && r.wer_soft < r.wer && (
+                                <span className="text-xs text-gray-400 ml-1">
+                                  ({((r.wer - r.wer_soft)*100).toFixed(1)} % drobných)
+                                </span>
+                              )}
+                            </span>
                             <span>CER: <strong>{r.cer != null ? (r.cer*100).toFixed(1)+'%' : '–'}</strong></span>
                             <span>WER norm: <strong>{r.wer_normalized != null ? (r.wer_normalized*100).toFixed(1)+'%' : '–'}</strong></span>
                             <span>MER: <strong>{r.mer != null ? (r.mer*100).toFixed(1)+'%' : '–'}</strong></span>
@@ -882,7 +1082,9 @@ function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: ()
                               <div className="flex flex-wrap gap-2">
                                 {r.source_metrics.map(sm => (
                                   <div key={sm.video_id} className={`border rounded px-2 py-1 font-mono text-center ${sm.error ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-white'}`}>
-                                    <div className="text-gray-500 text-xs truncate max-w-28">{sm.video_id}</div>
+                                    <div className="text-gray-500 text-xs truncate max-w-28" title={sm.video_id}>
+                                      {videoLabel(library.find(v => v.video_id === sm.video_id)?.title ?? sm.video_id, sm.video_id)}
+                                    </div>
                                     {sm.error
                                       ? <div className="text-red-600 text-xs">chyba</div>
                                       : <>
@@ -904,17 +1106,34 @@ function TuningJobDetail({ job, onCancel }: { job: TuningJobStatus; onCancel: ()
                               <div className="bg-white border border-gray-200 rounded p-2 leading-6 max-h-48 overflow-y-auto">
                                 {r.word_diff.map((d, i) => {
                                   const op = d.op
-                                  if (op === '=' || op === 'equal') return <span key={i} className="text-gray-700">{d.hyp} </span>
-                                  if (op === 'S' || op === 'replace') return <span key={i}><span className="bg-yellow-100 text-yellow-800 rounded px-0.5">{d.hyp}</span><span className="bg-gray-100 text-gray-400 line-through rounded px-0.5 ml-0.5 text-xs">{d.ref}</span> </span>
-                                  if (op === 'I' || op === 'insert') return <span key={i} className="bg-red-100 text-red-700 rounded px-0.5 line-through">{d.hyp} </span>
-                                  if (op === 'D' || op === 'delete') return <span key={i} className="bg-blue-100 text-blue-700 rounded px-0.5">[{d.ref}] </span>
+                                  if (op === '=' || op === 'equal')
+                                    return <span key={i} className="text-gray-700">{d.hyp} </span>
+                                  if (op === 'S' || op === 'replace') {
+                                    const isSoft = d.is_soft
+                                    return (
+                                      <span key={i}>
+                                        <span className={isSoft
+                                          ? 'bg-yellow-100 text-yellow-700 rounded px-0.5'
+                                          : 'bg-red-100 text-red-700 rounded px-0.5 font-semibold'}
+                                          title={isSoft ? `Drobná záměna: "${d.ref}" → "${d.hyp}"` : `Záměna: "${d.ref}" → "${d.hyp}"`}>
+                                          {d.hyp}
+                                        </span>
+                                        <span className="bg-gray-100 text-gray-400 line-through rounded px-0.5 ml-0.5 text-xs">{d.ref}</span>{' '}
+                                      </span>
+                                    )
+                                  }
+                                  if (op === 'I' || op === 'insert')
+                                    return <span key={i} className="bg-gray-100 text-gray-500 rounded px-0.5 line-through">{d.hyp} </span>
+                                  if (op === 'D' || op === 'delete')
+                                    return <span key={i} className="bg-red-200 text-red-800 rounded px-0.5 font-semibold">[{d.ref}] </span>
                                   return null
                                 })}
                               </div>
-                              <div className="flex gap-3 mt-1 text-gray-400">
-                                <span><span className="bg-yellow-100 text-yellow-800 rounded px-1">slovo</span> záměna</span>
-                                <span><span className="bg-red-100 text-red-700 rounded px-1 line-through">slovo</span> přebývá</span>
-                                <span><span className="bg-blue-100 text-blue-700 rounded px-1">[slovo]</span> chybí</span>
+                              <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-400">
+                                <span><span className="bg-red-100 text-red-700 rounded px-1 font-semibold">slovo</span> záměna (skutečná)</span>
+                                <span><span className="bg-yellow-100 text-yellow-700 rounded px-1">slovo</span> záměna (drobná)</span>
+                                <span><span className="bg-red-200 text-red-800 rounded px-1 font-semibold">[slovo]</span> chybí</span>
+                                <span><span className="bg-gray-100 text-gray-500 rounded px-1 line-through">slovo</span> přebývá</span>
                               </div>
                             </div>
                           )}

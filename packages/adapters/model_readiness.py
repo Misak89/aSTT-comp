@@ -69,6 +69,7 @@ def collect_model_readiness(
         _check_whisper_base(root, whisper_bin),
         _check_whisper_small(root, whisper_bin),
         _check_whisper_large_v3(root, whisper_bin),
+        _check_whisper_large_v3_turbo(root, whisper_bin),
         _check_sherpa(root, checker),
         _check_vosk_small_cs(root, checker),
         _check_qwen_0_6b(root, checker),
@@ -184,6 +185,36 @@ def _check_whisper_large_v3(model_store_root: Path, whisper_bin: str | None) -> 
         live_streaming=False,
         live_block_reason="whisper.cpp CLI je dávkový režim; první text přichází až po uzavření chunku.",
         live_notes=["Vhodné pro benchmark/batch (vyšší kvalita), ne pro skutečný online přepis mikrofonu."],
+    )
+
+
+def _check_whisper_large_v3_turbo(model_store_root: Path, whisper_bin: str | None) -> ModelCheckResult:
+    model_dir = model_store_root / "whisper_cpp_large_v3_turbo"
+    model_file = resolve_whisper_model_file(model_store_root, "whisper_cpp_large_v3_turbo")
+    model_present = model_file is not None
+    runtime_ready = bool(whisper_bin)
+    issues: list[str] = []
+
+    if not model_present:
+        issues.append(f"Missing model file under: {model_dir}")
+        issues.append("Download: ggml-large-v3-turbo-q5_0.bin from huggingface.co/ggerganov/whisper.cpp")
+    if not runtime_ready:
+        issues.append("Missing whisper runtime. Set WHISPER_CPP_BIN or install whisper-cli/main executable.")
+    return ModelCheckResult(
+        model_id="whisper_cpp_large_v3_turbo",
+        label="whisper.cpp large-v3-turbo",
+        model_present=model_present,
+        runtime_ready=runtime_ready,
+        adapter_implemented=True,
+        ready_for_real=model_present and runtime_ready,
+        ready_for_synthetic=model_present,
+        model_path=str(model_file or (model_dir / "ggml-large-v3-turbo-q5_0.bin")),
+        runtime_hint=whisper_bin or "Install whisper-cli (GitHub release) or set WHISPER_CPP_BIN",
+        issues=issues,
+        ready_for_live=False,
+        live_streaming=False,
+        live_block_reason="whisper.cpp CLI je dávkový režim; první text přichází až po uzavření chunku.",
+        live_notes=["~6× rychlejší než large-v3, RTF < 1 reálné na CPU."],
     )
 
 

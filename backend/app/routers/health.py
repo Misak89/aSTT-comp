@@ -6,4 +6,15 @@ router = APIRouter()
 
 @router.get("/api/health")
 def health():
-    return {"status": "ok", "utc": datetime.now(timezone.utc).isoformat()}
+    ram = {}
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        ram = {
+            "ram_total_mb": round(vm.total / 1024**2),
+            "ram_used_mb": round(vm.used / 1024**2),
+            "ram_percent": vm.percent,
+        }
+    except Exception:
+        pass
+    return {"status": "ok", "utc": datetime.now(timezone.utc).isoformat(), **ram}

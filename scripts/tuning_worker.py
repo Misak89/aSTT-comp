@@ -222,18 +222,6 @@ def _predownload_audio(
     return wav_path
 
 
-def _wav_generator(wav_path: Path):
-    """Generátor který přečte WAV a vrátí ho jako jeden chunk."""
-    import wave
-    from array import array as _array
-
-    with wave.open(str(wav_path), "rb") as wf:
-        sr = wf.getframerate()
-        raw = wf.readframes(wf.getnframes())
-    samples_int = _array("h", raw)
-    samples_float = [s / 32768.0 for s in samples_int]
-    yield samples_float, sr
-
 
 def _run_one_video(
     video_id: str,
@@ -251,7 +239,7 @@ def _run_one_video(
     StreamingRunConfig,
     extract_vtt_clip_text,
     word_error_rate, char_error_rate,
-    word_error_rate_normalized, match_error_rate, word_information_lost, word_diff,
+    word_error_rate_normalized, word_error_rate_soft, match_error_rate, word_information_lost, word_diff,
     progress_cb,
     source_wav_path: str | None = None,
 ) -> dict:
@@ -281,7 +269,7 @@ def _run_one_video(
     )
     result = run_streaming_benchmark(
         source=source,
-        audio_generator=_wav_generator(audio_wav),
+        audio_generator=None,  # WAV jde přímo přes source_wav_path — generator zbytečný
         config=run_config,
     )
 
@@ -303,12 +291,13 @@ def _run_one_video(
         subtitles_root=subtitles_root,
     )
 
-    wer = cer = wer_norm = mer = wil = None
+    wer = cer = wer_norm = wer_soft = mer = wil = None
     wdiff = None
     if ref_text and transcript:
         wer = word_error_rate(ref_text, transcript)
         cer = char_error_rate(ref_text, transcript)
         wer_norm = word_error_rate_normalized(ref_text, transcript)
+        wer_soft = word_error_rate_soft(ref_text, transcript)
         mer = match_error_rate(ref_text, transcript)
         wil = word_information_lost(ref_text, transcript)
         try:
@@ -321,11 +310,12 @@ def _run_one_video(
         "wer": round(wer, 4) if wer is not None else None,
         "cer": round(cer, 4) if cer is not None else None,
         "wer_normalized": round(wer_norm, 4) if wer_norm is not None else None,
+        "wer_soft": round(wer_soft, 4) if wer_soft is not None else None,
         "mer": round(mer, 4) if mer is not None else None,
         "wil": round(wil, 4) if wil is not None else None,
         "rtf": result.get("rtf"),
         "latency_ms": result.get("latency_ms"),
-        "elapsed_s": result.get("elapsed_s"),
+        "elapsed_s": result.get("engine_elapsed_seconds"),
         "total_audio_s": result.get("total_audio_s"),
         "word_count": len(transcript.split()) if transcript else 0,
         "transcript": transcript[:3000] if transcript else None,
@@ -404,7 +394,7 @@ def _validate_beam_sizes(
                         chunk_seconds=5,
                         source_wav_path=str(tmp),
                     )
-                    run_streaming_benchmark(source=src, audio_generator=_wav_generator(tmp), config=cfg)
+                    run_streaming_benchmark(source=src, audio_generator=None, config=cfg)
                 except Exception as e:
                     err = str(e)
                     if "timeout" in err.lower() or "zabit" in err.lower():
@@ -453,13 +443,20 @@ def main() -> int:
     video_ids: list[str] = config["video_ids"]
     sample_seconds: int = config["sample_seconds"]
     clip_seed: int | None = config.get("clip_seed")
+    clip_start_seconds: int | None = config.get("clip_start_seconds")
+    evaluation_mode: str = config.get("evaluation_mode", "heuristic")
+    if evaluation_mode == "heuristic+llm":
+        print("[tuning_worker] evaluation_mode=heuristic+llm — LLM hodnocení zatím není implementováno, používám heuristiku", flush=True)
     subtitles_root = Path(config["subtitles_root"])
     model_store_root = Path(config["model_store_root"])
     audio_cache_dir: Path | None = Path(config["audio_cache_dir"]) if config.get("audio_cache_dir") else None
     items_json = subtitles_root.parent / "items.json"
 
     # Pre-compute clip_start per video — stejný offset pro všechny trialy (férovné srovnání)
-    clip_starts = _compute_clip_starts(video_ids, sample_seconds, clip_seed, items_json)
+    if clip_start_seconds is not None:
+        clip_starts = {vid: float(clip_start_seconds) for vid in video_ids}
+    else:
+        clip_starts = _compute_clip_starts(video_ids, sample_seconds, clip_seed, items_json)
 
     if not video_ids:
         _update_status(status_file, {"status": "failed", "error": "Žádná video_ids v konfiguraci"})
@@ -472,7 +469,7 @@ def main() -> int:
         from packages.ingest.youtube.stream_pipe import stream_youtube_audio
         from packages.benchmarks.metrics.text_metrics import (
             word_error_rate, char_error_rate,
-            word_error_rate_normalized, match_error_rate, word_information_lost,
+            word_error_rate_normalized, word_error_rate_soft, match_error_rate, word_information_lost,
             word_diff,
         )
         from packages.benchmarks.ground_truth.vtt_reference import extract_vtt_clip_text
@@ -546,7 +543,7 @@ def main() -> int:
                     "model_id": trial_model_id,
                     "params": {**trial_params, "chunk_seconds": chunk_seconds},
                     "chunk_seconds": chunk_seconds,
-                    "wer": None, "cer": None, "wer_normalized": None, "mer": None, "wil": None,
+                    "wer": None, "cer": None, "wer_normalized": None, "wer_soft": None, "mer": None, "wil": None,
                     "rtf": None, "latency_ms": None, "source_metrics": [],
                     "transcript": None, "reference_text": None, "word_diff": None,
                     "chunk_metrics": None, "word_count": 0,
@@ -562,7 +559,7 @@ def main() -> int:
                     "trial_idx": trial_idx,
                     "params": {**trial_params, "chunk_seconds": chunk_seconds},
                     "chunk_seconds": chunk_seconds,
-                    "wer": None, "cer": None, "wer_normalized": None, "mer": None, "wil": None,
+                    "wer": None, "cer": None, "wer_normalized": None, "wer_soft": None, "mer": None, "wil": None,
                     "rtf": None, "latency_ms": None, "source_metrics": [],
                     "transcript": None, "reference_text": None, "word_diff": None,
                     "chunk_metrics": None, "word_count": 0,
@@ -606,6 +603,7 @@ def main() -> int:
                         word_error_rate=word_error_rate,
                         char_error_rate=char_error_rate,
                         word_error_rate_normalized=word_error_rate_normalized,
+                        word_error_rate_soft=word_error_rate_soft,
                         match_error_rate=match_error_rate,
                         word_information_lost=word_information_lost,
                         word_diff=word_diff,
@@ -644,10 +642,13 @@ def main() -> int:
                 "wer": avg_wer,
                 "cer": _avg([m.get("cer") for m in source_metrics if not m.get("error")]),
                 "wer_normalized": _avg([m.get("wer_normalized") for m in source_metrics if not m.get("error")]),
+                "wer_soft": _avg([m.get("wer_soft") for m in source_metrics if not m.get("error")]),
                 "mer": _avg([m.get("mer") for m in source_metrics if not m.get("error")]),
                 "wil": _avg([m.get("wil") for m in source_metrics if not m.get("error")]),
                 "rtf": avg_rtf,
                 "latency_ms": _avg([m.get("latency_ms") for m in source_metrics if not m.get("error")]),
+                "elapsed_s": _avg([m.get("elapsed_s") for m in source_metrics if not m.get("error")]),
+                "total_audio_s": _avg([m.get("total_audio_s") for m in source_metrics if not m.get("error")]),
                 "perceived_delay_s": perceived_delay_s,
                 # Detail per video
                 "source_metrics": source_metrics,
