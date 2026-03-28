@@ -1,5 +1,7 @@
 # Tuning v4: inteligentni strategie (online mic, CZ)
 
+Navazujici detailni roadmapa: `docs/tuning_v4_implementacni_plan.md` (tasky `v4.1` az `v4.6`).
+
 ## Cil
 - Vybrat model + parametry pro realny online prepis pres mikrofon na starsim kancelarskem HW.
 - Minimalizovat cas hledani proti plnemu brute-force gridu.
