@@ -2,7 +2,12 @@
 import subprocess
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from ..models.tuning import TuningJobRequest, TuningJobStatus
+from ..models.tuning import (
+    TuningJobRequest,
+    TuningJobStatus,
+    TuningMicCalibrationCheckRequest,
+    TuningMicCalibrationCheckResponse,
+)
 from ..services import tuning_service
 from ..services.tuning_decision import get_job_decision_report
 from ..config import TUNING_ROOT
@@ -12,7 +17,19 @@ router = APIRouter(prefix="/api/tuning")
 
 @router.post("/jobs", response_model=TuningJobStatus, status_code=202)
 def create_tuning_job(req: TuningJobRequest):
-    return tuning_service.create_job(req)
+    try:
+        return tuning_service.create_job(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/mic-calibration/check", response_model=TuningMicCalibrationCheckResponse)
+def check_mic_calibration(req: TuningMicCalibrationCheckRequest):
+    return tuning_service.evaluate_mic_calibration(
+        rms_dbfs=req.rms_dbfs,
+        clipping_rate_pct=req.clipping_rate_pct,
+        noise_floor_dbfs=req.noise_floor_dbfs,
+    )
 
 
 @router.get("/jobs", response_model=list[TuningJobStatus])

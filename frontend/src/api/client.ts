@@ -3,6 +3,7 @@ import type {
   BenchmarkOptions, Scenario, RunDetail, LiveJobProgress, ModelStatus,
   ModelDescriptor, MicSessionState, AudioDevice, TuningJobStatus, YTSearchResult,
   TuningDecisionReport,
+  TuningMicCalibrationCheckResponse,
   WebAppAutostartStatus,
 } from '../types'
 
@@ -107,6 +108,8 @@ export const api = {
     createJob: (req: unknown) => post<TuningJobStatus>('/tuning/jobs', req),
     listJobs: () => get<TuningJobStatus[]>('/tuning/jobs'),
     getJob: (id: string) => get<TuningJobStatus>(`/tuning/jobs/${id}`),
+    checkMicCalibration: (metrics: { rms_dbfs: number; clipping_rate_pct: number; noise_floor_dbfs: number }) =>
+      post<TuningMicCalibrationCheckResponse>('/tuning/mic-calibration/check', metrics),
     decisionReport: (id: string, opts?: { min_success_rate?: number; max_rtf?: number; allow_proxy?: boolean; require_repro_n?: number; top?: number }) => {
       const q = new URLSearchParams()
       if (opts?.min_success_rate != null) q.set('min_success_rate', String(opts.min_success_rate))

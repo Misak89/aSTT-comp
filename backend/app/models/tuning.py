@@ -10,9 +10,42 @@ class TuningParamSpace(BaseModel):
     values: list  # seznam hodnot k vyzkoušení
 
 
+class TuningMicProtocol(BaseModel):
+    """Povinný protokol pro real mic režim."""
+    distance_cm: float = Field(ge=1, le=300)
+    phone_volume_pct: float = Field(ge=0, le=100)
+    input_gain_pct: float = Field(ge=0, le=100)
+    environment: str = "quiet"  # quiet | office_noise
+    device_note: Optional[str] = None
+
+
+class TuningMicCalibration(BaseModel):
+    """Výsledek kalibrace zvuku před real mic během."""
+    rms_dbfs: float
+    clipping_rate_pct: float = Field(ge=0, le=100)
+    noise_floor_dbfs: float
+    passed: bool = False
+    checked_at: Optional[str] = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class TuningMicCalibrationCheckRequest(BaseModel):
+    rms_dbfs: float
+    clipping_rate_pct: float = Field(ge=0, le=100)
+    noise_floor_dbfs: float
+
+
+class TuningMicCalibrationCheckResponse(BaseModel):
+    passed: bool
+    reasons: list[str] = Field(default_factory=list)
+    thresholds: dict = Field(default_factory=dict)
+    metrics: dict = Field(default_factory=dict)
+
+
 class TuningJobRequest(BaseModel):
     model_id: str = ""              # backward compat — použij model_ids místo toho
     model_ids: list[str] = Field(default_factory=list)       # více modelů najednou (nové pole)
+    input_mode: str = "replay"      # replay | real_mic
     video_ids: list[str]
     sample_seconds: int = 60
     clip_seed: Optional[int] = None
@@ -36,6 +69,8 @@ class TuningJobRequest(BaseModel):
     baseline_params: dict = Field(default_factory=dict)      # výchozí hodnoty (zbytek fixní)
     label: Optional[str] = None
     validate_beam_preflight: bool = True
+    mic_protocol: Optional[TuningMicProtocol] = None
+    mic_calibration: Optional[TuningMicCalibration] = None
 
 
 class TuningTrialResult(BaseModel):
@@ -113,6 +148,7 @@ class TuningJobStatus(BaseModel):
     status: str                     # pending | running | completed | failed
     model_id: str = ""              # backward compat — první z model_ids
     model_ids: list[str] = Field(default_factory=list)       # všechny modely v tomto jobu
+    input_mode: str = "replay"
     label: Optional[str]
     hardware_profile: Optional[str] = None
     hardware_note: Optional[str] = None
@@ -133,6 +169,8 @@ class TuningJobStatus(BaseModel):
     load_ram_target_pct: Optional[float] = None
     created_at: str
     validate_beam_preflight: bool = True
+    mic_protocol: Optional[TuningMicProtocol] = None
+    mic_calibration: Optional[TuningMicCalibration] = None
     total_trials: int
     completed_trials: int
     results: list[TuningTrialResult] = Field(default_factory=list)

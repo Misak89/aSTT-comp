@@ -4,7 +4,15 @@ import {
   ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts'
 import { api } from '../api/client'
-import type { LibraryItem, ModelDescriptor, TuningDecisionReport, TuningJobStatus, TuningTrialResult } from '../types'
+import type {
+  LibraryItem,
+  ModelDescriptor,
+  TuningDecisionReport,
+  TuningInputMode,
+  TuningJobStatus,
+  TuningMicCalibrationCheckResponse,
+  TuningTrialResult,
+} from '../types'
 import { WerBadge } from '../components/WerBadge'
 import { videoLabel } from '../utils'
 
@@ -310,6 +318,19 @@ export function TuningPage() {
   const [repeatTopK, setRepeatTopK] = useState<number>(cfg.repeatTopK ?? 0)
   const [repeatRuns, setRepeatRuns] = useState<number>(cfg.repeatRuns ?? 1)
   const [evaluationMode, setEvaluationMode] = useState<'heuristic' | 'heuristic+llm'>(cfg.evaluationMode ?? 'heuristic')
+  const [inputMode, setInputMode] = useState<TuningInputMode>(cfg.inputMode ?? 'replay')
+  const [micDistanceCm, setMicDistanceCm] = useState<number>(cfg.micDistanceCm ?? 30)
+  const [micPhoneVolumePct, setMicPhoneVolumePct] = useState<number>(cfg.micPhoneVolumePct ?? 70)
+  const [micInputGainPct, setMicInputGainPct] = useState<number>(cfg.micInputGainPct ?? 70)
+  const [micEnvironment, setMicEnvironment] = useState<'quiet' | 'office_noise'>(cfg.micEnvironment ?? 'quiet')
+  const [micDeviceNote, setMicDeviceNote] = useState<string>(cfg.micDeviceNote ?? '')
+  const [micChecklistConfirmed, setMicChecklistConfirmed] = useState<boolean>(cfg.micChecklistConfirmed ?? false)
+  const [calibrationRmsDbfs, setCalibrationRmsDbfs] = useState<number>(cfg.calibrationRmsDbfs ?? -18)
+  const [calibrationClippingPct, setCalibrationClippingPct] = useState<number>(cfg.calibrationClippingPct ?? 0.0)
+  const [calibrationNoiseFloorDbfs, setCalibrationNoiseFloorDbfs] = useState<number>(cfg.calibrationNoiseFloorDbfs ?? -50)
+  const [calibrationResult, setCalibrationResult] = useState<TuningMicCalibrationCheckResponse | null>(cfg.calibrationResult ?? null)
+  const [calibrationCheckedAt, setCalibrationCheckedAt] = useState<string | null>(cfg.calibrationCheckedAt ?? null)
+  const [checkingCalibration, setCheckingCalibration] = useState<boolean>(false)
   const [videoSortBy, setVideoSortBy] = useState<'title' | 'language' | 'duration' | 'upload_date'>(
     cfg.videoSortBy ?? 'title'
   )
@@ -362,6 +383,9 @@ export function TuningPage() {
   useEffect(() => {
     const cfg = {
       selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode,
+      inputMode,
+      micDistanceCm, micPhoneVolumePct, micInputGainPct, micEnvironment, micDeviceNote, micChecklistConfirmed,
+      calibrationRmsDbfs, calibrationClippingPct, calibrationNoiseFloorDbfs, calibrationResult, calibrationCheckedAt,
       hardwareProfile, hardwareNote,
       constraintsProfile, constraintsCpuCores, constraintsRamLimitMb, constraintsPriority,
       loadProfile, loadCpuTargetPct, loadRamTargetPct,
@@ -373,7 +397,10 @@ export function TuningPage() {
       customPrompt, videoSortBy, videoSortDir,
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
-  }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode, hardwareProfile, hardwareNote,
+  }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode,
+      inputMode, micDistanceCm, micPhoneVolumePct, micInputGainPct, micEnvironment, micDeviceNote, micChecklistConfirmed,
+      calibrationRmsDbfs, calibrationClippingPct, calibrationNoiseFloorDbfs, calibrationResult, calibrationCheckedAt,
+      hardwareProfile, hardwareNote,
       constraintsProfile, constraintsCpuCores, constraintsRamLimitMb, constraintsPriority,
       loadProfile, loadCpuTargetPct, loadRamTargetPct,
       validateBeamPreflight,
@@ -464,9 +491,44 @@ export function TuningPage() {
     return (maxTrials * modelCount) + repeatExtraFactor
   }
 
+  async function checkMicCalibration() {
+    setCheckingCalibration(true)
+    try {
+      const res = await api.tuning.checkMicCalibration({
+        rms_dbfs: calibrationRmsDbfs,
+        clipping_rate_pct: calibrationClippingPct,
+        noise_floor_dbfs: calibrationNoiseFloorDbfs,
+      })
+      setCalibrationResult(res)
+      setCalibrationCheckedAt(new Date().toISOString())
+      if (res.passed) {
+        setMsg('Kalibrace PASS.')
+      } else {
+        const firstReason = res.reasons[0] ?? 'Kalibrace neprošla.'
+        setMsg(`Kalibrace FAIL: ${firstReason}`)
+      }
+    } catch (e: any) {
+      setCalibrationResult(null)
+      setCalibrationCheckedAt(null)
+      setMsg(`Kalibrace chyba: ${e.message}`)
+    } finally {
+      setCheckingCalibration(false)
+    }
+  }
+
   async function startTuning() {
     if (!selectedModels.length) { setMsg('Vyber alespoň jeden model.'); return }
     if (!selectedVideos.length) { setMsg('Vyber alespoň jedno video.'); return }
+    if (inputMode === 'real_mic') {
+      if (!micChecklistConfirmed) {
+        setMsg('Real mic: potvrď checklist protokolu před startem.')
+        return
+      }
+      if (!calibrationResult?.passed) {
+        setMsg('Real mic: kalibrace není PASS. Klikni na "Ověřit kalibraci".')
+        return
+      }
+    }
     const noFallbackSet = paramValues['no_fallback'] ?? new Set<unknown>([true])
     const bestOfVals = [...(paramValues['best_of'] ?? new Set<unknown>([1]))].map(v => Number(v)).filter(v => Number.isFinite(v))
     const onlyNoFallbackTrue = noFallbackSet.has(true) && !noFallbackSet.has(false)
@@ -512,6 +574,7 @@ export function TuningPage() {
       const resolvedLoad = resolveLoadTargets()
       const job = await api.tuning.createJob({
         model_ids: modelIdsForJob,
+        input_mode: inputMode,
         video_ids: selectedVideos,
         sample_seconds: sampleSeconds,
         clip_seed: clipStartSeconds != null ? undefined : clipSeed,
@@ -535,6 +598,21 @@ export function TuningPage() {
         validate_beam_preflight: validateBeamPreflight,
         label: label || undefined,
         evaluation_mode: evaluationMode,
+        mic_protocol: inputMode === 'real_mic' ? {
+          distance_cm: Math.max(1, Math.min(300, micDistanceCm)),
+          phone_volume_pct: Math.max(0, Math.min(100, micPhoneVolumePct)),
+          input_gain_pct: Math.max(0, Math.min(100, micInputGainPct)),
+          environment: micEnvironment,
+          device_note: micDeviceNote.trim() || undefined,
+        } : undefined,
+        mic_calibration: inputMode === 'real_mic' ? {
+          rms_dbfs: calibrationRmsDbfs,
+          clipping_rate_pct: calibrationClippingPct,
+          noise_floor_dbfs: calibrationNoiseFloorDbfs,
+          passed: !!calibrationResult?.passed,
+          checked_at: calibrationCheckedAt ?? new Date().toISOString(),
+          reasons: calibrationResult?.reasons ?? [],
+        } : undefined,
       })
       setJobs(prev => [job, ...prev])
       setSelectedJob(job)
@@ -758,6 +836,155 @@ export function TuningPage() {
               ))}
             </div>
           </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Vstupní režim</label>
+            <div className="flex rounded border border-gray-200 overflow-hidden text-xs w-fit">
+              <button
+                type="button"
+                onClick={() => setInputMode('replay')}
+                className={`px-3 py-1 transition-colors ${inputMode === 'replay' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
+                Replay
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode('real_mic')}
+                className={`px-3 py-1 transition-colors border-l border-gray-200 ${inputMode === 'real_mic' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
+                Real mic
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400">
+              Replay = tuning z videí. Real mic = vyžaduje protokol + kalibraci.
+            </p>
+          </div>
+          {inputMode === 'real_mic' && (
+            <div className="border border-blue-200 bg-blue-50 rounded p-3 space-y-3">
+              <div className="text-xs font-medium text-blue-900">Real mic protokol</div>
+              <div className="flex gap-2 flex-wrap text-xs">
+                <div>
+                  <label className="text-gray-600">Vzdálenost (cm)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    value={micDistanceCm}
+                    onChange={e => setMicDistanceCm(Math.max(1, Math.min(300, +e.target.value || 1)))}
+                    className="border rounded px-2 py-1 w-24 block mt-0.5"
+                  />
+                </div>
+                <div>
+                  <label className="text-gray-600">Hlasitost mobilu (%)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={micPhoneVolumePct}
+                    onChange={e => setMicPhoneVolumePct(Math.max(0, Math.min(100, +e.target.value || 0)))}
+                    className="border rounded px-2 py-1 w-28 block mt-0.5"
+                  />
+                </div>
+                <div>
+                  <label className="text-gray-600">Input gain (%)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={micInputGainPct}
+                    onChange={e => setMicInputGainPct(Math.max(0, Math.min(100, +e.target.value || 0)))}
+                    className="border rounded px-2 py-1 w-24 block mt-0.5"
+                  />
+                </div>
+                <div>
+                  <label className="text-gray-600">Prostředí</label>
+                  <select
+                    value={micEnvironment}
+                    onChange={e => setMicEnvironment(e.target.value as 'quiet' | 'office_noise')}
+                    className="border rounded px-2 py-1 w-32 block mt-0.5"
+                  >
+                    <option value="quiet">quiet</option>
+                    <option value="office_noise">office_noise</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-600">Poznámka zařízení</label>
+                <input
+                  value={micDeviceNote}
+                  onChange={e => setMicDeviceNote(e.target.value)}
+                  placeholder="např. ntb mic + Samsung S23"
+                  className="border rounded px-2 py-1 text-xs w-full mt-0.5"
+                />
+              </div>
+              <div className="border-t border-blue-100 pt-2 space-y-2">
+                <div className="text-xs font-medium text-blue-900">Kalibrace</div>
+                <div className="flex gap-2 flex-wrap text-xs">
+                  <div>
+                    <label className="text-gray-600">RMS (dBFS)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={calibrationRmsDbfs}
+                      onChange={e => setCalibrationRmsDbfs(+e.target.value)}
+                      className="border rounded px-2 py-1 w-24 block mt-0.5"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-600">Clipping (%)</label>
+                    <input
+                      type="number"
+                      step="0.001"
+                      min={0}
+                      max={100}
+                      value={calibrationClippingPct}
+                      onChange={e => setCalibrationClippingPct(Math.max(0, Math.min(100, +e.target.value || 0)))}
+                      className="border rounded px-2 py-1 w-24 block mt-0.5"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-600">Noise floor (dBFS)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={calibrationNoiseFloorDbfs}
+                      onChange={e => setCalibrationNoiseFloorDbfs(+e.target.value)}
+                      className="border rounded px-2 py-1 w-28 block mt-0.5"
+                    />
+                  </div>
+                  <div className="pt-5">
+                    <button
+                      type="button"
+                      onClick={checkMicCalibration}
+                      disabled={checkingCalibration}
+                      className="px-3 py-1 rounded border border-blue-300 text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+                    >
+                      {checkingCalibration ? 'Ověřuji...' : 'Ověřit kalibraci'}
+                    </button>
+                  </div>
+                </div>
+                {calibrationResult && (
+                  <div className={`text-xs rounded px-2 py-1 ${calibrationResult.passed ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                    {calibrationResult.passed ? 'PASS' : 'FAIL'}
+                    {!calibrationResult.passed && calibrationResult.reasons.length > 0 && (
+                      <span className="ml-2">{calibrationResult.reasons[0]}</span>
+                    )}
+                    {calibrationCheckedAt && <span className="ml-2 text-[11px] text-gray-600">({formatClockHHMMSS(calibrationCheckedAt)})</span>}
+                  </div>
+                )}
+                <label className="inline-flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={micChecklistConfirmed}
+                    onChange={e => setMicChecklistConfirmed(e.target.checked)}
+                  />
+                  Potvrzuji stejnou vzdálenost, hlasitost a prostředí pro všechny trialy.
+                </label>
+              </div>
+              <p className="text-[11px] text-blue-900">
+                Pozn.: real_mic tuning worker bude aktivován v dalším kroku; nyní je zde validace protokolu/kalibrace.
+              </p>
+            </div>
+          )}
           <div className="flex gap-3 flex-wrap">
             <div>
               <label className="text-xs text-gray-500">Délka klipu (s)</label>
@@ -1230,6 +1457,15 @@ export function TuningPage() {
                   </span>
                   <span className="text-gray-700 truncate">{j.label || j.model_id}</span>
                   <span className="flex items-center gap-1 flex-wrap">
+                    {j.input_mode && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${
+                        j.input_mode === 'real_mic'
+                          ? 'border-emerald-300 text-emerald-700'
+                          : 'border-gray-300 text-gray-600'
+                      }`}>
+                        {j.input_mode}
+                      </span>
+                    )}
                     {j.hardware_profile && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 font-mono">
                         {j.hardware_profile}
@@ -1483,6 +1719,15 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
           {(job.status === 'running' || job.status === 'pending') && etaJobS != null && (
             <span className="text-xs text-gray-600 font-mono">
               ⌛ Odhad zbývá: ~{formatElapsedShort(etaJobS)}
+            </span>
+          )}
+          {job.input_mode && (
+            <span className={`text-xs px-2 py-0.5 rounded border font-mono ${
+              job.input_mode === 'real_mic'
+                ? 'border-emerald-300 text-emerald-700'
+                : 'border-gray-300 text-gray-700'
+            }`}>
+              {job.input_mode}
             </span>
           )}
           {job.hardware_profile && (

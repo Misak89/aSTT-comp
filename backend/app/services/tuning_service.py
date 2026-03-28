@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import TUNING_ROOT, ROOT
-from ..models.tuning import TuningJobStatus, TuningTrialResult, TuningJobRequest
+from ..models.tuning import (
+    TuningJobStatus,
+    TuningTrialResult,
+    TuningJobRequest,
+    TuningMicCalibration,
+    TuningMicCalibrationCheckResponse,
+)
 
 try:
     import psutil
@@ -35,10 +41,52 @@ LOAD_PROFILE_DEFAULTS: dict[str, tuple[float, float]] = {
     "medium": (45.0, 55.0),
     "heavy": (65.0, 75.0),
 }
+MIC_CALIBRATION_THRESHOLDS = {
+    "rms_min_dbfs": -24.0,
+    "rms_max_dbfs": -12.0,
+    "clipping_max_pct": 0.1,
+    "noise_floor_max_dbfs": -38.0,
+}
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def evaluate_mic_calibration(
+    *,
+    rms_dbfs: float,
+    clipping_rate_pct: float,
+    noise_floor_dbfs: float,
+) -> TuningMicCalibrationCheckResponse:
+    reasons: list[str] = []
+    t = MIC_CALIBRATION_THRESHOLDS
+
+    rms = float(rms_dbfs)
+    clipping = float(clipping_rate_pct)
+    noise_floor = float(noise_floor_dbfs)
+
+    if rms < float(t["rms_min_dbfs"]):
+        reasons.append(f"RMS je příliš nízko ({rms:.2f} dBFS < {t['rms_min_dbfs']:.2f}).")
+    if rms > float(t["rms_max_dbfs"]):
+        reasons.append(f"RMS je příliš vysoko ({rms:.2f} dBFS > {t['rms_max_dbfs']:.2f}).")
+    if clipping > float(t["clipping_max_pct"]):
+        reasons.append(f"Clipping je příliš vysoký ({clipping:.3f}% > {t['clipping_max_pct']:.3f}%).")
+    if noise_floor > float(t["noise_floor_max_dbfs"]):
+        reasons.append(
+            f"Noise floor je příliš vysoký ({noise_floor:.2f} dBFS > {t['noise_floor_max_dbfs']:.2f} dBFS)."
+        )
+
+    return TuningMicCalibrationCheckResponse(
+        passed=len(reasons) == 0,
+        reasons=reasons,
+        thresholds=dict(MIC_CALIBRATION_THRESHOLDS),
+        metrics={
+            "rms_dbfs": rms,
+            "clipping_rate_pct": clipping,
+            "noise_floor_dbfs": noise_floor,
+        },
+    )
 
 
 def _job_dir(job_id: str) -> Path:
@@ -161,6 +209,32 @@ def _detect_hardware_info() -> dict:
 
 
 def create_job(req: TuningJobRequest) -> TuningJobStatus:
+    input_mode = (req.input_mode or "replay").strip().lower()
+    if input_mode not in {"replay", "real_mic"}:
+        raise ValueError("input_mode musí být 'replay' nebo 'real_mic'.")
+
+    if input_mode == "real_mic":
+        if req.mic_protocol is None:
+            raise ValueError("Pro real_mic režim chybí mic_protocol.")
+        environment = (req.mic_protocol.environment or "").strip().lower()
+        if environment not in {"quiet", "office_noise"}:
+            raise ValueError("mic_protocol.environment musí být 'quiet' nebo 'office_noise'.")
+        if req.mic_calibration is None:
+            raise ValueError("Pro real_mic režim chybí mic_calibration.")
+        calibration_check = evaluate_mic_calibration(
+            rms_dbfs=req.mic_calibration.rms_dbfs,
+            clipping_rate_pct=req.mic_calibration.clipping_rate_pct,
+            noise_floor_dbfs=req.mic_calibration.noise_floor_dbfs,
+        )
+        if not req.mic_calibration.passed or not calibration_check.passed:
+            details = "; ".join(calibration_check.reasons) if calibration_check.reasons else "kalibrace neprošla."
+            raise ValueError(f"Kalibrace real_mic režimu neprošla: {details}")
+        # Worker pipeline je zatím replay-only; zabráníme zavádějícím výsledkům.
+        raise ValueError(
+            "real_mic tuning job zatím není implementovaný v tuning_workeru. "
+            "Použij Benchmark > Mikrofon pro live test; real_mic tuning pipeline bude v dalším kroku."
+        )
+
     job_id = f"tune_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     job_dir = _job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -195,6 +269,7 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         "job_id": job_id,
         "model_id": effective_model_ids[0] if effective_model_ids else "",  # backward compat
         "model_ids": effective_model_ids,
+        "input_mode": input_mode,
         "video_ids": req.video_ids,
         "sample_seconds": req.sample_seconds,
         "clip_seed": req.clip_seed,
@@ -213,6 +288,8 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         "load_cpu_target_pct": load_cpu_target_pct,
         "load_ram_target_pct": load_ram_target_pct,
         "validate_beam_preflight": bool(req.validate_beam_preflight),
+        "mic_protocol": req.mic_protocol.model_dump() if req.mic_protocol else None,
+        "mic_calibration": req.mic_calibration.model_dump() if req.mic_calibration else None,
         "repeat_top_k": repeat_top_k,
         "repeat_runs": repeat_runs,
         "baseline_params": req.baseline_params,
@@ -230,6 +307,7 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         status="pending",
         model_id=effective_model_ids[0] if effective_model_ids else "",
         model_ids=effective_model_ids,
+        input_mode=input_mode,
         label=req.label,
         hardware_profile=hardware_profile,
         hardware_note=hardware_note,
@@ -245,6 +323,8 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         load_cpu_target_pct=load_cpu_target_pct,
         load_ram_target_pct=load_ram_target_pct,
         validate_beam_preflight=bool(req.validate_beam_preflight),
+        mic_protocol=req.mic_protocol,
+        mic_calibration=req.mic_calibration,
         created_at=_now(),
         total_trials=planned_total_trials,
         completed_trials=0,

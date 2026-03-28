@@ -414,11 +414,38 @@ export interface TuningDecisionReport {
   error: string | null
 }
 
+export type TuningInputMode = 'replay' | 'real_mic'
+
+export interface TuningMicProtocol {
+  distance_cm: number
+  phone_volume_pct: number
+  input_gain_pct: number
+  environment: 'quiet' | 'office_noise'
+  device_note?: string | null
+}
+
+export interface TuningMicCalibration {
+  rms_dbfs: number
+  clipping_rate_pct: number
+  noise_floor_dbfs: number
+  passed: boolean
+  checked_at?: string | null
+  reasons?: string[]
+}
+
+export interface TuningMicCalibrationCheckResponse {
+  passed: boolean
+  reasons: string[]
+  thresholds: Record<string, number>
+  metrics: Record<string, number>
+}
+
 export interface TuningJobStatus {
   job_id: string
   status: string
   model_id: string
   model_ids: string[]
+  input_mode?: TuningInputMode
   label: string | null
   hardware_profile?: string | null
   hardware_note?: string | null
@@ -438,6 +465,8 @@ export interface TuningJobStatus {
   load_cpu_target_pct?: number | null
   load_ram_target_pct?: number | null
   validate_beam_preflight?: boolean
+  mic_protocol?: TuningMicProtocol | null
+  mic_calibration?: TuningMicCalibration | null
   created_at: string
   total_trials: number
   completed_trials: number
