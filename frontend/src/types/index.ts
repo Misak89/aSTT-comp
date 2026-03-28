@@ -91,6 +91,16 @@ export interface MicSessionState {
   status: 'idle' | 'recording' | 'stopped'
   transcript: string
   first_word_latency_ms: number | null
+  first_token_ms_p50?: number | null
+  first_token_ms_p95?: number | null
+  segment_finalize_ms_p50?: number | null
+  segment_finalize_ms_p95?: number | null
+  drop_rate?: number | null
+  session_resets?: number | null
+  worker_rss_peak_mb?: number | null
+  chunk_count?: number | null
+  dropped_chunks?: number | null
+  reason_code?: string | null
   elapsed_s: number
   rtf: number
   total_audio_s: number

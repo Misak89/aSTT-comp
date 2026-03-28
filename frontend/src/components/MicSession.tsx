@@ -23,6 +23,16 @@ interface Props {
 
 type Status = 'idle' | 'connecting' | 'recording' | 'stopping' | 'done' | 'error'
 
+type MicMetrics = {
+  latency_ms?: number
+  rtf?: number
+  elapsed_s?: number
+  segment_finalize_ms_p95?: number
+  drop_rate?: number
+  worker_rss_peak_mb?: number
+  reason_code?: string | null
+}
+
 const WS_BASE = `ws://${window.location.host}`
 const SAMPLE_RATE = 16000
 
@@ -31,7 +41,7 @@ export function MicSession({ availableModels }: Props) {
   const [params, setParams] = useState<Record<string, unknown>>({})
   const [status, setStatus] = useState<Status>('idle')
   const [transcript, setTranscript] = useState('')
-  const [metrics, setMetrics] = useState<{ latency_ms?: number; rtf?: number; elapsed_s?: number } | null>(null)
+  const [metrics, setMetrics] = useState<MicMetrics | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [devices, setDevices] = useState<AudioDevice[]>([])
   const [deviceIndex, setDeviceIndex] = useState<number | null>(null)
@@ -78,11 +88,15 @@ export function MicSession({ availableModels }: Props) {
               latency_ms: msg.first_word_latency_ms,
               rtf: msg.rtf,
               elapsed_s: msg.elapsed_s,
+              segment_finalize_ms_p95: msg.segment_finalize_ms_p95,
+              drop_rate: msg.drop_rate,
+              worker_rss_peak_mb: msg.worker_rss_peak_mb,
+              reason_code: msg.reason_code,
             })
             setStatus('done')
             _stopAudio()
           } else if (msg.error) {
-            setError(msg.error)
+            setError(msg.reason_code ? `${msg.error} (${msg.reason_code})` : msg.error)
             setStatus('error')
             _stopAudio()
           }
@@ -287,6 +301,18 @@ export function MicSession({ availableModels }: Props) {
           )}
           {metrics.elapsed_s != null && (
             <span>Čas: <strong>{metrics.elapsed_s.toFixed(1)} s</strong></span>
+          )}
+          {metrics.segment_finalize_ms_p95 != null && (
+            <span>P95 finalize: <strong>{Math.round(metrics.segment_finalize_ms_p95)} ms</strong></span>
+          )}
+          {metrics.drop_rate != null && (
+            <span>Drop: <strong>{(metrics.drop_rate * 100).toFixed(2)} %</strong></span>
+          )}
+          {metrics.worker_rss_peak_mb != null && (
+            <span>RSS peak: <strong>{Math.round(metrics.worker_rss_peak_mb)} MB</strong></span>
+          )}
+          {metrics.reason_code && (
+            <span className="text-yellow-300">Reason: <strong>{metrics.reason_code}</strong></span>
           )}
         </div>
       )}
