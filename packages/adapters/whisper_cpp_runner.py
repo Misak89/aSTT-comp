@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import threading
 import time
 from typing import Any
+import urllib.error
+import urllib.request
+import uuid
 
 from packages.ingest.source_resolver import SourceEntry
 
@@ -29,6 +34,54 @@ class WhisperRunConfig:
     best_of: int | None = None
     no_fallback: bool = True
     initial_prompt: str | None = None
+    use_server_cache: bool = False
+
+
+@dataclass
+class _WhisperServerRuntime:
+    process: subprocess.Popen
+    port: int
+    proc_handle: Any
+
+
+_SERVER_CACHE: dict[tuple[str, str, str, int], _WhisperServerRuntime] = {}
+_SERVER_CACHE_LOCK = threading.Lock()
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
+def _compute_timeout_seconds(*, sample_seconds: int, model_path: str | Path | None = None) -> int:
+    """Spočítá timeout pro whisper-cli/server s možností řízení přes env."""
+    factor = max(1.0, _env_float("ASTT_WHISPER_TIMEOUT_FACTOR", 3.0))
+    floor_s = max(30, _env_int("ASTT_WHISPER_TIMEOUT_MIN_S", 120))
+    ceil_s = max(floor_s, _env_int("ASTT_WHISPER_TIMEOUT_MAX_S", 900))
+
+    timeout_s = int(max(floor_s, max(1, int(sample_seconds)) * factor))
+
+    model_tag = str(model_path or "").lower()
+    if "large-v3" in model_tag or "large_v3" in model_tag:
+        large_floor = max(floor_s, _env_int("ASTT_WHISPER_TIMEOUT_LARGE_MIN_S", 240))
+        timeout_s = max(timeout_s, large_floor)
+
+    return int(min(timeout_s, ceil_s))
 
 
 def run_whisper_source(
@@ -49,6 +102,19 @@ def run_whisper_source(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     base = out_dir / f"{source.source_id}_whisper"
+
+    if config.use_server_cache:
+        try:
+            return _run_whisper_source_server(
+                source=source,
+                sample_seconds=sample_seconds,
+                start_offset_seconds=start_offset_seconds,
+                output_dir=out_dir,
+                config=config,
+            )
+        except Exception as exc:
+            # Fallback na CLI path, aby tuning neselhal pokud server není dostupný.
+            print(f"WARN: whisper-server cache fallback to CLI ({exc})")
 
     effective_audio_path = audio_path
     effective_offset_seconds = int(max(0, start_offset_seconds))
@@ -98,8 +164,10 @@ def run_whisper_source(
         except Exception:
             proc_handle = None
 
-    # Timeout: max 3× délka audia nebo 120s — aby whisper nepřeběhl donekonečna
-    timeout_s = max(120, sample_seconds * 3)
+    timeout_s = _compute_timeout_seconds(
+        sample_seconds=sample_seconds,
+        model_path=config.model_path,
+    )
 
     # Sbírání psutil metrik v separátním vlákně — bez busy-loop v hlavním vlákně
     _stop_monitor = threading.Event()
@@ -201,6 +269,316 @@ def run_whisper_source(
         "stderr_tail": stderr_text[-500:] if stderr_text else "",
     }
     return record
+
+
+def _run_whisper_source_server(
+    *,
+    source: SourceEntry,
+    sample_seconds: int,
+    start_offset_seconds: int,
+    output_dir: Path,
+    config: WhisperRunConfig,
+) -> dict[str, Any]:
+    audio_path = Path(source.value)
+    base = output_dir / f"{source.source_id}_whisper"
+    effective_offset_seconds = int(max(0, start_offset_seconds))
+    effective_audio_path = audio_path
+    cleanup_paths: list[Path] = []
+
+    # whisper-server endpoint nebere offset/duration parametry stejně jako CLI,
+    # proto si vynutíme přesný vstupní klip při offsetu nebo potenciálně delším vstupu.
+    needs_clip = effective_offset_seconds > 0 or audio_path.suffix.lower() != ".wav"
+    if audio_path.suffix.lower() == ".wav":
+        duration = _audio_duration_seconds(audio_path)
+        if duration is not None and duration > float(sample_seconds) + 0.25:
+            needs_clip = True
+
+    if needs_clip:
+        clipped = output_dir / f"{source.source_id}_server_input.wav"
+        _transcode_for_whisper(
+            input_path=audio_path,
+            output_path=clipped,
+            start_offset_seconds=effective_offset_seconds,
+            sample_seconds=sample_seconds,
+        )
+        effective_audio_path = clipped
+        cleanup_paths.append(clipped)
+        effective_offset_seconds = 0
+
+    runtime = _get_or_start_cached_server(config=config)
+
+    started = datetime.now(UTC)
+    started_perf = time.perf_counter()
+    cpu_before = rss_before = None
+    if runtime.proc_handle is not None:
+        try:
+            c = runtime.proc_handle.cpu_times()
+            cpu_before = float(c.user + c.system)
+            rss_before = runtime.proc_handle.memory_info().rss / (1024 * 1024)
+        except Exception:
+            cpu_before = rss_before = None
+
+    payload = _post_server_inference(
+        port=runtime.port,
+        audio_path=effective_audio_path,
+        timeout_s=_compute_timeout_seconds(
+            sample_seconds=sample_seconds,
+            model_path=config.model_path,
+        ),
+    )
+    elapsed_s = max(0.001, time.perf_counter() - started_perf)
+
+    cpu_percent = None
+    peak_rss_mb = rss_before if isinstance(rss_before, (int, float)) else 0.0
+    if runtime.proc_handle is not None:
+        try:
+            c = runtime.proc_handle.cpu_times()
+            cpu_after = float(c.user + c.system)
+            rss_after = runtime.proc_handle.memory_info().rss / (1024 * 1024)
+            peak_rss_mb = max(float(peak_rss_mb), float(rss_after))
+            if cpu_before is not None:
+                cpu_count = max(1, os.cpu_count() or 1)
+                cpu_percent = min(100.0, ((cpu_after - cpu_before) / elapsed_s) * 100.0 / cpu_count)
+        except Exception:
+            pass
+
+    segments = payload.get("transcription", []) if isinstance(payload, dict) else []
+    transcript_text = ""
+    if isinstance(payload, dict):
+        text_val = payload.get("text")
+        if isinstance(text_val, str):
+            transcript_text = text_val.strip()
+    if not transcript_text and isinstance(segments, list):
+        transcript_text = "\n".join(str(item.get("text", "")).strip() for item in segments if isinstance(item, dict) and item.get("text"))
+
+    json_path = Path(f"{base}.json")
+    txt_path = Path(f"{base}.txt")
+    json_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    txt_path.write_text(transcript_text + ("\n" if transcript_text else ""), encoding="utf-8")
+
+    first_offset_ms = _first_segment_offset_ms(segments)
+    effective_audio_s = _effective_audio_seconds(effective_audio_path, sample_seconds)
+    rtf = elapsed_s / max(0.1, effective_audio_s)
+    latency_ms = int(elapsed_s * 1000)
+
+    record = {
+        "source_id": source.source_id,
+        "source_label": source.label,
+        "origin_type": source.origin_type,
+        "sample_seconds": sample_seconds,
+        "clip_start_seconds": int(max(0, start_offset_seconds)),
+        "source_media_path": str(audio_path),
+        "effective_input_path": str(effective_audio_path),
+        "wer": None,
+        "cer": None,
+        "latency_ms": round(float(latency_ms), 1),
+        "first_word_latency_ms": None,
+        "first_word_wall_ms": None,
+        "first_word_audio_ms": round(float(first_offset_ms), 1) if isinstance(first_offset_ms, (int, float)) else None,
+        "rtf": round(float(rtf), 4),
+        "cpu_percent": round(cpu_percent, 1) if isinstance(cpu_percent, (int, float)) else None,
+        "ram_mb": round(float(peak_rss_mb), 1) if peak_rss_mb > 0 else None,
+        "speaker_attribution_accuracy": None,
+        "speaker_confusion_rate": None,
+        "transcript_text": transcript_text,
+        "transcript_path": str(txt_path),
+        "json_path": str(json_path),
+        "_segments": segments,
+        "engine": "whisper_cpp",
+        "engine_started_at_utc": started.isoformat(),
+        "engine_elapsed_seconds": round(elapsed_s, 4),
+        "latency_mode": "offline_elapsed_proxy_ms",
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "model_cached": True,
+    }
+
+    for p in cleanup_paths:
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return record
+
+
+def resolve_whisper_server(
+    model_store_root: str | Path = ".runtime/model_store",
+    whisper_bin: str | None = None,
+) -> str | None:
+    env_server = os.environ.get("WHISPER_CPP_SERVER_BIN")
+    if env_server:
+        p = Path(env_server)
+        if p.exists():
+            return str(p)
+
+    if whisper_bin:
+        wb = Path(whisper_bin)
+        sibling_candidates = [
+            wb.with_name("whisper-server.exe"),
+            wb.with_name("whisper-server"),
+            wb.with_name("server.exe"),
+            wb.with_name("server"),
+        ]
+        for c in sibling_candidates:
+            if c.exists():
+                return str(c)
+
+    root = Path(model_store_root)
+    candidates = [
+        root / "whisper_cpp_runtime" / "whisper-bin-x64" / "Release" / "whisper-server.exe",
+        root / "whisper_cpp_runtime" / "whisper-bin-x64" / "Release" / "whisper-server",
+        root / "whisper_cpp_runtime" / "whisper-bin-x64" / "Release" / "server.exe",
+        root / "whisper_cpp_runtime" / "whisper-bin-x64" / "Release" / "server",
+        root / "whisper_cpp" / "whisper-server.exe",
+        root / "whisper_cpp" / "whisper-server",
+        root / "whisper_cpp" / "server.exe",
+        root / "whisper_cpp" / "server",
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+
+    for name in ["whisper-server.exe", "whisper-server", "server.exe", "server"]:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _post_server_inference(*, port: int, audio_path: Path, timeout_s: int) -> dict[str, Any]:
+    boundary = f"----astt-{uuid.uuid4().hex}"
+    crlf = b"\r\n"
+    body_parts: list[bytes] = []
+
+    def _add_field(name: str, value: str) -> None:
+        body_parts.append(f"--{boundary}".encode("utf-8"))
+        body_parts.append(f'Content-Disposition: form-data; name="{name}"'.encode("utf-8"))
+        body_parts.append(b"")
+        body_parts.append(str(value).encode("utf-8"))
+
+    _add_field("temperature", "0.0")
+    _add_field("response_format", "json")
+
+    file_name = audio_path.name
+    file_bytes = audio_path.read_bytes()
+    body_parts.append(f"--{boundary}".encode("utf-8"))
+    body_parts.append(
+        f'Content-Disposition: form-data; name="file"; filename="{file_name}"'.encode("utf-8")
+    )
+    body_parts.append(b"Content-Type: audio/wav")
+    body_parts.append(b"")
+    body_parts.append(file_bytes)
+    body_parts.append(f"--{boundary}--".encode("utf-8"))
+    body_parts.append(b"")
+    body = crlf.join(body_parts)
+
+    req = urllib.request.Request(
+        url=f"http://127.0.0.1:{port}/inference",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+        raise RuntimeError(f"whisper-server inference HTTP {exc.code}: {detail[:300]}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"whisper-server inference failed: {exc}") from exc
+
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {"text": raw}
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _wait_server_ready(port: int, timeout_s: int = 30) -> None:
+    deadline = time.perf_counter() + timeout_s
+    while time.perf_counter() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1.5) as resp:
+                if getattr(resp, "status", 200) == 200:
+                    return
+        except Exception:
+            time.sleep(0.4)
+    raise RuntimeError(f"whisper-server startup timeout on port {port}")
+
+
+def _get_or_start_cached_server(*, config: WhisperRunConfig) -> _WhisperServerRuntime:
+    model_store_root = Path(config.model_path).parents[1] if len(Path(config.model_path).parents) >= 2 else Path(".runtime/model_store")
+    server_bin = resolve_whisper_server(model_store_root=model_store_root, whisper_bin=config.whisper_bin)
+    if not server_bin:
+        raise RuntimeError("whisper-server binary nenalezen")
+
+    key = (str(server_bin), str(config.model_path), str(config.language), int(max(1, config.threads)))
+    with _SERVER_CACHE_LOCK:
+        cached = _SERVER_CACHE.get(key)
+        if cached and cached.process.poll() is None:
+            return cached
+
+        port = _find_free_port()
+        proc = subprocess.Popen(
+            [
+                server_bin,
+                "-m",
+                config.model_path,
+                "-l",
+                str(config.language),
+                "-t",
+                str(max(1, config.threads)),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        try:
+            _wait_server_ready(port, timeout_s=30)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise
+
+        proc_handle = None
+        if psutil is not None:
+            try:
+                proc_handle = psutil.Process(proc.pid)
+            except Exception:
+                proc_handle = None
+        runtime = _WhisperServerRuntime(process=proc, port=port, proc_handle=proc_handle)
+        _SERVER_CACHE[key] = runtime
+        return runtime
+
+
+def _shutdown_cached_servers() -> None:
+    with _SERVER_CACHE_LOCK:
+        items = list(_SERVER_CACHE.values())
+        _SERVER_CACHE.clear()
+    for runtime in items:
+        try:
+            runtime.process.kill()
+        except Exception:
+            pass
+
+
+atexit.register(_shutdown_cached_servers)
 
 
 def resolve_whisper_cli(model_store_root: str | Path = ".runtime/model_store") -> str | None:
@@ -340,6 +718,21 @@ def _effective_audio_seconds(audio_path: Path, sample_seconds: int) -> float:
         except Exception:
             pass
     return max(0.1, float(sample_seconds))
+
+
+def _audio_duration_seconds(audio_path: Path) -> float | None:
+    if audio_path.suffix.lower() != ".wav":
+        return None
+    try:
+        import wave
+        with wave.open(str(audio_path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if frames > 0 and rate > 0:
+                return frames / float(rate)
+    except Exception:
+        return None
+    return None
 
 
 def _needs_transcode_for_whisper(path: Path) -> bool:

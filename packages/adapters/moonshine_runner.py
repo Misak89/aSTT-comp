@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from packages.common.network_access import ensure_online_allowed
 from packages.ingest.source_resolver import SourceEntry
 
 try:
@@ -304,6 +305,13 @@ def _load_moonshine_transcriber(config: MoonshineRunConfig):
         transcriber = Transcriber(model_path=model_path, model_arch=config.model_arch)
     else:
         try:
+            ensure_online_allowed(
+                component="packages.adapters.moonshine_runner",
+                action="_load_moonshine_transcriber",
+                reason="moonshine-voice stahuje model při prvním použití pokud není lokálně",
+                target="moonshine_voice:get_model_for_language",
+                details={"language": config.language, "model_arch": config.model_arch},
+            )
             from moonshine_voice import get_model_for_language  # type: ignore[import-not-found]
             auto_path = get_model_for_language(config.language)
             transcriber = Transcriber(model_path=auto_path, model_arch=config.model_arch)

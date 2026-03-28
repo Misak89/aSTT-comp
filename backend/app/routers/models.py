@@ -1,5 +1,7 @@
 import subprocess
 import sys
+import os
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -24,6 +26,15 @@ class UninstallRequest(BaseModel):
 
 class NoteRequest(BaseModel):
     note: str
+
+
+class AutostartStatus(BaseModel):
+    supported: bool
+    enabled: bool
+    startup_dir: str
+    entry_path: str
+    script_path: str
+    launch_url: str = "http://127.0.0.1:8012/models"
 
 
 @router.get("/registry")
@@ -62,14 +73,6 @@ def get_model_params(model_id: str):
 @router.get("", response_model=list[ModelStatus])
 def list_models():
     return models_service.list_models()
-
-
-@router.get("/{model_id}", response_model=ModelStatus)
-def get_model(model_id: str):
-    m = models_service.get_model(model_id)
-    if m is None:
-        raise HTTPException(status_code=404, detail="model not found")
-    return m
 
 
 @router.post("/{model_id}/install", response_model=ModelStatus)
@@ -120,6 +123,67 @@ def open_model_store_dir(model_id: str):
     return {"path": str(model_dir)}
 
 
+@router.get("/webapp-autostart", response_model=AutostartStatus)
+def get_webapp_autostart():
+    startup_dir = _get_startup_dir()
+    entry = _get_startup_entry_path()
+    script = _get_startup_script_path()
+    supported = sys.platform == "win32"
+    enabled = bool(supported and entry.exists())
+    return AutostartStatus(
+        supported=supported,
+        enabled=enabled,
+        startup_dir=str(startup_dir),
+        entry_path=str(entry),
+        script_path=str(script),
+    )
+
+
+@router.post("/webapp-autostart/enable", response_model=AutostartStatus)
+def enable_webapp_autostart():
+    if sys.platform != "win32":
+        raise HTTPException(status_code=400, detail="autostart currently supported on Windows only")
+    script_path = _get_startup_script_path()
+    if not script_path.exists():
+        raise HTTPException(status_code=400, detail=f"missing script: {script_path}")
+
+    startup_dir = _get_startup_dir()
+    startup_dir.mkdir(parents=True, exist_ok=True)
+    entry = _get_startup_entry_path()
+    cmd = (
+        "@echo off\r\n"
+        f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{script_path}\" -SkipFrontendBuild\r\n"
+    )
+    entry.write_text(cmd, encoding="ascii")
+    return get_webapp_autostart()
+
+
+@router.post("/webapp-autostart/disable", response_model=AutostartStatus)
+def disable_webapp_autostart():
+    if sys.platform != "win32":
+        raise HTTPException(status_code=400, detail="autostart currently supported on Windows only")
+    entry = _get_startup_entry_path()
+    if entry.exists():
+        entry.unlink()
+    return get_webapp_autostart()
+
+
+@router.post("/webapp-autostart/open-startup-dir")
+def open_webapp_startup_dir():
+    startup_dir = _get_startup_dir()
+    startup_dir.mkdir(parents=True, exist_ok=True)
+    _open_in_explorer(startup_dir)
+    return {"path": str(startup_dir)}
+
+
+@router.get("/{model_id}", response_model=ModelStatus)
+def get_model(model_id: str):
+    m = models_service.get_model(model_id)
+    if m is None:
+        raise HTTPException(status_code=404, detail="model not found")
+    return m
+
+
 def _open_in_explorer(path) -> None:
     try:
         if sys.platform == "win32":
@@ -130,3 +194,20 @@ def _open_in_explorer(path) -> None:
             subprocess.Popen(["xdg-open", str(path)])
     except Exception:
         pass
+
+
+def _get_startup_dir() -> Path:
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    # fallback (non-windows or missing APPDATA) -> project root path placeholder
+    return Path.home() / ".config" / "autostart"
+
+
+def _get_startup_entry_path() -> Path:
+    return _get_startup_dir() / "aSTT-comp WebApp.cmd"
+
+
+def _get_startup_script_path() -> Path:
+    return (MODEL_STORE_ROOT.parent.parent / "scripts" / "start_web_app_background.ps1").resolve()

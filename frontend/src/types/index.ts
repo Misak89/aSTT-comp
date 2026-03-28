@@ -245,6 +245,15 @@ export interface ModelStatus {
   events: ModelEvent[]
 }
 
+export interface WebAppAutostartStatus {
+  supported: boolean
+  enabled: boolean
+  startup_dir: string
+  entry_path: string
+  script_path: string
+  launch_url: string
+}
+
 // Tuning
 export interface TuningTrialResult {
   trial_idx: number
@@ -259,8 +268,50 @@ export interface TuningTrialResult {
   mer: number | null
   wil: number | null
   rtf: number | null
+  rtf_p50?: number | null
+  rtf_p95?: number | null
   latency_ms: number | null
+  latency_p50_ms?: number | null
+  latency_p95_ms?: number | null
+  latency_quality?: 'measured_live' | 'probe_online' | 'proxy_offline' | 'mixed' | 'unknown' | null
+  ram_mb?: number | null
+  ram_peak_mb?: number | null
+  ram_p95_mb?: number | null
+  worker_rss_before_mb?: number | null
+  worker_rss_after_mb?: number | null
+  worker_rss_peak_mb?: number | null
+  load_profile?: string | null
+  load_cpu_target_pct?: number | null
+  load_ram_target_pct?: number | null
+  constraints_profile?: string | null
+  constraints_cpu_cores?: number | null
+  constraints_ram_limit_mb?: number | null
+  constraints_priority?: string | null
+  constraints_applied?: boolean | null
+  constraints_warnings?: string[] | null
+  constraints_ram_mode?: 'hard' | 'soft' | 'none' | null
+  constraints_cpu_applied?: boolean | null
+  constraints_priority_applied?: boolean | null
+  constraints_ram_hard_cap_applied?: boolean | null
+  constraints_ram_hard_cap_error?: string | null
+  load_cpu_actual_avg_pct?: number | null
+  load_cpu_actual_p95_pct?: number | null
+  load_ram_actual_avg_pct?: number | null
+  load_ram_actual_p95_pct?: number | null
+  load_samples?: number | null
+  load_control_ok?: boolean | null
   perceived_delay_s: number | null
+  perceived_delay_method?: string | null
+  perceived_delay_quality?: 'high' | 'medium' | 'low' | 'unknown' | null
+  source_success_count?: number | null
+  source_error_count?: number | null
+  success_rate?: number | null
+  resource_metrics_available?: boolean | null
+  is_repeat?: boolean
+  repeat_of_trial_idx?: number | null
+  repeat_no?: number
+  repeat_group_key?: string | null
+  trial_finished_at?: string | null
   error: string | null
   is_pareto: boolean
   rtf_viable: boolean  // RTF < 1.0 = použitelné pro live mikrofon
@@ -274,12 +325,109 @@ export interface TuningTrialResult {
   chunk_metrics: { chunk_start_s: number; chunk_end_s: number; rtf: number; processing_s: number }[] | null
 }
 
+export interface TuningMetricStats {
+  n: number
+  mean: number
+  std: number
+  ci95_low: number
+  ci95_high: number
+}
+
+export interface TuningReproducibilityItem {
+  seed_trial_idx: number
+  model_id: string
+  params: Record<string, unknown>
+  chunk_seconds: number
+  runs_total: number
+  runs_ok: number
+  runs_error: number
+  rtf_viable_rate: number | null
+  wer?: TuningMetricStats | null
+  rtf?: TuningMetricStats | null
+  latency_ms?: TuningMetricStats | null
+  perceived_delay_s?: TuningMetricStats | null
+  ram_mb?: TuningMetricStats | null
+  repeat_trial_idxs?: number[]
+}
+
+export interface TuningHardwareInfo {
+  hostname?: string | null
+  os?: string | null
+  python?: string | null
+  cpu_model?: string | null
+  logical_cores?: number | null
+  physical_cores?: number | null
+  ram_total_mb?: number | null
+}
+
+export interface TuningDecisionCandidate {
+  trial_idx: number
+  model_id: string
+  params: Record<string, unknown>
+  wer: number
+  wer_soft: number | null
+  rtf: number
+  perceived_delay_s: number | null
+  latency_ms: number | null
+  latency_quality: string | null
+  success_rate: number | null
+  repro_runs_ok: number
+  repro_wer_ci_width: number | null
+  score: number
+  score_breakdown: Record<string, number>
+}
+
+export interface TuningDecisionReport {
+  job_id: string
+  status: string
+  hardware_profile: string | null
+  hardware_note: string | null
+  load_profile?: string | null
+  load_cpu_target_pct?: number | null
+  load_ram_target_pct?: number | null
+  constraints_profile?: string | null
+  constraints_cpu_cores?: number | null
+  constraints_ram_limit_mb?: number | null
+  constraints_priority?: string | null
+  constraints_ram_mode?: 'hard' | 'soft' | 'none' | null
+  require_repro_n?: number
+  repro_validation?: {
+    required_n?: number
+    checked_top_k?: number
+    passed?: boolean
+    missing_trial_idxs?: number[]
+    reason?: string
+  }
+  selected_pool: 'strict' | 'fallback_all'
+  best: TuningDecisionCandidate | null
+  top: TuningDecisionCandidate[]
+  error: string | null
+}
+
 export interface TuningJobStatus {
   job_id: string
   status: string
   model_id: string
   model_ids: string[]
   label: string | null
+  hardware_profile?: string | null
+  hardware_note?: string | null
+  hardware_info?: TuningHardwareInfo
+  constraints_profile?: string | null
+  constraints_cpu_cores?: number | null
+  constraints_ram_limit_mb?: number | null
+  constraints_priority?: string | null
+  constraints_applied?: boolean | null
+  constraints_warnings?: string[]
+  constraints_ram_mode?: 'hard' | 'soft' | 'none' | null
+  constraints_cpu_applied?: boolean | null
+  constraints_priority_applied?: boolean | null
+  constraints_ram_hard_cap_applied?: boolean | null
+  constraints_ram_hard_cap_error?: string | null
+  load_profile?: string | null
+  load_cpu_target_pct?: number | null
+  load_ram_target_pct?: number | null
+  validate_beam_preflight?: boolean
   created_at: string
   total_trials: number
   completed_trials: number
@@ -289,4 +437,12 @@ export interface TuningJobStatus {
   progress_message: string | null
   audio_ready: string[]
   updated_ts?: string  // timestamp poslední aktualizace workeru (pro detekci zaseknutí)
+  reproducibility?: TuningReproducibilityItem[]
+  repro_validation?: {
+    required_n?: number
+    checked_top_k?: number
+    passed?: boolean
+    missing_trial_idxs?: number[]
+    reason?: string
+  }
 }

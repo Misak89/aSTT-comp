@@ -18,9 +18,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from packages.common.console_io import configure_console_io
+from packages.common.network_access import ensure_online_allowed
+
 LIBRARY_ITEMS = ROOT / "runtime" / "library" / "items.json"
 AUDIO_CACHE   = ROOT / "runtime" / "audio_cache"
 SAMPLE_RATE   = 16000
+
+configure_console_io()
 
 
 def _duration_of_wav(path: Path) -> float:
@@ -32,11 +37,18 @@ def _download_video(video_id: str, duration_s: float) -> None:
     out_path = AUDIO_CACHE / f"{video_id}.wav"
     if out_path.exists():
         dur = _duration_of_wav(out_path)
-        print(f"  ✓ {video_id} — již v cache ({dur:.0f}s, {out_path.stat().st_size // 1024} kB)")
+        print(f"  [OK] {video_id} - jiz v cache ({dur:.0f}s, {out_path.stat().st_size // 1024} kB)")
         return
 
     yt_url = f"https://www.youtube.com/watch?v={video_id}"
-    print(f"  ⬇ {video_id} ({duration_s:.0f}s) — stahuji...", flush=True)
+    ensure_online_allowed(
+        component="scripts.download_audio",
+        action="_download_video",
+        reason="yt-dlp + ffmpeg stahují celé audio videa do offline cache",
+        target=yt_url,
+        details={"video_id": video_id, "duration_s": duration_s},
+    )
+    print(f"  [DL] {video_id} ({duration_s:.0f}s) - stahuji...", flush=True)
 
     # yt-dlp -o - | ffmpeg -i pipe:0 → WAV
     ytdlp_cmd = [
@@ -67,13 +79,13 @@ def _download_video(video_id: str, duration_s: float) -> None:
     ytdlp.wait()
 
     if ffmpeg.returncode != 0 or not out_path.exists():
-        print(f"  ✗ {video_id} SELHALO: {ffmpeg_err[-300:]}", file=sys.stderr)
+        print(f"  [ERR] {video_id} SELHALO: {ffmpeg_err[-300:]}", file=sys.stderr)
         out_path.unlink(missing_ok=True)
         return
 
     dur = _duration_of_wav(out_path)
     size_mb = out_path.stat().st_size / (1024 * 1024)
-    print(f"  ✓ {video_id} staženo — {dur:.0f}s, {size_mb:.1f} MB → {out_path.name}")
+    print(f"  [OK] {video_id} stazeno - {dur:.0f}s, {size_mb:.1f} MB -> {out_path.name}")
 
 
 def main() -> int:

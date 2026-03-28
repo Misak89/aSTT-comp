@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from ..models.tuning import TuningJobRequest, TuningJobStatus
 from ..services import tuning_service
+from ..services.tuning_decision import get_job_decision_report
 from ..config import TUNING_ROOT
 
 router = APIRouter(prefix="/api/tuning")
@@ -25,6 +26,28 @@ def get_tuning_job(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="tuning job not found")
     return job
+
+
+@router.get("/jobs/{job_id}/decision")
+def get_tuning_job_decision(
+    job_id: str,
+    min_success_rate: float = 0.95,
+    max_rtf: float = 1.0,
+    allow_proxy: bool = False,
+    require_repro_n: int = 3,
+    top: int = 5,
+):
+    report = get_job_decision_report(
+        job_id,
+        min_success_rate=min_success_rate,
+        max_rtf=max_rtf,
+        allow_proxy=allow_proxy,
+        require_repro_n=require_repro_n,
+        top=top,
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail="tuning job not found")
+    return report
 
 
 @router.post("/jobs/{job_id}/cancel")

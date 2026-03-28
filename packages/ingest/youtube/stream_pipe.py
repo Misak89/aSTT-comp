@@ -22,6 +22,8 @@ from array import array
 from pathlib import Path
 from typing import Callable, Generator
 
+from packages.common.network_access import ensure_online_allowed
+
 
 SAMPLE_RATE = 16000
 BYTES_PER_SAMPLE = 2  # int16
@@ -29,6 +31,13 @@ BYTES_PER_SAMPLE = 2  # int16
 
 def get_youtube_stream_url(youtube_url: str, *, timeout_s: int = 30) -> str:
     """Vrátí přímou CDN audio stream URL přes yt-dlp (bez stahování)."""
+    ensure_online_allowed(
+        component="packages.ingest.youtube.stream_pipe",
+        action="get_youtube_stream_url",
+        reason="yt-dlp musí dotázat YouTube pro získání přímé stream URL",
+        target=youtube_url,
+        details={"timeout_s": timeout_s},
+    )
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "--get-url",
@@ -84,6 +93,20 @@ def stream_audio_chunks(
     """
     chunk_samples = max(1, int(sample_rate * chunk_seconds))
     chunk_bytes = chunk_samples * BYTES_PER_SAMPLE
+
+    if str(source_url).startswith(("http://", "https://")):
+        ensure_online_allowed(
+            component="packages.ingest.youtube.stream_pipe",
+            action="stream_audio_chunks",
+            reason="ffmpeg čte audio stream přes HTTP(S)",
+            target=str(source_url),
+            details={
+                "chunk_seconds": chunk_seconds,
+                "sample_rate": sample_rate,
+                "max_seconds": max_seconds,
+                "start_offset_seconds": start_offset_seconds,
+            },
+        )
 
     ffmpeg_cmd = [
         "ffmpeg",
@@ -192,6 +215,18 @@ def _stream_youtube_piped(
     start_offset_seconds: float = 0.0,
 ) -> Generator[tuple[list[float], int], None, None]:
     """yt-dlp -o - | ffmpeg -i pipe:0 → PCM s16le chunks."""
+    ensure_online_allowed(
+        component="packages.ingest.youtube.stream_pipe",
+        action="_stream_youtube_piped",
+        reason="yt-dlp streamuje audio data z YouTube do ffmpeg",
+        target=youtube_url,
+        details={
+            "chunk_seconds": chunk_seconds,
+            "sample_rate": sample_rate,
+            "max_seconds": max_seconds,
+            "start_offset_seconds": start_offset_seconds,
+        },
+    )
     chunk_samples = max(1, int(sample_rate * chunk_seconds))
     chunk_bytes = chunk_samples * BYTES_PER_SAMPLE
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from difflib import SequenceMatcher
 
 
 _WS_RE = re.compile(r"\s+")
@@ -117,6 +118,41 @@ def _alignment_ops(a: list[str], b: list[str]) -> list[tuple[str, "str | None", 
     return ops
 
 
+def _alignment_ops_for_display(ref_tokens: list[str], hyp_tokens: list[str]) -> list[tuple[str, "str | None", "str | None"]]:
+    """
+    Zarovnání pro UI diff:
+    preferuje dlouhé shody (LCS styl), aby se předešlo vizuálně matoucím "posunům",
+    kde se správné slovo jeví jako záměna/přebývající jen kvůli lokálnímu offsetu.
+    """
+    matcher = SequenceMatcher(a=ref_tokens, b=hyp_tokens, autojunk=False)
+    ops: list[tuple[str, "str | None", "str | None"]] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for r, h in zip(ref_tokens[i1:i2], hyp_tokens[j1:j2]):
+                ops.append(("=", r, h))
+            continue
+        if tag == "delete":
+            for r in ref_tokens[i1:i2]:
+                ops.append(("D", r, None))
+            continue
+        if tag == "insert":
+            for h in hyp_tokens[j1:j2]:
+                ops.append(("I", None, h))
+            continue
+
+        # replace: zarovnej páry jako substituce, zbytek jako D/I
+        ref_block = ref_tokens[i1:i2]
+        hyp_block = hyp_tokens[j1:j2]
+        shared = min(len(ref_block), len(hyp_block))
+        for k in range(shared):
+            ops.append(("S", ref_block[k], hyp_block[k]))
+        for r in ref_block[shared:]:
+            ops.append(("D", r, None))
+        for h in hyp_block[shared:]:
+            ops.append(("I", None, h))
+    return ops
+
+
 def match_error_rate(reference: str, hypothesis: str) -> float:
     """MER = (S+D+I) / (H+S+D+I) — není citlivý na dělení slov jako WER."""
     ref_tokens = _tokenize_words(reference)
@@ -189,7 +225,8 @@ def word_diff(reference: str, hypothesis: str) -> list[dict]:
     """
     ref_tokens = _WORD_RE.findall(normalize_for_wer(reference))
     hyp_tokens = _WORD_RE.findall(normalize_for_wer(hypothesis))
-    ops = _alignment_ops(ref_tokens, hyp_tokens)
+    # Pro vizualizaci používáme čitelnější alignment (ne nutně stejný jako minimální edit script).
+    ops = _alignment_ops_for_display(ref_tokens, hyp_tokens)
     result = []
     for op, r, h in ops:
         is_soft = op == 'S' and r is not None and h is not None and _is_soft_sub(r, h)
@@ -234,4 +271,3 @@ def segment_level_wer(
             "wer": seg_wer,
         })
     return result
-

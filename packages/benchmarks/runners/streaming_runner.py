@@ -112,15 +112,32 @@ def _run_live_session(
     total_samples = 0
     sample_rate = 16000
     last_result: dict = {}
+    chunk_metrics: list[dict[str, Any]] = []
+    first_partial_latency_ms: float | None = None
 
     _cb(config.progress_callback, "Streamuji audio...")
     for samples, sr in audio_generator:
         sample_rate = sr
         total_samples += len(samples)
+        chunk_started = time.perf_counter()
         last_result = chunk_fn(session=session, sample_rate=sr, samples=samples)
+        chunk_processing_s = max(0.0, time.perf_counter() - chunk_started)
 
         elapsed = time.perf_counter() - started_perf
-        if elapsed >= config.sample_seconds:
+        chunk_audio_s = len(samples) / max(1, sr)
+        chunk_rtf = chunk_processing_s / max(0.001, chunk_audio_s)
+        chunk_text = str(last_result.get("text") or "").strip()
+        if chunk_text and first_partial_latency_ms is None:
+            first_partial_latency_ms = round(elapsed * 1000.0, 1)
+        chunk_metrics.append({
+            "chunk_duration_s": round(chunk_audio_s, 3),
+            "processing_s": round(chunk_processing_s, 4),
+            "rtf": round(chunk_rtf, 4),
+            "total_elapsed_s": round(elapsed, 4),
+            "words": len(chunk_text.split()) if chunk_text else 0,
+        })
+        clip_audio_s = total_samples / max(1, sample_rate)
+        if clip_audio_s >= config.sample_seconds:
             break
 
     _cb(config.progress_callback, "Finalizuji přepis...")
@@ -139,7 +156,7 @@ def _run_live_session(
     first_word_latency_ms = final.get("first_word_latency_ms") or last_result.get("first_word_latency_ms")
     latency_ms = first_word_latency_ms if isinstance(first_word_latency_ms, (int, float)) else int(elapsed_s * 1000.0)
 
-    return _build_result(
+    result = _build_result(
         source=source,
         adapter=adapter,
         started=started,
@@ -147,12 +164,15 @@ def _run_live_session(
         rtf=rtf,
         latency_ms=latency_ms,
         first_word_latency_ms=first_word_latency_ms,
+        first_partial_latency_ms=first_partial_latency_ms,
         first_word_wall_ms=final.get("first_word_wall_ms"),
         first_word_audio_ms=final.get("first_word_audio_ms"),
         transcript_text=transcript_text,
         transcript_path=str(transcript_path),
         latency_mode="online_first_text_or_elapsed_ms",
     )
+    result["chunk_metrics"] = chunk_metrics
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +276,7 @@ def _run_buffered(
         except Exception:
             pass
 
-    elapsed_s = max(0.001, time.perf_counter() - started_at)
+    pipeline_elapsed_s = max(0.001, time.perf_counter() - started_at)
     full_transcript = batch_result.get("transcript_text", "")
     segments = batch_result.get("_segments", [])
 
@@ -306,8 +326,35 @@ def _run_buffered(
         except Exception:
             pass
 
-    rtf = elapsed_s / max(0.1, clip_duration)
+    # Engine elapsed = čisté dekódování modelu (bez UI replay).
+    engine_elapsed_s = max(0.001, float(whisper_elapsed))
+    rtf = engine_elapsed_s / max(0.1, clip_duration)
     whisper_rtf = round(whisper_elapsed / max(0.1, clip_duration), 3)
+
+    latency_ms = int(engine_elapsed_s * 1000)
+    first_word_latency_ms = None
+    first_word_audio_ms = None
+    latency_mode = "single_batch_replay"
+
+    # True online probe pro whisper: first text latency po prvním chunku (chunk + decode prvního chunku).
+    online_probe_enabled = adapter == "whisper_cpp" and (
+        bool(config.model_params.get("_online_latency_probe", False))
+        or os.environ.get("ASTT_WHISPER_ONLINE_PROBE", "0") == "1"
+    )
+    if online_probe_enabled:
+        try:
+            probe = _probe_whisper_online_latency(
+                source_wav=Path(temp_wav),
+                source=source,
+                config=config,
+            )
+            if probe is not None:
+                latency_ms = int(probe.get("first_text_latency_ms", latency_ms))
+                first_word_latency_ms = probe.get("first_text_latency_ms")
+                first_word_audio_ms = probe.get("first_word_audio_ms")
+                latency_mode = "online_probe_first_chunk_ms"
+        except Exception as exc:
+            _cb(config.progress_callback, f"⚠ online latency probe fail ({exc})")
 
     chunk_metrics: list[dict[str, Any]] = [{
         "chunk_start_s": 0.0,
@@ -315,7 +362,7 @@ def _run_buffered(
         "chunk_duration_s": round(clip_duration, 1),
         "processing_s": whisper_elapsed,
         "rtf": whisper_rtf,
-        "total_elapsed_s": round(elapsed_s, 1),
+        "total_elapsed_s": round(pipeline_elapsed_s, 1),
         "words": len(full_transcript.split()) if full_transcript else 0,
     }]
 
@@ -326,16 +373,21 @@ def _run_buffered(
         source=source,
         adapter=adapter,
         started=started,
-        elapsed_s=elapsed_s,
+        elapsed_s=engine_elapsed_s,
         rtf=rtf,
-        latency_ms=int(elapsed_s * 1000),
-        first_word_latency_ms=None,
+        latency_ms=latency_ms,
+        first_word_latency_ms=first_word_latency_ms,
+        first_partial_latency_ms=None,
         first_word_wall_ms=None,
-        first_word_audio_ms=None,
+        first_word_audio_ms=first_word_audio_ms,
         transcript_text=full_transcript,
         transcript_path=str(transcript_path),
-        latency_mode="single_batch_replay",
+        latency_mode=latency_mode,
+        cpu_percent=batch_result.get("cpu_percent"),
+        ram_mb=batch_result.get("ram_mb"),
     )
+    if "model_cached" in batch_result:
+        result["model_cached"] = batch_result.get("model_cached")
     result["chunk_metrics"] = chunk_metrics
     result["total_audio_s"] = round(clip_duration, 2)
     if segments:
@@ -358,6 +410,7 @@ def _run_batch_adapter(*, source: SourceEntry, adapter: str, config: StreamingRu
         model_file = resolve_whisper_model_file(model_store, config.model_id)
         if not model_file:
             raise RuntimeError(f"Model soubor nenalezen pro {config.model_id}")
+        use_server_cache = bool(params.get("_use_model_cache", False)) or os.environ.get("ASTT_WHISPER_SERVER_CACHE", "0") == "1"
         run_config = WhisperRunConfig(
             whisper_bin=whisper_bin,
             model_path=str(model_file),
@@ -367,6 +420,7 @@ def _run_batch_adapter(*, source: SourceEntry, adapter: str, config: StreamingRu
             best_of=params.get("best_of"),
             no_fallback=bool(params.get("no_fallback", True)),
             initial_prompt=params.get("initial_prompt") or None,
+            use_server_cache=use_server_cache,
         )
         return run_whisper_source(
             source=source,
@@ -393,6 +447,65 @@ def _run_batch_adapter(*, source: SourceEntry, adapter: str, config: StreamingRu
         )
 
     raise ValueError(f"Neznámý batch adapter: {adapter}")
+
+
+def _probe_whisper_online_latency(
+    *,
+    source_wav: Path,
+    source: SourceEntry,
+    config: StreamingRunConfig,
+) -> dict[str, float] | None:
+    """Vrátí odhad first text latence pro whisper v online chunk režimu."""
+    if not source_wav.exists():
+        return None
+
+    probe_chunk_s = float(max(1, min(config.chunk_seconds, int(max(1, config.sample_seconds)))))
+    probe_wav = Path(config.output_dir) / f"{source.source_id}_whisper_probe.wav"
+
+    with wave.open(str(source_wav), "rb") as wf:
+        sr = wf.getframerate()
+        sw = wf.getsampwidth()
+        nc = wf.getnchannels()
+        n_frames = min(wf.getnframes(), int(probe_chunk_s * sr))
+        raw = wf.readframes(n_frames)
+    with wave.open(str(probe_wav), "wb") as wf_out:
+        wf_out.setnchannels(nc)
+        wf_out.setsampwidth(sw)
+        wf_out.setframerate(sr)
+        wf_out.writeframes(raw)
+
+    probe_source = SourceEntry(
+        source_id=f"{source.source_id}_probe",
+        label=source.label,
+        origin_type="local_file",
+        value=str(probe_wav),
+        exists=True,
+        canonical_url=source.canonical_url,
+        video_id=source.video_id,
+    )
+    probe_cfg = StreamingRunConfig(
+        model_id=config.model_id,
+        model_params=dict(config.model_params),
+        model_store_root=config.model_store_root,
+        output_dir=str(Path(config.output_dir) / "_probe"),
+        sample_seconds=max(1, int(round(probe_chunk_s))),
+        chunk_seconds=config.chunk_seconds,
+    )
+
+    try:
+        result = _run_batch_adapter(source=probe_source, adapter="whisper_cpp", config=probe_cfg)
+        decode_ms = float(result.get("latency_ms") or 0.0)
+        first_text_latency_ms = probe_chunk_s * 1000.0 + decode_ms
+        first_word_audio_ms = result.get("first_word_audio_ms")
+        out = {"first_text_latency_ms": round(first_text_latency_ms, 1)}
+        if isinstance(first_word_audio_ms, (int, float)):
+            out["first_word_audio_ms"] = float(first_word_audio_ms)
+        return out
+    finally:
+        try:
+            probe_wav.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +599,7 @@ def _build_result(
     rtf: float,
     latency_ms: float,
     first_word_latency_ms: float | None,
+    first_partial_latency_ms: float | None,
     first_word_wall_ms: float | None,
     first_word_audio_ms: float | None,
     transcript_text: str,
@@ -502,6 +616,7 @@ def _build_result(
         "cer": None,
         "latency_ms": round(float(latency_ms), 1),
         "first_word_latency_ms": round(float(first_word_latency_ms), 1) if isinstance(first_word_latency_ms, (int, float)) else None,
+        "first_partial_latency_ms": round(float(first_partial_latency_ms), 1) if isinstance(first_partial_latency_ms, (int, float)) else None,
         "first_word_wall_ms": round(float(first_word_wall_ms), 1) if isinstance(first_word_wall_ms, (int, float)) else None,
         "first_word_audio_ms": round(float(first_word_audio_ms), 1) if isinstance(first_word_audio_ms, (int, float)) else None,
         "rtf": round(float(rtf), 4),

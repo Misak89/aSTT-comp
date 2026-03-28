@@ -7,6 +7,7 @@ import sys
 import urllib.error
 import urllib.request
 
+from packages.common.network_access import ensure_online_allowed
 from packages.ingest.source_resolver import canonicalize_online_source_url
 
 from .models import FetchResult, OnlineSource, StreamResolveResult
@@ -25,6 +26,13 @@ class YtDlpFetcher:
         output_dir: Path,
         clip_duration_seconds: int,
     ) -> FetchResult:
+        ensure_online_allowed(
+            component="packages.ingest.youtube.yt_dlp_fetcher",
+            action="fetch",
+            reason="stažení online media souboru přes yt-dlp",
+            target=source.url,
+            details={"clip_duration_seconds": clip_duration_seconds},
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         template = str(output_dir / f"{source.source_id}_%(id)s.%(ext)s")
         requested_canonical_url, requested_video_id = canonicalize_online_source_url(source.url)
@@ -141,6 +149,13 @@ class YtDlpFetcher:
         output_dir: Path,
         clip_duration_seconds: int,
     ) -> FetchResult:
+        ensure_online_allowed(
+            component="packages.ingest.youtube.yt_dlp_fetcher",
+            action="fetch_audio",
+            reason="stažení audio stopy přes yt-dlp",
+            target=source.url,
+            details={"clip_duration_seconds": clip_duration_seconds},
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         template = str(output_dir / f"{source.source_id}.%(ext)s")
         requested_canonical_url, requested_video_id = canonicalize_online_source_url(source.url)
@@ -222,6 +237,12 @@ class YtDlpFetcher:
         )
 
     def resolve_stream(self, source: OnlineSource) -> StreamResolveResult:
+        ensure_online_allowed(
+            component="packages.ingest.youtube.yt_dlp_fetcher",
+            action="resolve_stream",
+            reason="vyžádání přímé stream URL přes yt-dlp",
+            target=source.url,
+        )
         requested_canonical_url, requested_video_id = canonicalize_online_source_url(source.url)
         metadata = self._read_metadata(source.url)
         if metadata is None:
@@ -490,6 +511,13 @@ def _download_subtitle_from_info_json(
         return None, "Subtitle track URL missing"
 
     out = output_dir / f"{source_id}_subtitle_{lang}.{ext}"
+    ensure_online_allowed(
+        component="packages.ingest.youtube.yt_dlp_fetcher",
+        action="download_subtitle_track",
+        reason="stažení titulkového tracku URL z info.json",
+        target=url,
+        details={"source_id": source_id, "lang": lang, "ext": ext},
+    )
     try:
         with urllib.request.urlopen(url, timeout=30) as response:
             content = response.read()

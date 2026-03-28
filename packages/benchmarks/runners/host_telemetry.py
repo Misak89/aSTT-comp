@@ -15,6 +15,8 @@ from typing import Any
 from urllib import error as url_error
 from urllib import request as url_request
 
+from packages.common.network_access import record_network_event, strict_offline_enabled
+
 try:
     import psutil
 except ModuleNotFoundError:
@@ -267,9 +269,39 @@ def _collect_time_reference_offsets(
     urls: tuple[str, ...],
     timeout_seconds: float,
 ) -> dict[str, Any]:
+    if strict_offline_enabled():
+        for url in urls:
+            record_network_event(
+                component="packages.benchmarks.runners.host_telemetry",
+                action="_collect_time_reference_offsets",
+                reason="clock audit probe je vypnut v ASTT_STRICT_OFFLINE režimu",
+                target=url,
+                required_online=True,
+                details={"timeout_seconds": timeout_seconds},
+                outcome="blocked_offline_mode",
+            )
+        return {
+            "status": "skipped_offline_mode",
+            "probe_count": 0,
+            "ok_count": 0,
+            "urls": list(urls),
+            "median_offset_ms": None,
+            "max_abs_offset_ms": None,
+            "probes": [],
+        }
+
     probes: list[dict[str, Any]] = []
     offsets: list[float] = []
     for url in urls:
+        record_network_event(
+            component="packages.benchmarks.runners.host_telemetry",
+            action="_collect_time_reference_offsets",
+            reason="clock audit porovnává lokální čas s HTTP Date hlavičkou",
+            target=url,
+            required_online=True,
+            details={"timeout_seconds": timeout_seconds},
+            outcome="allowed",
+        )
         probes.append(_probe_http_date(url=url, timeout_seconds=timeout_seconds))
         offset_value = probes[-1].get("offset_ms")
         if isinstance(offset_value, (int, float)):

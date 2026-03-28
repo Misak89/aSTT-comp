@@ -247,10 +247,13 @@ def run_job(job_id: str) -> None:
                     pre_cpu=pre_cpu, pre_ram_mb=pre_ram_mb)
 
         # Spusť subprocess
+        import os as _os
+        env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         proc = subprocess.Popen(
             [sys.executable, str(_WORKER), "--job-id", job_id, "--jobs-root", str(JOBS_ROOT)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=env,
         )
         _subprocess_pids[job_id] = proc.pid
         _update_job(job_id, progress_message=f"Worker subprocess PID {proc.pid}")

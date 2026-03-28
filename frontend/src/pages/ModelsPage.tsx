@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { ModelStatus, ModelEvent, ModelDescriptor } from '../types'
+import type { ModelStatus, ModelEvent, ModelDescriptor, WebAppAutostartStatus } from '../types'
 
 // Popis adaptérů — mapování adapter ID → info
 const ADAPTER_INFO: Record<string, { label: string; source: string; description: string }> = {
@@ -46,9 +46,11 @@ const SETTINGS_DOC = [
 export function ModelsPage() {
   const [models, setModels] = useState<ModelStatus[]>([])
   const [registry, setRegistry] = useState<ModelDescriptor[]>([])
+  const [autostart, setAutostart] = useState<WebAppAutostartStatus | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [noteInput, setNoteInput] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState('')
+  const autostartSupported = autostart?.supported ?? true
 
   useEffect(() => { loadAll() }, [])
 
@@ -57,6 +59,12 @@ export function ModelsPage() {
       const [statuses, reg] = await Promise.all([api.models.list(), api.models.registry()])
       setModels(statuses)
       setRegistry(reg)
+      try {
+        const auto = await api.models.getWebAppAutostart()
+        setAutostart(auto)
+      } catch {
+        setAutostart(null)
+      }
     } catch (e: any) {
       setMsg(`Chyba načítání: ${e.message}`)
     }
@@ -86,6 +94,26 @@ export function ModelsPage() {
     } catch (e: any) { setMsg(`Chyba: ${e.message}`) }
   }
 
+  async function enableAutostart() {
+    try {
+      const res = await api.models.enableWebAppAutostart()
+      setAutostart(res)
+      setMsg('Auto-start zapnutý.')
+    } catch (e: any) {
+      setMsg(`Chyba zapnutí auto-startu: ${e.message}`)
+    }
+  }
+
+  async function disableAutostart() {
+    try {
+      const res = await api.models.disableWebAppAutostart()
+      setAutostart(res)
+      setMsg('Auto-start vypnutý.')
+    } catch (e: any) {
+      setMsg(`Chyba vypnutí auto-startu: ${e.message}`)
+    }
+  }
+
   // Vytvoř mapu registry pro rychlý lookup
   const registryMap = new Map(registry.map(r => [r.model_id, r]))
 
@@ -110,6 +138,11 @@ export function ModelsPage() {
 {`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
 .venv\\Scripts\\python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8012 --reload`}
             </pre>
+            <p className="text-slate-300 font-semibold pt-1">Jedním skriptem (doporučeno)</p>
+            <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
+{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
+start_web_app.cmd`}
+            </pre>
             <p className="text-slate-500 text-xs">Restart: Ctrl+C v terminálu → spusť znovu. Nebo ulož jakýkoliv .py soubor (--reload).</p>
           </div>
 
@@ -132,6 +165,47 @@ npm run dev`}
             </pre>
             <p className="text-slate-500 text-xs">Otevři <span className="font-mono text-slate-400">http://localhost:5173</span> (API proxuje na backend :8012).</p>
           </div>
+        </div>
+
+        <div className="rounded border border-slate-700 bg-slate-800/60 p-3 space-y-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            <p className="text-slate-200 font-semibold">Auto-start web app po startu Windows</p>
+            {autostart && (
+              <span className={`text-xs px-2 py-0.5 rounded border ${autostart.enabled ? 'text-green-300 border-green-500/40 bg-green-900/20' : 'text-amber-300 border-amber-500/40 bg-amber-900/20'}`}>
+                {autostart.enabled ? 'Zapnuto' : 'Vypnuto'}
+              </span>
+            )}
+            <button
+              onClick={enableAutostart}
+              disabled={!autostartSupported}
+              className="text-xs px-2.5 py-1 rounded border border-emerald-400 text-emerald-300 hover:bg-emerald-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Zapnout
+            </button>
+            <button
+              onClick={disableAutostart}
+              disabled={!autostartSupported}
+              className="text-xs px-2.5 py-1 rounded border border-rose-400 text-rose-300 hover:bg-rose-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Vypnout
+            </button>
+            <button
+              onClick={() => api.models.openWebAppStartupDir().catch(() => {})}
+              disabled={!autostartSupported}
+              className="text-xs px-2.5 py-1 rounded border border-slate-500 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Otevřít Startup složku
+            </button>
+          </div>
+          <p className="text-slate-400 text-xs">
+            Zapnutí vytvoří položku ve Startup složce, která po přihlášení spustí backend na <span className="font-mono text-slate-300">127.0.0.1:8012</span>.
+          </p>
+          {autostart?.entry_path && (
+            <p className="text-slate-500 text-xs font-mono break-all">Entry: {autostart.entry_path}</p>
+          )}
+          {autostart?.script_path && (
+            <p className="text-slate-500 text-xs font-mono break-all">Script: {autostart.script_path}</p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -387,6 +461,11 @@ python scripts/copy_subtitles.py     # kopíruj VTT`}
             onClick={() => api.openDir.runs()}
             path="runtime/runs/"
             desc="benchmark_matrix.json a artefakty každého runu"
+          />
+          <DirLink
+            onClick={() => api.models.openWebAppStartupDir()}
+            path={autostart?.startup_dir ?? '%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup'}
+            desc="Windows Startup složka (auto-start položka web app)"
           />
         </div>
 

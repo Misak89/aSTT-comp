@@ -24,6 +24,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
+
 
 def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()

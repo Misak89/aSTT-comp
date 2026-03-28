@@ -10,6 +10,7 @@ __pycache__/
 runtime/
 
 # Node
+/node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
@@ -18,6 +19,7 @@ frontend/tsconfig.tsbuildinfo
 .vscode/
 .cursor/
 .claude/
+/.specstory/
 *.swp
 
 # OS
@@ -27,3 +29,4 @@ Thumbs.db
 # Logy a temp
 *.log
 *.tmp
+logs/

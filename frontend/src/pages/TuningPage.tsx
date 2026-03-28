@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts'
 import { api } from '../api/client'
-import type { LibraryItem, ModelDescriptor, TuningJobStatus, TuningTrialResult } from '../types'
+import type { LibraryItem, ModelDescriptor, TuningDecisionReport, TuningJobStatus, TuningTrialResult } from '../types'
 import { WerBadge } from '../components/WerBadge'
 import { videoLabel } from '../utils'
 
@@ -29,6 +29,10 @@ const WHISPER_PARAM_DEFS = [
     name: 'no_fallback', label: 'Bez fallbacku', type: 'bool', values: [true, false], default: true,
     description: 'Zakáže temperature fallback. Pokud je true, whisper nikdy nezkusí vyšší temperature při nejistém výsledku — rychlejší, deterministické. false = whisper může zopakovat dekódování s vyšší teplotou.',
     valueDescriptions: { true: 'deterministické, rychlejší', false: 'může opakovat s vyšší temp.' },
+  },
+  {
+    name: 'chunk_seconds', label: 'Chunk (s)', type: 'int', values: [5, 10, 15, 20, 30], default: 30,
+    description: 'Délka chunks pro replay/perceived delay výpočet. Pro whisper batch nemění dekódování textu, ale mění UX zpoždění. V3 srovnání drž typicky na 15/30.',
   },
 ]
 
@@ -92,10 +96,166 @@ const PROMPT_LIBRARY: PromptTemplate[] = [
   },
 ]
 
+const LOAD_PROFILE_PRESETS: Record<string, { cpu: number; ram: number }> = {
+  light: { cpu: 25, ram: 35 },
+  medium: { cpu: 45, ram: 55 },
+  heavy: { cpu: 65, ram: 75 },
+}
+const CONSTRAINTS_PROFILE_PRESETS: Record<string, { cores: number; ram: number; priority: string }> = {
+  weak_cap: { cores: 2, ram: 4096, priority: 'idle' },
+  mid_cap: { cores: 4, ram: 8192, priority: 'below_normal' },
+}
+
 const LS_KEY = 'tuning_config_v1'
+const isLargeWhisperV3Model = (modelId: string): boolean => modelId.startsWith('whisper_cpp_large_v3')
 
 function loadConfig() {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') } catch { return {} }
+}
+
+function parseIsoToMs(iso: string | null | undefined): number | null {
+  if (!iso) return null
+  const ms = Date.parse(iso)
+  return Number.isFinite(ms) ? ms : null
+}
+
+function jobElapsedSeconds(job: TuningJobStatus, nowMs: number): number | null {
+  const startMs = parseIsoToMs(job.created_at)
+  if (startMs == null) return null
+  const isActive = job.status === 'running' || job.status === 'pending'
+  const endMs = isActive ? nowMs : (parseIsoToMs(job.updated_ts ?? null) ?? nowMs)
+  return Math.max(0, (endMs - startMs) / 1000)
+}
+
+function formatElapsedShort(totalSeconds: number): string {
+  const whole = Math.max(0, Math.floor(totalSeconds))
+  const h = Math.floor(whole / 3600)
+  const m = Math.floor((whole % 3600) / 60)
+  const s = whole % 60
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function formatClockHHMMSS(iso: string | null | undefined): string {
+  const ms = parseIsoToMs(iso)
+  if (ms == null) return '–'
+  const d = new Date(ms)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
+}
+
+function formatJobHistoryName(job: TuningJobStatus): string {
+  const ms = parseIsoToMs(job.created_at)
+  if (ms == null) return job.job_id
+  const dt = new Date(ms)
+  const yyyy = dt.getFullYear().toString().padStart(4, '0')
+  const mm = (dt.getMonth() + 1).toString().padStart(2, '0')
+  const dd = dt.getDate().toString().padStart(2, '0')
+  const hh = dt.getHours().toString().padStart(2, '0')
+  const mi = dt.getMinutes().toString().padStart(2, '0')
+  const ss = dt.getSeconds().toString().padStart(2, '0')
+  return `${yyyy}${mm}${dd}_${hh}${mi}${ss}`
+}
+
+function estimateRemainingSeconds(job: TuningJobStatus, nowMs: number): number | null {
+  if (job.status !== 'running' && job.status !== 'pending') return null
+  if (job.total_trials <= 0) return null
+  const done = Math.max(0, job.completed_trials)
+  const remaining = Math.max(0, job.total_trials - done)
+  if (remaining <= 0) return 0
+  if (done <= 0) return null
+  const elapsed = jobElapsedSeconds(job, nowMs)
+  if (elapsed == null || elapsed <= 0) return null
+  const avgPerTrial = elapsed / done
+  return Math.max(0, avgPerTrial * remaining)
+}
+
+function textWordCount(text: string | null | undefined): number {
+  if (!text) return 0
+  return (text.match(/\S+/g) ?? []).length
+}
+
+function textCharCount(text: string | null | undefined): number {
+  if (!text) return 0
+  return [...text].length
+}
+
+type WordDiffItem = { op: string; ref: string | null; hyp: string | null; is_soft: boolean }
+type WordDiffAlignedCell = {
+  key: string
+  top: string
+  bottom: string
+  topClass: string
+  bottomClass: string
+  widthCh: number
+  title?: string
+}
+
+function visualLen(value: string): number {
+  return Math.max(1, [...(value || '')].length)
+}
+
+function buildWordDiffAlignedCells(items: WordDiffItem[]): WordDiffAlignedCell[] {
+  return items.map((d, idx) => {
+    const op = d.op
+    if (op === '=' || op === 'equal') {
+      const token = d.hyp ?? d.ref ?? ''
+      return {
+        key: `eq-${idx}`,
+        top: token,
+        bottom: d.ref ?? token,
+        topClass: 'text-gray-700',
+        bottomClass: 'text-gray-500 italic',
+        widthCh: visualLen(token) + 1,
+      }
+    }
+    if (op === 'S' || op === 'replace') {
+      const top = d.hyp ?? ''
+      const bottom = d.ref ?? ''
+      const isSoft = !!d.is_soft
+      return {
+        key: `sub-${idx}`,
+        top,
+        bottom,
+        topClass: isSoft
+          ? 'bg-green-100 text-green-700 rounded px-0.5'
+          : 'bg-sky-100 text-sky-700 rounded px-0.5 font-semibold',
+        bottomClass: 'bg-gray-100 text-gray-500 italic rounded px-0.5',
+        widthCh: Math.max(visualLen(top), visualLen(bottom)) + 1,
+        title: isSoft ? `Drobná záměna: "${bottom}" → "${top}"` : `Záměna: "${bottom}" → "${top}"`,
+      }
+    }
+    if (op === 'D' || op === 'delete') {
+      const bottom = d.ref ? `[${d.ref}]` : ''
+      return {
+        key: `del-${idx}`,
+        top: '',
+        bottom,
+        topClass: 'text-transparent',
+        bottomClass: 'bg-red-200 text-red-800 rounded px-0.5 font-semibold italic',
+        widthCh: visualLen(bottom) + 1,
+      }
+    }
+    if (op === 'I' || op === 'insert') {
+      const top = d.hyp ?? ''
+      return {
+        key: `ins-${idx}`,
+        top,
+        bottom: '',
+        topClass: 'bg-gray-100 text-gray-500 rounded px-0.5 line-through',
+        bottomClass: 'text-transparent italic',
+        widthCh: visualLen(top) + 1,
+      }
+    }
+    const fallback = d.hyp ?? d.ref ?? ''
+    return {
+      key: `raw-${idx}`,
+      top: fallback,
+      bottom: d.ref ?? '',
+      topClass: 'text-gray-700',
+      bottomClass: 'text-gray-500 italic',
+      widthCh: visualLen(fallback) + 1,
+    }
+  })
 }
 
 export function TuningPage() {
@@ -114,7 +274,18 @@ export function TuningPage() {
   const [sampleSeconds, setSampleSeconds] = useState<number>(cfg.sampleSeconds ?? 60)
   const [maxTrials, setMaxTrials] = useState<number>(cfg.maxTrials ?? 16)
   const [label, setLabel] = useState<string>(cfg.label ?? '')
+  const [hardwareProfile, setHardwareProfile] = useState<string>(cfg.hardwareProfile ?? 'auto')
+  const [hardwareNote, setHardwareNote] = useState<string>(cfg.hardwareNote ?? '')
+  const [constraintsProfile, setConstraintsProfile] = useState<string>(cfg.constraintsProfile ?? 'none')
+  const [constraintsCpuCores, setConstraintsCpuCores] = useState<number>(cfg.constraintsCpuCores ?? 4)
+  const [constraintsRamLimitMb, setConstraintsRamLimitMb] = useState<number>(cfg.constraintsRamLimitMb ?? 8192)
+  const [constraintsPriority, setConstraintsPriority] = useState<string>(cfg.constraintsPriority ?? 'below_normal')
+  const [loadProfile, setLoadProfile] = useState<string>(cfg.loadProfile ?? 'none')
+  const [loadCpuTargetPct, setLoadCpuTargetPct] = useState<number>(cfg.loadCpuTargetPct ?? 45)
+  const [loadRamTargetPct, setLoadRamTargetPct] = useState<number>(cfg.loadRamTargetPct ?? 55)
+  const [validateBeamPreflight, setValidateBeamPreflight] = useState<boolean>(cfg.validateBeamPreflight ?? true)
   const [selectedJob, setSelectedJob] = useState<TuningJobStatus | null>(null)
+  const [showAllHistoryJobs, setShowAllHistoryJobs] = useState<boolean>(false)
   const [msg, setMsg] = useState('')
   // Výběr hodnot pro každý parametr
   const [paramValues, setParamValues] = useState<Record<string, Set<unknown>>>(() => {
@@ -136,11 +307,14 @@ export function TuningPage() {
   })
   const [clipSeed, setClipSeed] = useState<number>(cfg.clipSeed ?? 42)
   const [clipStartSeconds, setClipStartSeconds] = useState<number | null>(cfg.clipStartSeconds ?? null)
+  const [repeatTopK, setRepeatTopK] = useState<number>(cfg.repeatTopK ?? 0)
+  const [repeatRuns, setRepeatRuns] = useState<number>(cfg.repeatRuns ?? 1)
   const [evaluationMode, setEvaluationMode] = useState<'heuristic' | 'heuristic+llm'>(cfg.evaluationMode ?? 'heuristic')
   const [videoSortBy, setVideoSortBy] = useState<'title' | 'language' | 'duration' | 'upload_date'>(
     cfg.videoSortBy ?? 'title'
   )
   const [videoSortDir, setVideoSortDir] = useState<'asc' | 'desc'>(cfg.videoSortDir ?? 'asc')
+  const [nowMs, setNowMs] = useState<number>(() => Date.now())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   function handleVideoSort(col: typeof videoSortBy) {
@@ -159,15 +333,39 @@ export function TuningPage() {
     return videoSortDir === 'asc' ? cmp : -cmp
   })
 
+  const sortedHistoryJobs = [...jobs].sort((a, b) => {
+    const prio = (s: string): number => (
+      s === 'running' ? 0 :
+      s === 'pending' ? 1 : 2
+    )
+    const pa = prio(a.status)
+    const pb = prio(b.status)
+    if (pa !== pb) return pa - pb
+    const ta = parseIsoToMs(a.created_at) ?? 0
+    const tb = parseIsoToMs(b.created_at) ?? 0
+    return tb - ta
+  })
+  const historyHiddenCount = Math.max(0, sortedHistoryJobs.length - 5)
+  const visibleHistoryJobs = showAllHistoryJobs ? sortedHistoryJobs : sortedHistoryJobs.slice(0, 5)
+
   useEffect(() => {
     Promise.all([api.library.list(), api.models.registry(), api.tuning.listJobs()])
       .then(([lib, reg, j]) => { setLibrary(lib); setRegistry(reg); setJobs(j) })
   }, [])
 
+  useEffect(() => {
+    const iv = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [])
+
   // Uložit konfiguraci do localStorage při každé změně
   useEffect(() => {
     const cfg = {
-      selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, evaluationMode,
+      selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode,
+      hardwareProfile, hardwareNote,
+      constraintsProfile, constraintsCpuCores, constraintsRamLimitMb, constraintsPriority,
+      loadProfile, loadCpuTargetPct, loadRamTargetPct,
+      validateBeamPreflight,
       paramValues: Object.fromEntries(
         Object.entries(paramValues).map(([k, v]) => [k, [...v]])
       ),
@@ -175,7 +373,10 @@ export function TuningPage() {
       customPrompt, videoSortBy, videoSortDir,
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
-  }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, evaluationMode,
+  }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode, hardwareProfile, hardwareNote,
+      constraintsProfile, constraintsCpuCores, constraintsRamLimitMb, constraintsPriority,
+      loadProfile, loadCpuTargetPct, loadRamTargetPct,
+      validateBeamPreflight,
       paramValues, selectedPrompts, customPrompt, videoSortBy, videoSortDir])
 
   function toggleParamValue(paramName: string, value: unknown) {
@@ -208,16 +409,44 @@ export function TuningPage() {
     return [...prompts]
   }
 
+  function resolveLoadTargets(): { profile: string; cpu: number | null; ram: number | null } {
+    if (loadProfile === 'none') return { profile: 'none', cpu: null, ram: null }
+    if (loadProfile === 'custom') {
+      const cpu = Math.max(0, Math.min(95, Number.isFinite(loadCpuTargetPct) ? loadCpuTargetPct : 0))
+      const ram = Math.max(0, Math.min(95, Number.isFinite(loadRamTargetPct) ? loadRamTargetPct : 0))
+      if (cpu <= 0 && ram <= 0) return { profile: 'none', cpu: null, ram: null }
+      return { profile: 'custom', cpu, ram }
+    }
+    const preset = LOAD_PROFILE_PRESETS[loadProfile]
+    if (!preset) return { profile: 'none', cpu: null, ram: null }
+    return { profile: loadProfile, cpu: preset.cpu, ram: preset.ram }
+  }
+
+  function resolveConstraintsTargets(): { profile: string; cores: number | null; ramMb: number | null; priority: string } {
+    const normPriority = constraintsPriority === 'idle' || constraintsPriority === 'normal' ? constraintsPriority : 'below_normal'
+    if (constraintsProfile === 'none') return { profile: 'none', cores: null, ramMb: null, priority: normPriority }
+    if (constraintsProfile === 'custom') {
+      const cores = Math.max(1, Math.min(128, Number.isFinite(constraintsCpuCores) ? constraintsCpuCores : 1))
+      const ramMb = Math.max(256, Math.min(262144, Number.isFinite(constraintsRamLimitMb) ? constraintsRamLimitMb : 256))
+      if (cores <= 0 && ramMb <= 0) return { profile: 'none', cores: null, ramMb: null, priority: normPriority }
+      return { profile: 'custom', cores, ramMb, priority: normPriority }
+    }
+    const preset = CONSTRAINTS_PROFILE_PRESETS[constraintsProfile]
+    if (!preset) return { profile: 'none', cores: null, ramMb: null, priority: normPriority }
+    return { profile: constraintsProfile, cores: preset.cores, ramMb: preset.ram, priority: preset.priority }
+  }
+
   function countTrials(): number {
     const modelCount = Math.max(1, selectedModels.length)
     const promptCount = Math.max(1, allSelectedPrompts().length)
+    const repeatExtraFactor = repeatTopK > 0 && repeatRuns > 1 ? repeatTopK * (repeatRuns - 1) : 0
     if (strategy === 'ablation') {
       let n = 1
       for (const p of WHISPER_PARAM_DEFS) {
         n += Math.max(0, (paramValues[p.name]?.size ?? 1) - 1)
       }
       n += Math.max(0, promptCount - 1)
-      return n * modelCount
+      return (n * modelCount) + repeatExtraFactor
     }
     if (strategy === 'grid') {
       const beamValues = [...(paramValues['beam_size'] ?? [5])] as number[]
@@ -230,19 +459,39 @@ export function TuningPage() {
       for (const beam of beamValues)
         for (const bestOf of bestOfValues)
           if (bestOf <= beam) validBeamBestOf++
-      return validBeamBestOf * otherCount * promptCount * modelCount
+      return (validBeamBestOf * otherCount * promptCount * modelCount) + repeatExtraFactor
     }
-    return maxTrials * modelCount
+    return (maxTrials * modelCount) + repeatExtraFactor
   }
 
   async function startTuning() {
     if (!selectedModels.length) { setMsg('Vyber alespoň jeden model.'); return }
     if (!selectedVideos.length) { setMsg('Vyber alespoň jedno video.'); return }
+    const noFallbackSet = paramValues['no_fallback'] ?? new Set<unknown>([true])
+    const bestOfVals = [...(paramValues['best_of'] ?? new Set<unknown>([1]))].map(v => Number(v)).filter(v => Number.isFinite(v))
+    const onlyNoFallbackTrue = noFallbackSet.has(true) && !noFallbackSet.has(false)
+    const hasBestOfAboveOne = bestOfVals.some(v => v > 1)
+    if (onlyNoFallbackTrue && hasBestOfAboveOne) {
+      setMsg('Nápověda: no_fallback=true + best_of>1 je redundantní (best_of nemá efekt). Nastav best_of=1 nebo zapni no_fallback=false.')
+      return
+    }
+    let modelIdsForJob = [...selectedModels]
+    let autoAdjustMsg = ''
+    if (constraintsProfile === 'weak_cap' && modelIdsForJob.some(isLargeWhisperV3Model)) {
+      const hasSmallModel = registry.some(m => m.model_id === 'whisper_cpp_small')
+      if (!hasSmallModel) {
+        setMsg('Kombinace large_v3 + weak_cap obvykle končí timeoutem. Nainstaluj a zvol whisper_cpp_small.')
+        return
+      }
+      modelIdsForJob = Array.from(new Set(
+        modelIdsForJob.map(mid => (isLargeWhisperV3Model(mid) ? 'whisper_cpp_small' : mid))
+      ))
+      setSelectedModels(modelIdsForJob)
+      autoAdjustMsg = 'Auto-oprava: large_v3 pod weak_cap nahrazen za whisper_cpp_small (jinak validace typicky timeoutuje).'
+    }
     setMsg('')
     const paramSpace = WHISPER_PARAM_DEFS
       .map(p => ({ name: p.name, values: [...(paramValues[p.name] ?? [p.default])] }))
-    // chunk_seconds je ghost param — nemá vliv na whisper_cpp (batch mode), ale backend ho očekává
-    paramSpace.push({ name: 'chunk_seconds', values: [30] })
     // Přidej initial_prompt jako parametr
     const prompts = allSelectedPrompts()
     if (prompts.length > 0) {
@@ -255,25 +504,146 @@ export function TuningPage() {
     }
 
     try {
+      const safeRepeatTopK = Math.max(0, Math.floor(repeatTopK))
+      const safeRepeatRuns = Math.max(1, Math.floor(repeatRuns))
+      const hardwareProfilePayload = hardwareProfile !== 'auto' ? hardwareProfile : undefined
+      const hardwareNotePayload = hardwareNote.trim() ? hardwareNote.trim() : undefined
+      const resolvedConstraints = resolveConstraintsTargets()
+      const resolvedLoad = resolveLoadTargets()
       const job = await api.tuning.createJob({
-        model_ids: selectedModels,
+        model_ids: modelIdsForJob,
         video_ids: selectedVideos,
         sample_seconds: sampleSeconds,
         clip_seed: clipStartSeconds != null ? undefined : clipSeed,
+        random_seed: clipSeed,
         clip_start_seconds: clipStartSeconds ?? undefined,
         strategy,
         max_trials: maxTrials,
         param_space: paramSpace,
         baseline_params: baseline,
+        repeat_top_k: safeRepeatTopK,
+        repeat_runs: safeRepeatRuns,
+        hardware_profile: hardwareProfilePayload,
+        hardware_note: hardwareNotePayload,
+        constraints_profile: resolvedConstraints.profile !== 'none' ? resolvedConstraints.profile : undefined,
+        constraints_cpu_cores: resolvedConstraints.cores ?? undefined,
+        constraints_ram_limit_mb: resolvedConstraints.ramMb ?? undefined,
+        constraints_priority: resolvedConstraints.profile !== 'none' ? resolvedConstraints.priority : undefined,
+        load_profile: resolvedLoad.profile !== 'none' ? resolvedLoad.profile : undefined,
+        load_cpu_target_pct: resolvedLoad.cpu ?? undefined,
+        load_ram_target_pct: resolvedLoad.ram ?? undefined,
+        validate_beam_preflight: validateBeamPreflight,
         label: label || undefined,
         evaluation_mode: evaluationMode,
       })
       setJobs(prev => [job, ...prev])
       setSelectedJob(job)
       startPolling(job.job_id)
+      if (autoAdjustMsg) setMsg(autoAdjustMsg)
     } catch (e: any) {
       setMsg(`Chyba: ${e.message}`)
     }
+  }
+
+  function applyQuickV3SmokePreset() {
+    const czVideos = [...library]
+      .filter(v => v.subtitles_local && (v.language || '').toLowerCase() === 'cs')
+      .sort((a, b) => (a.duration_seconds ?? Number.MAX_SAFE_INTEGER) - (b.duration_seconds ?? Number.MAX_SAFE_INTEGER))
+      .slice(0, 2)
+      .map(v => v.video_id)
+
+    if (czVideos.length < 2) {
+      setMsg('Rychly smoke potrebuje alespon 2 CZ videa s lokalnimi titulky.')
+      return
+    }
+
+    const whisperModels = registry
+      .map(m => m.model_id)
+      .filter(id => id.startsWith('whisper_cpp_'))
+    const smokeModel =
+      whisperModels.find(id => id === 'whisper_cpp_small') ??
+      whisperModels.find(id => id === 'whisper_cpp_large_v3_turbo') ??
+      whisperModels[0]
+
+    if (!smokeModel) {
+      setMsg('Neni dostupny whisper_cpp model pro smoke test.')
+      return
+    }
+
+    const smokePrompts = ['', 'Rozhovor v cestine:']
+    setSelectedModels([smokeModel])
+    setSelectedVideos(czVideos)
+    setStrategy('grid')
+    setSampleSeconds(60)
+    setClipSeed(42)
+    setClipStartSeconds(null)
+    setRepeatTopK(0)
+    setRepeatRuns(1)
+    setEvaluationMode('heuristic')
+    setValidateBeamPreflight(false)
+    setLabel('v3_smoke_2cz_quick')
+    setSelectedPrompts(new Set(smokePrompts))
+    setCustomPrompt('')
+    setParamValues(prev => ({
+      ...prev,
+      beam_size: new Set<unknown>([2]),
+      best_of: new Set<unknown>([1]),
+      threads: new Set<unknown>([4]),
+      no_fallback: new Set<unknown>([true]),
+      chunk_seconds: new Set<unknown>([15, 30]),
+    }))
+
+    setMsg(`Preset aplikovan: rychly v3 smoke (${smokeModel}). Zkontroluj konfiguraci a klikni "Spustit tuning".`)
+  }
+
+  function applyV3DecisionGridPreset() {
+    const selectedCz = selectedVideos.filter(vid => {
+      const item = library.find(v => v.video_id === vid)
+      return !!item && item.subtitles_local && (item.language || '').toLowerCase() === 'cs'
+    })
+    const fallbackCz = [...library]
+      .filter(v => v.subtitles_local && (v.language || '').toLowerCase() === 'cs')
+      .sort((a, b) => (a.duration_seconds ?? Number.MAX_SAFE_INTEGER) - (b.duration_seconds ?? Number.MAX_SAFE_INTEGER))
+      .map(v => v.video_id)
+    const decisionVideos = (selectedCz.length >= 4 ? selectedCz : fallbackCz).slice(0, Math.max(4, Math.min(8, selectedCz.length || 4)))
+
+    if (decisionVideos.length < 4) {
+      setMsg('Plny v3 grid potrebuje alespon 4 CZ videa s lokalnimi titulky.')
+      return
+    }
+
+    const rawDecisionModels = selectedModels.length > 0
+      ? selectedModels
+      : ['whisper_cpp_small']
+    const decisionModels = constraintsProfile === 'weak_cap'
+      ? Array.from(new Set(rawDecisionModels.map(mid => (isLargeWhisperV3Model(mid) ? 'whisper_cpp_small' : mid))))
+      : rawDecisionModels
+
+    const decisionPrompts = ['', 'Rozhovor v cestine:']
+
+    setSelectedModels(decisionModels)
+    setSelectedVideos(decisionVideos)
+    setStrategy('grid')
+    setSampleSeconds(60)
+    setClipSeed(42)
+    setClipStartSeconds(null)
+    setRepeatTopK(4)
+    setRepeatRuns(3)
+    setEvaluationMode('heuristic')
+    setValidateBeamPreflight(true)
+    setSelectedPrompts(new Set(decisionPrompts))
+    setCustomPrompt('')
+    setParamValues(prev => ({
+      ...prev,
+      beam_size: new Set<unknown>([1, 2, 3, 5]),
+      best_of: new Set<unknown>([1]),
+      threads: new Set<unknown>([2, 4, 6, 8]),
+      no_fallback: new Set<unknown>([true]),
+      chunk_seconds: new Set<unknown>([15, 30]),
+    }))
+
+    setLabel(label.trim() || 'v3_decision_grid')
+    setMsg('Preset aplikovan: plny v3 grid. Zkontroluj konfiguraci a klikni "Spustit tuning".')
   }
 
   function startPolling(jobId: string) {
@@ -291,12 +661,20 @@ export function TuningPage() {
   const whisperModels = registry.filter(m => m.adapter === 'whisper_cpp')
   const trialCount = countTrials()
   const isSlowModel = selectedModels.some(m => m.includes('large'))
+  const noFallbackSet = paramValues['no_fallback'] ?? new Set<unknown>([true])
+  const bestOfVals = [...(paramValues['best_of'] ?? new Set<unknown>([1]))].map(v => Number(v)).filter(v => Number.isFinite(v))
+  const chunkVals = [...(paramValues['chunk_seconds'] ?? new Set<unknown>([30]))].map(v => Number(v)).filter(v => Number.isFinite(v))
+  const hasNoFallbackBestOfRedundant = noFallbackSet.has(true) && bestOfVals.some(v => v > 1)
+  const hasVerySmallChunk = chunkVals.some(v => v > 0 && v < 10)
+  const hasSingleVideo = selectedVideos.length === 1
+  const hasWeakRepeatPlan = repeatTopK > 0 && repeatRuns < 3
 
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold">Tuning — hledání nejlepšího nastavení</h1>
       <p className="text-sm text-gray-500">
-        Automaticky prochází kombinace parametrů modelu a hledá nejlepší poměr WER ↔ RTF.
+        Automaticky prochází kombinace parametrů modelu a hledá nejlepší poměr WER ↔ RTF pro online mikrofonní přepis.
+        Cíl je nízké zpoždění a stabilní běh i na průměrných starších kancelářských notebookách/PC.
         Výsledky zobrazí Pareto frontier — kombinace kde nelze zlepšit jedno bez zhoršení druhého.
       </p>
 
@@ -415,11 +793,143 @@ export function TuningPage() {
                   className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
               </div>
             )}
+            <div>
+              <label className="text-xs text-gray-500" title="Po základní vlně zopakuje nejlepších K kandidátů kvůli odhadu rozptylu/CI95.">
+                Repeat top-K
+              </label>
+              <input type="number" value={repeatTopK} min={0} max={10}
+                onChange={e => setRepeatTopK(Math.max(0, +e.target.value || 0))}
+                className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500" title="Celkový počet běhů na kandidáta (včetně prvního běhu).">
+                Repeat runs
+              </label>
+              <input type="number" value={repeatRuns} min={1} max={10}
+                onChange={e => setRepeatRuns(Math.max(1, +e.target.value || 1))}
+                className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500" title="Třída cílového HW. Auto = klasifikace podle logical cores + total RAM.">
+                HW profil
+              </label>
+              <select
+                value={hardwareProfile}
+                onChange={e => setHardwareProfile(e.target.value)}
+                className="border rounded px-2 py-1 text-sm w-44 block mt-0.5"
+              >
+                <option value="auto">auto (cores+RAM)</option>
+                <option value="weak_office">weak (&lt;=4L / &lt;=8GB)</option>
+                <option value="mid_office">mid (&lt;=8L / &lt;=16GB)</option>
+                <option value="strong_office">strong (&gt;8L + &gt;16GB)</option>
+                <option value="custom">custom</option>
+              </select>
+              <div className="text-[11px] text-gray-400 mt-1">
+                Profil = třída stroje dle jader+RAM, ne podle aktuálního % CPU/RAM.
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-gray-500" title="Řízená zátěž během trialu. Simuluje obsazený stroj (target CPU/RAM %).">
+                Zátěž simulace
+              </label>
+              <select
+                value={loadProfile}
+                onChange={e => setLoadProfile(e.target.value)}
+                className="border rounded px-2 py-1 text-sm w-44 block mt-0.5"
+              >
+                <option value="none">vypnuto</option>
+                <option value="light">light (CPU 25 / RAM 35)</option>
+                <option value="medium">medium (CPU 45 / RAM 55)</option>
+                <option value="heavy">heavy (CPU 65 / RAM 75)</option>
+                <option value="custom">custom</option>
+              </select>
+              {loadProfile === 'custom' && (
+                <div className="mt-1 flex items-center gap-1 text-xs">
+                  <span className="text-gray-500">CPU</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={95}
+                    value={loadCpuTargetPct}
+                    onChange={e => setLoadCpuTargetPct(Math.max(0, Math.min(95, +e.target.value || 0)))}
+                    className="border rounded px-1.5 py-0.5 w-14"
+                  />
+                  <span className="text-gray-400">%</span>
+                  <span className="text-gray-500">RAM</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={95}
+                    value={loadRamTargetPct}
+                    onChange={e => setLoadRamTargetPct(Math.max(0, Math.min(95, +e.target.value || 0)))}
+                    className="border rounded px-1.5 py-0.5 w-14"
+                  />
+                  <span className="text-gray-400">%</span>
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="text-xs text-gray-500" title="Procesní limity pro tuning worker/model (doporučeno pro simulaci slabšího HW).">
+                Omezení výkonu
+              </label>
+              <select
+                value={constraintsProfile}
+                onChange={e => setConstraintsProfile(e.target.value)}
+                className="border rounded px-2 py-1 text-sm w-44 block mt-0.5"
+              >
+                <option value="none">vypnuto</option>
+                <option value="weak_cap">weak cap (2C / 4GB)</option>
+                <option value="mid_cap">mid cap (4C / 8GB)</option>
+                <option value="custom">custom</option>
+              </select>
+              {constraintsProfile === 'custom' && (
+                <div className="mt-1 flex items-center gap-1 text-xs">
+                  <span className="text-gray-500">Cores</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={128}
+                    value={constraintsCpuCores}
+                    onChange={e => setConstraintsCpuCores(Math.max(1, Math.min(128, +e.target.value || 1)))}
+                    className="border rounded px-1.5 py-0.5 w-14"
+                  />
+                  <span className="text-gray-500">RAM</span>
+                  <input
+                    type="number"
+                    min={256}
+                    max={262144}
+                    value={constraintsRamLimitMb}
+                    onChange={e => setConstraintsRamLimitMb(Math.max(256, Math.min(262144, +e.target.value || 256)))}
+                    className="border rounded px-1.5 py-0.5 w-16"
+                  />
+                  <span className="text-gray-400">MB</span>
+                </div>
+              )}
+              {constraintsProfile !== 'none' && (
+                <div className="mt-1 flex items-center gap-1 text-xs">
+                  <span className="text-gray-500">Priorita</span>
+                  <select
+                    value={constraintsPriority}
+                    onChange={e => setConstraintsPriority(e.target.value)}
+                    className="border rounded px-1.5 py-0.5 text-xs"
+                  >
+                    <option value="idle">idle</option>
+                    <option value="below_normal">below_normal</option>
+                    <option value="normal">normal</option>
+                  </select>
+                </div>
+              )}
+            </div>
           </div>
           <div>
             <label className="text-xs text-gray-500">Popis</label>
             <input value={label} onChange={e => setLabel(e.target.value)}
               placeholder="volitelný popis..." className="border rounded px-2 py-1 text-sm w-full mt-0.5" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">HW poznámka (nepovinné)</label>
+            <input value={hardwareNote} onChange={e => setHardwareNote(e.target.value)}
+              placeholder="např. i5-8250U / 8GB / HDD" className="border rounded px-2 py-1 text-sm w-full mt-0.5" />
           </div>
         </div>
       </div>
@@ -504,6 +1014,23 @@ export function TuningPage() {
             </div>
           ))}
         </div>
+        {(hasNoFallbackBestOfRedundant || hasVerySmallChunk || hasSingleVideo || hasWeakRepeatPlan) && (
+          <div className="border border-amber-200 bg-amber-50 rounded px-3 py-2 text-xs text-amber-800 space-y-1">
+            <div className="font-medium">Nápověda ke konfiguraci</div>
+            {hasNoFallbackBestOfRedundant && (
+              <div>• `no_fallback=true` + `best_of&gt;1` je redundantní. `best_of` se neuplatní.</div>
+            )}
+            {hasVerySmallChunk && (
+              <div>• `chunk_seconds &lt; 10` může zvyšovat overhead/jitter. Pro stabilní srovnání používej hlavně 15/30.</div>
+            )}
+            {hasSingleVideo && (
+              <div>• Jen 1 video = vysoké riziko overfitu. Pro tuning používej aspoň 2 videa.</div>
+            )}
+            {hasWeakRepeatPlan && (
+              <div>• Pro reprodukovatelnost použij aspoň `repeat_runs=3` (CI95 je pak stabilnější).</div>
+            )}
+          </div>
+        )}
 
         {/* Initial prompt */}
         <div className="border-t border-gray-100 pt-4 space-y-3">
@@ -609,14 +1136,43 @@ export function TuningPage() {
           </div>
         </div>
 
+        <div className="border-t border-gray-100 pt-4">
+          <label className="inline-flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={validateBeamPreflight}
+              onChange={e => setValidateBeamPreflight(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            Pre-flight validace beam_size (5s)
+          </label>
+          <p className="text-xs text-gray-500 mt-1">
+            Když je vypnuto, trialy začnou hned bez úvodní validace.
+          </p>
+        </div>
+
         <div className="flex items-center gap-4 pt-2 border-t border-gray-100">
           <div className="text-sm text-gray-700">
             Vygeneruje <strong>{trialCount}</strong> kombinac{trialCount === 1 ? 'i' : trialCount < 5 ? 'e' : 'í'}.
             Odhadovaný čas: <strong>~{Math.round(trialCount * sampleSeconds * 0.6 / 60)} min</strong>
             <span className="text-gray-400 ml-1">(RTF≈0.5)</span>
           </div>
+          <button
+            onClick={applyQuickV3SmokePreset}
+            className="ml-auto border border-emerald-300 text-emerald-700 hover:bg-emerald-50 px-3 py-1.5 rounded text-sm font-medium"
+            title="Prednastavi kratky v3 smoke na 2 CZ videich (bez automatickeho startu)"
+          >
+            Nastavit: Rychly v3 smoke (2x CZ)
+          </button>
+          <button
+            onClick={applyV3DecisionGridPreset}
+            className="border border-indigo-300 text-indigo-700 hover:bg-indigo-50 px-3 py-1.5 rounded text-sm font-medium"
+            title="Prednastavi plny v3 grid (beam 1/2/3/5, threads 2/4/6/8, prompt empty/CZ, chunk 15/30, repeat top4 x3)"
+          >
+            Nastavit: Plny v3 grid (4x CZ)
+          </button>
           <button onClick={startTuning}
-            className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-medium">
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-medium">
             ▶ Spustit tuning
           </button>
           {msg && <span className="text-sm text-red-500">{msg}</span>}
@@ -627,35 +1183,93 @@ export function TuningPage() {
       {/* Historie jobů */}
       {jobs.length > 0 && (
         <div className="bg-white rounded border border-gray-200">
-          <div className="px-4 py-3 border-b border-gray-100">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-3">
             <h2 className="font-semibold text-sm text-gray-700">Historie tuning jobů</h2>
+            <span className="text-xs text-gray-400">{sortedHistoryJobs.length} jobů</span>
+            {historyHiddenCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAllHistoryJobs(v => !v)}
+                className="ml-auto text-xs text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5"
+              >
+                {showAllHistoryJobs ? '▼ Skrýt starší joby' : `▶ Zobrazit dalších ${historyHiddenCount}`}
+              </button>
+            )}
+          </div>
+          <div className="px-4 py-2 border-b border-gray-100 text-[11px] uppercase tracking-wide text-gray-400 grid grid-cols-[3rem_10.5rem_minmax(11rem,1fr)_minmax(10rem,1fr)_7rem_8rem_8rem_8rem] gap-3">
+            <span>#</span>
+            <span>RokDatumHodina</span>
+            <span>Model/Label</span>
+            <span>Profily</span>
+            <span>Triály</span>
+            <span>Běží</span>
+            <span>Zbývá</span>
+            <span>Best WER</span>
           </div>
           <div className="divide-y divide-gray-100">
-            {jobs.map(j => (
+            {visibleHistoryJobs.map((j, idx) => {
+              const elapsedS = jobElapsedSeconds(j, nowMs)
+              const etaS = estimateRemainingSeconds(j, nowMs)
+              return (
               <button key={j.job_id}
                 onClick={() => { setSelectedJob(j); if (j.status === 'running') startPolling(j.job_id) }}
-                className={`w-full text-left px-4 py-2.5 flex items-center gap-4 hover:bg-gray-50 text-sm ${selectedJob?.job_id === j.job_id ? 'bg-blue-50' : ''}`}>
-                <span className={`w-2 h-2 rounded-full shrink-0 ${
-                  j.status === 'completed' ? 'bg-green-500' :
-                  j.status === 'running' ? 'bg-blue-500 animate-pulse' :
-                  j.status === 'failed' ? 'bg-red-500' : 'bg-gray-400'
-                }`} />
-                <span className="font-mono text-xs text-gray-400 w-32 shrink-0">{j.job_id.slice(-12)}</span>
-                <span className="text-gray-700">{j.label || j.model_id}</span>
-                <span className="text-gray-400 text-xs">{j.completed_trials}/{j.total_trials} triálů</span>
-                {j.best_trial_idx != null && j.results[j.best_trial_idx] && (
-                  <span className="ml-auto text-xs">
-                    🏆 WER {((j.results[j.best_trial_idx].wer ?? 0) * 100).toFixed(1)} %
+                className={`w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm ${selectedJob?.job_id === j.job_id ? 'bg-blue-50' : ''}`}
+                title={j.job_id}
+              >
+                <div className="grid grid-cols-[3rem_10.5rem_minmax(11rem,1fr)_minmax(10rem,1fr)_7rem_8rem_8rem_8rem] gap-3 items-center">
+                  <span className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500 font-mono">{idx + 1}</span>
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${
+                      j.status === 'completed' ? 'bg-green-500' :
+                      j.status === 'running' ? 'bg-blue-500 animate-pulse' :
+                      j.status === 'failed' ? 'bg-red-500' : 'bg-gray-400'
+                    }`} />
                   </span>
-                )}
+                  <span className="font-mono text-xs text-gray-500">
+                    {formatJobHistoryName(j)}
+                  </span>
+                  <span className="text-gray-700 truncate">{j.label || j.model_id}</span>
+                  <span className="flex items-center gap-1 flex-wrap">
+                    {j.hardware_profile && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 font-mono">
+                        {j.hardware_profile}
+                      </span>
+                    )}
+                    {j.load_profile && j.load_profile !== 'none' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 font-mono">
+                        load:{j.load_profile}
+                      </span>
+                    )}
+                    {j.constraints_profile && j.constraints_profile !== 'none' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border border-blue-300 text-blue-700 font-mono">
+                        cap:{j.constraints_profile}
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-gray-500 text-xs font-mono">{j.completed_trials}/{j.total_trials}</span>
+                  <span className="text-gray-500 text-xs font-mono">
+                    {elapsedS != null ? `⏱ ${formatElapsedShort(elapsedS)}` : '–'}
+                  </span>
+                  <span className="text-gray-500 text-xs font-mono">
+                    {etaS != null ? `~${formatElapsedShort(etaS)}` : '–'}
+                  </span>
+                  {(() => {
+                    const bestRow = j.best_trial_idx != null
+                      ? j.results.find(r => r.trial_idx === j.best_trial_idx)
+                      : null
+                    return bestRow ? (
+                      <span className="text-xs">🏆 {((bestRow.wer ?? 0) * 100).toFixed(1)}%</span>
+                    ) : <span className="text-xs text-gray-300">–</span>
+                  })()}
+                </div>
               </button>
-            ))}
+            )})}
           </div>
         </div>
       )}
 
       {/* Detail vybraného jobu */}
-      {selectedJob && <TuningJobDetail job={selectedJob} library={library} onCancel={async () => {
+      {selectedJob && <TuningJobDetail job={selectedJob} library={library} nowMs={nowMs} onCancel={async () => {
         await api.tuning.cancelJob(selectedJob.job_id)
         const cancelled = { ...selectedJob, status: 'cancelled' as const }
         setSelectedJob(cancelled)
@@ -666,7 +1280,33 @@ export function TuningPage() {
   )
 }
 
-type SortCol = 'wer' | 'cer' | 'wer_normalized' | 'wer_soft' | 'rtf' | 'rtf_viable' | 'perceived_delay_s' | 'latency_ms' | 'is_pareto'
+type SortCol = 'wer' | 'cer' | 'wer_normalized' | 'wer_soft' | 'rtf' | 'rtf_viable' | 'perceived_delay_s' | 'latency_ms' | 'trial_finished_at' | 'is_pareto'
+
+const SORT_COLUMNS: [SortCol, string][] = [
+  ['wer', 'WER'],
+  ['wer_soft', 'WER soft'],
+  ['cer', 'CER'],
+  ['wer_normalized', 'WER norm.'],
+  ['rtf', 'RTF'],
+  ['rtf_viable', 'Live mic'],
+  ['perceived_delay_s', 'Zpoždění'],
+  ['latency_ms', 'Latence'],
+  ['trial_finished_at', 'Konec'],
+  ['is_pareto', 'Pareto'],
+]
+
+const SORT_DEFAULT_DIR: Record<SortCol, 1 | -1> = {
+  wer: 1,
+  wer_soft: 1,
+  cer: 1,
+  wer_normalized: 1,
+  rtf: 1,
+  rtf_viable: -1,
+  perceived_delay_s: 1,
+  latency_ms: 1,
+  trial_finished_at: -1,
+  is_pareto: -1,
+}
 
 // Přibližná RAM náročnost modelů (MB) — pro filtr HW limitů
 const MODEL_RAM_MB: Record<string, number> = {
@@ -678,15 +1318,23 @@ const MODEL_RAM_MB: Record<string, number> = {
   'whisper_cpp_large_v3':      3100,
 }
 
-function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; library: LibraryItem[]; onCancel: () => void }) {
+function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStatus; library: LibraryItem[]; nowMs: number; onCancel: () => void }) {
   const [expandedTrial, setExpandedTrial] = useState<number | null>(null)
+  const [showFullTextByTrial, setShowFullTextByTrial] = useState<Record<number, boolean>>({})
   const [msgAge, setMsgAge] = useState<number>(0)
-  const [sortCol, setSortCol] = useState<SortCol>('wer')
-  const [sortDir, setSortDir] = useState<1 | -1>(1)
+  const [decision, setDecision] = useState<TuningDecisionReport | null>(null)
+  const [decisionLoading, setDecisionLoading] = useState(false)
+  const [decisionError, setDecisionError] = useState('')
+  const [sortPriorities, setSortPriorities] = useState<SortCol[]>(['wer'])
   const [ram, setRam] = useState<{ used: number; total: number; pct: number } | null>(null)
   const [filterThreads, setFilterThreads] = useState<number | null>(null)
   const [filterViableOnly, setFilterViableOnly] = useState(false)
   const [filterRamMb, setFilterRamMb] = useState<string>('')
+  const hasNonDefaultSort = !(sortPriorities.length === 1 && sortPriorities[0] === 'wer')
+  const isValidationPhase = (job.progress_message ?? '').startsWith('Validace ')
+  const staleWarnSec = isValidationPhase ? 120 : 90
+  const elapsedJobS = jobElapsedSeconds(job, nowMs)
+  const etaJobS = estimateRemainingSeconds(job, nowMs)
 
   useEffect(() => {
     if (job.status !== 'running') { setMsgAge(0); return }
@@ -699,6 +1347,33 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
     return () => clearInterval(iv)
   }, [job.status, job.updated_ts])
 
+  async function loadDecisionReport() {
+    setDecisionLoading(true)
+    setDecisionError('')
+    try {
+      const report = await api.tuning.decisionReport(job.job_id, {
+        min_success_rate: 0.95,
+        max_rtf: 1.0,
+        require_repro_n: 3,
+        top: 5,
+      })
+      setDecision(report)
+    } catch (e: any) {
+      setDecisionError(e.message ?? 'Nacteni decision reportu selhalo')
+    } finally {
+      setDecisionLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    setDecision(null)
+    setDecisionError('')
+    if (job.status === 'completed') {
+      void loadDecisionReport()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.job_id, job.status])
+
   useEffect(() => {
     if (job.status !== 'running') return
     const fetchRam = () => fetch('/api/health').then(r => r.json()).then(d => {
@@ -709,12 +1384,39 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
     return () => clearInterval(iv)
   }, [job.status])
 
-  function toggleSort(col: SortCol) {
-    if (sortCol === col) setSortDir(d => d === 1 ? -1 : 1)
-    else { setSortCol(col); setSortDir(1) }
+  function toggleSortPriority(col: SortCol, checked: boolean) {
+    setSortPriorities(prev => {
+      const exists = prev.includes(col)
+      if (checked) {
+        if (exists) return prev
+        return [...prev, col]
+      }
+      return prev.filter(c => c !== col)
+    })
   }
 
-  const best = job.best_trial_idx != null ? job.results[job.best_trial_idx] : null
+  function toggleFullText(trialIdx: number) {
+    setShowFullTextByTrial(prev => ({ ...prev, [trialIdx]: !prev[trialIdx] }))
+  }
+
+  const best = job.best_trial_idx != null
+    ? (job.results.find(r => r.trial_idx === job.best_trial_idx) ?? null)
+    : null
+  const nonProxyCandidates = job.results.filter(r =>
+    !r.is_repeat &&
+    r.wer != null &&
+    !r.error &&
+    r.rtf != null &&
+    r.rtf <= 1.2 &&
+    r.latency_quality !== 'proxy_offline'
+  )
+  const recommendedBest = nonProxyCandidates.length > 0
+    ? nonProxyCandidates.reduce((a, b) => ((a.wer ?? Infinity) <= (b.wer ?? Infinity) ? a : b))
+    : best
+  const bestIsProxyOnly = !!best && best.latency_quality === 'proxy_offline'
+  const recommendationDiffers = !!best && !!recommendedBest && best.trial_idx !== recommendedBest.trial_idx
+  const highlightedBestTrialIdx = recommendedBest?.trial_idx ?? best?.trial_idx ?? null
+  const detailColSpan = 12 + (job.model_ids?.length > 1 ? 1 : 0)
   const ramLimitMb = filterRamMb !== '' ? parseInt(filterRamMb) : null
   const sorted = [...job.results]
     .filter(r => r.wer != null)
@@ -722,21 +1424,34 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
     .filter(r => !filterViableOnly || r.rtf_viable)
     .filter(r => ramLimitMb == null || (MODEL_RAM_MB[r.model_id ?? ''] ?? 0) <= ramLimitMb)
     .sort((a, b) => {
-    const av = (a as any)[sortCol]
-    const bv = (b as any)[sortCol]
-    if (typeof av === 'boolean' || typeof bv === 'boolean') {
-      // true (viable/pareto) = "better" → sort ascending puts false first, so flip for booleans
-      const an = av === true ? 1 : av === false ? 0 : -1
-      const bn = bv === true ? 1 : bv === false ? 0 : -1
-      return (bn - an) * sortDir  // descending by default (true first)
-    }
-    const an = av ?? Infinity
-    const bn = bv ?? Infinity
-    return (an - bn) * sortDir
-  })
+      for (const col of sortPriorities) {
+        const dir = SORT_DEFAULT_DIR[col]
+        let an: number | null = null
+        let bn: number | null = null
+        if (col === 'trial_finished_at') {
+          an = parseIsoToMs(a.trial_finished_at ?? null)
+          bn = parseIsoToMs(b.trial_finished_at ?? null)
+        } else {
+          const av = (a as any)[col]
+          const bv = (b as any)[col]
+          if (typeof av === 'boolean' || typeof bv === 'boolean') {
+            an = av === true ? 1 : av === false ? 0 : null
+            bn = bv === true ? 1 : bv === false ? 0 : null
+          } else {
+            an = typeof av === 'number' ? av : null
+            bn = typeof bv === 'number' ? bv : null
+          }
+        }
+        if (an == null && bn == null) continue
+        if (an == null) return 1
+        if (bn == null) return -1
+        if (an !== bn) return (an < bn ? -1 : 1) * dir
+      }
+      return a.trial_idx - b.trial_idx
+    })
 
   const scatterData = job.results
-    .filter(r => r.wer != null && r.rtf != null)
+    .filter(r => !r.is_repeat && r.wer != null && r.rtf != null)
     .map(r => ({
       x: r.rtf!,
       y: +(r.wer! * 100).toFixed(2),
@@ -745,7 +1460,7 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
         .map(([k, v]) => `${k}=${v}`)
         .join(', ') + ` chunk=${r.chunk_seconds}s`,
       isPareto: r.is_pareto,
-      isBest: r.trial_idx === job.best_trial_idx,
+      isBest: r.trial_idx === highlightedBestTrialIdx,
     }))
 
   return (
@@ -760,6 +1475,40 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
             job.status === 'failed' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'
           }`}>{job.status}</span>
           <span className="text-sm text-gray-600">{job.completed_trials} / {job.total_trials} triálů</span>
+          {elapsedJobS != null && (
+            <span className="text-xs text-gray-600 font-mono">
+              ⏱ {job.status === 'running' || job.status === 'pending' ? 'Běží' : 'Trvalo'}: {formatElapsedShort(elapsedJobS)}
+            </span>
+          )}
+          {(job.status === 'running' || job.status === 'pending') && etaJobS != null && (
+            <span className="text-xs text-gray-600 font-mono">
+              ⌛ Odhad zbývá: ~{formatElapsedShort(etaJobS)}
+            </span>
+          )}
+          {job.hardware_profile && (
+            <span className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-700 font-mono" title={job.hardware_note ?? undefined}>
+              {job.hardware_profile}
+            </span>
+          )}
+          {job.load_profile && job.load_profile !== 'none' && (
+            <span className="text-xs px-2 py-0.5 rounded border border-amber-300 text-amber-700 font-mono"
+              title={`CPU ${job.load_cpu_target_pct ?? '-'}% / RAM ${job.load_ram_target_pct ?? '-'}%`}>
+              load {job.load_profile}
+            </span>
+          )}
+          {job.constraints_profile && job.constraints_profile !== 'none' && (
+            <span className={`text-xs px-2 py-0.5 rounded border font-mono ${
+              job.constraints_applied === false ? 'border-red-300 text-red-700' : 'border-blue-300 text-blue-700'
+            }`}
+              title={`cores ${job.constraints_cpu_cores ?? '-'} (ok=${job.constraints_cpu_applied ?? '-'}) / RAM ${job.constraints_ram_limit_mb ?? '-'} MB (hard_ok=${job.constraints_ram_hard_cap_applied ?? '-'}; ${job.constraints_ram_hard_cap_error ?? 'ok'}) / prio ${job.constraints_priority ?? '-'} (ok=${job.constraints_priority_applied ?? '-'}) / ram_mode ${job.constraints_ram_mode ?? 'none'}`}>
+              cap {job.constraints_profile}
+            </span>
+          )}
+          {job.hardware_info?.hostname && (
+            <span className="text-xs text-gray-400" title={job.hardware_info.cpu_model ?? undefined}>
+              host: {job.hardware_info.hostname}
+            </span>
+          )}
           {job.status === 'running' && (
             <div className="w-32 h-2 bg-gray-200 rounded overflow-hidden">
               <div className="h-full bg-blue-500 transition-all"
@@ -782,6 +1531,21 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
             className="ml-auto text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-0.5">
             📁 Otevřít složku
           </button>
+          <button
+            onClick={() => api.openDir.subtitles()}
+            className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2 py-0.5"
+            title="Otevře runtime/library/subtitles (zdrojové VTT texty)"
+          >
+            📝 Zdrojové texty
+          </button>
+          <button
+            onClick={() => void loadDecisionReport()}
+            disabled={decisionLoading || job.status !== 'completed'}
+            className="text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 rounded px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Prepocte finalni decision report z metrik jobu"
+          >
+            {decisionLoading ? '… Decision' : 'Decision'}
+          </button>
         </div>
         {job.audio_ready?.length > 0 && (
           <div className="mt-2 text-xs px-3 py-1.5 bg-green-50 text-green-800 rounded flex gap-3 flex-wrap">
@@ -797,43 +1561,189 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
             {job.status === 'running' && <span className="animate-pulse mr-2">⌛</span>}
             {job.progress_message}
             {job.status === 'running' && msgAge > 0 && (
-              <span className={`ml-3 ${msgAge > 60 ? 'text-red-600 font-bold' : msgAge > 30 ? 'text-amber-600' : 'text-blue-400'}`}>
-                {msgAge > 60 ? '⚠ zaseknuté?' : `+${msgAge}s`}
+              <span className={`ml-3 ${msgAge > staleWarnSec ? 'text-red-600 font-bold' : msgAge > 30 ? 'text-amber-600' : 'text-blue-400'}`}>
+                {msgAge > staleWarnSec ? '⚠ zaseknuté?' : `+${msgAge}s`}
               </span>
             )}
           </div>
         )}
+        {job.status === 'running' && isValidationPhase && (
+          <div className="mt-2 text-[11px] text-gray-500">
+            Validace může u `large_v3` pod cap profilem trvat déle; varování se zobrazí až po 120s bez heartbeat.
+          </div>
+        )}
+        {job.constraints_warnings && job.constraints_warnings.length > 0 && (
+          <div className="mt-2 text-xs px-3 py-2 rounded border border-amber-300 bg-amber-50 text-amber-900">
+            {job.constraints_warnings.join(' | ')}
+          </div>
+        )}
+        {(job.status === 'completed' || (job.repro_validation?.checked_top_k ?? 0) > 0) && job.repro_validation && (
+          <div className={`mt-2 text-xs px-3 py-2 rounded border ${job.repro_validation.passed ? 'border-green-300 bg-green-50 text-green-800' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
+            Repro n≥{job.repro_validation.required_n ?? 3}:{' '}
+            {job.repro_validation.passed
+              ? 'OK'
+              : (job.repro_validation.checked_top_k ?? 0) === 0
+                ? (job.status === 'completed'
+                  ? 'nevztahuje se (žádný validní seed trial)'
+                  : `čeká na seed trialy (${job.completed_trials}/${job.total_trials})`)
+                : (job.repro_validation.missing_trial_idxs ?? []).length > 0
+                  ? `MISSING trial #${(job.repro_validation.missing_trial_idxs ?? []).join(', ')}`
+                  : 'chybí repeat běhy'}
+          </div>
+        )}
 
-        {best && (
+        {bestIsProxyOnly && (
+          <div className="mt-3 text-xs px-3 py-2 rounded border border-amber-300 bg-amber-50 text-amber-900">
+            Tvrdé varování: nejlepší trial má pouze proxy latenci (`proxy_offline`). Neber jako finální live rozhodnutí.
+          </div>
+        )}
+
+        {decisionError && (
+          <div className="mt-3 text-xs px-3 py-2 rounded border border-red-300 bg-red-50 text-red-800">
+            Decision report: {decisionError}
+          </div>
+        )}
+
+        {decision?.best && (
+          <div className="mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded text-xs">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="font-semibold text-indigo-800">
+                Decision report ({decision.selected_pool === 'strict' ? 'strict' : 'fallback'})
+              </span>
+              <span className="font-mono text-indigo-700">
+                trial #{decision.best.trial_idx} · score {decision.best.score.toFixed(4)}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-3 text-indigo-900">
+              <span>WER <strong>{(decision.best.wer * 100).toFixed(2)}%</strong></span>
+              <span>RTF <strong>{decision.best.rtf.toFixed(3)}</strong></span>
+              <span>Delay <strong>{decision.best.perceived_delay_s != null ? `${decision.best.perceived_delay_s.toFixed(2)}s` : '-'}</strong></span>
+              <span>Success <strong>{decision.best.success_rate != null ? `${(decision.best.success_rate * 100).toFixed(1)}%` : '-'}</strong></span>
+              <span>LatencyQ <strong>{decision.best.latency_quality ?? '-'}</strong></span>
+              {decision.load_profile && decision.load_profile !== 'none' && (
+                <span>
+                  Load <strong>{decision.load_profile}</strong> (CPU {decision.load_cpu_target_pct ?? '-'}% / RAM {decision.load_ram_target_pct ?? '-'}%)
+                </span>
+              )}
+              {decision.constraints_profile && decision.constraints_profile !== 'none' && (
+                <span>
+                  Cap <strong>{decision.constraints_profile}</strong> ({decision.constraints_cpu_cores ?? '-'}C / {decision.constraints_ram_limit_mb ?? '-'} MB)
+                </span>
+              )}
+              {decision.repro_validation && (
+                <span>
+                  Repro n≥{decision.require_repro_n ?? 3}:{' '}
+                  <strong>
+                    {decision.repro_validation.passed
+                      ? 'OK'
+                      : (decision.repro_validation.checked_top_k ?? 0) === 0
+                        ? 'nevztahuje se (žádný validní seed trial)'
+                        : (decision.repro_validation.missing_trial_idxs ?? []).length > 0
+                          ? `MISSING trial #${(decision.repro_validation.missing_trial_idxs ?? []).join(', ')}`
+                          : 'chybí repeat běhy'}
+                  </strong>
+                </span>
+              )}
+            </div>
+            {decision.top && decision.top.length > 1 && (
+              <div className="mt-2 text-indigo-800">
+                <div className="font-medium mb-1">Top kandidáti:</div>
+                <div className="space-y-0.5 font-mono">
+                  {decision.top.slice(0, 3).map((c, i) => (
+                    <div key={c.trial_idx}>
+                      {i + 1}. #{c.trial_idx} WER {(c.wer * 100).toFixed(2)}% · RTF {c.rtf.toFixed(3)} · score {c.score.toFixed(4)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {recommendedBest && (
           <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-semibold text-green-800">🏆 Nejlepší konfigurace (nejnižší WER, RTF ≤ 1.2)</span>
+              <span className="text-xs font-semibold text-green-800">
+                🏆 {recommendationDiffers ? 'Doporučená konfigurace (ne-proxy preferovaná)' : 'Nejlepší konfigurace (nejnižší WER, RTF ≤ 1.2)'}
+              </span>
               <button
                 onClick={() => {
-                  localStorage.setItem('tuning_recommendation_v1', JSON.stringify({ model_id: job.model_id, params: best.params, wer: best.wer, rtf: best.rtf }))
-                  alert(`Nastavení uloženo.\nModel: ${job.model_id}\nParams: ${JSON.stringify(best.params)}`)
+                  localStorage.setItem('tuning_recommendation_v1', JSON.stringify({
+                    model_id: recommendedBest.model_id ?? job.model_id,
+                    params: recommendedBest.params,
+                    wer: recommendedBest.wer,
+                    rtf: recommendedBest.rtf,
+                  }))
+                  alert(`Nastavení uloženo.\nModel: ${recommendedBest.model_id ?? job.model_id}\nParams: ${JSON.stringify(recommendedBest.params)}`)
                 }}
                 className="ml-auto text-xs bg-green-700 hover:bg-green-800 text-white px-3 py-1 rounded">
                 Použít toto nastavení
               </button>
             </div>
             <div className="flex flex-wrap gap-2">
-              {Object.entries(best.params).map(([k, v]) => (
+              {Object.entries(recommendedBest.params).map(([k, v]) => (
                 <span key={k} className="bg-white border border-green-200 rounded px-2 py-0.5 text-xs font-mono">
                   <span className="text-gray-500">{k}=</span><strong>{String(v)}</strong>
                 </span>
               ))}
             </div>
             <div className="flex gap-4 mt-2 text-xs">
-              <WerBadge value={best.wer} />
-              {best.cer != null && <span className="text-gray-600">CER {(best.cer * 100).toFixed(1)} %</span>}
-              {best.rtf != null && <span className={best.rtf > 1 ? 'text-red-500' : 'text-green-600'}>RTF {best.rtf.toFixed(2)}</span>}
-              {best.perceived_delay_s != null && <span className="text-gray-500" title="Čas od promluvení do zobrazení přepisu">⏱ {best.perceived_delay_s.toFixed(1)}s zpoždění</span>}
-              {best.latency_ms != null && <span className="text-gray-500">{best.latency_ms.toFixed(0)} ms latence</span>}
+              <WerBadge value={recommendedBest.wer} />
+              {recommendedBest.cer != null && <span className="text-gray-600">CER {(recommendedBest.cer * 100).toFixed(1)} %</span>}
+              {recommendedBest.rtf != null && <span className={recommendedBest.rtf > 1 ? 'text-red-500' : 'text-green-600'}>RTF {recommendedBest.rtf.toFixed(2)}</span>}
+              {recommendedBest.perceived_delay_s != null && <span className="text-gray-500" title="Čas od promluvení do zobrazení přepisu">⏱ {recommendedBest.perceived_delay_s.toFixed(1)}s zpoždění</span>}
+              {recommendedBest.latency_ms != null && <span className="text-gray-500">{recommendedBest.latency_ms.toFixed(0)} ms latence</span>}
             </div>
           </div>
         )}
       </div>
+
+      {job.reproducibility && job.reproducibility.length > 0 && (
+        <div className="bg-white rounded border border-gray-200 p-4">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Reproducibility (top kandidáti)</h3>
+          <p className="text-xs text-gray-400 mb-3">
+            Agregace opakovaných běhů: mean, std a 95% interval spolehlivosti (CI95).
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-500 uppercase">
+                <tr>
+                  <th className="px-2 py-1.5 text-left">Seed trial</th>
+                  <th className="px-2 py-1.5 text-center">Běhy</th>
+                  <th className="px-2 py-1.5 text-center">WER mean ± std</th>
+                  <th className="px-2 py-1.5 text-center">WER CI95</th>
+                  <th className="px-2 py-1.5 text-center">RTF mean ± std</th>
+                  <th className="px-2 py-1.5 text-center">RTF CI95</th>
+                  <th className="px-2 py-1.5 text-center">Live rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {job.reproducibility.map((rep) => (
+                  <tr key={rep.seed_trial_idx} className="border-t border-gray-100">
+                    <td className="px-2 py-1.5 font-mono">#{rep.seed_trial_idx}</td>
+                    <td className="px-2 py-1.5 text-center font-mono">{rep.runs_ok}/{rep.runs_total}</td>
+                    <td className="px-2 py-1.5 text-center font-mono">
+                      {rep.wer ? `${(rep.wer.mean * 100).toFixed(2)}% ± ${(rep.wer.std * 100).toFixed(2)}%` : '–'}
+                    </td>
+                    <td className="px-2 py-1.5 text-center font-mono">
+                      {rep.wer ? `${(rep.wer.ci95_low * 100).toFixed(2)}–${(rep.wer.ci95_high * 100).toFixed(2)}%` : '–'}
+                    </td>
+                    <td className="px-2 py-1.5 text-center font-mono">
+                      {rep.rtf ? `${rep.rtf.mean.toFixed(3)} ± ${rep.rtf.std.toFixed(3)}` : '–'}
+                    </td>
+                    <td className="px-2 py-1.5 text-center font-mono">
+                      {rep.rtf ? `${rep.rtf.ci95_low.toFixed(3)}–${rep.rtf.ci95_high.toFixed(3)}` : '–'}
+                    </td>
+                    <td className="px-2 py-1.5 text-center font-mono">
+                      {rep.rtf_viable_rate != null ? `${(rep.rtf_viable_rate * 100).toFixed(0)}%` : '–'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Pareto scatter */}
       {scatterData.length > 0 && (
@@ -948,10 +1858,10 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
               )}
             </div>
             {/* Reset */}
-            {(filterThreads != null || filterViableOnly || filterRamMb !== '') && (
-              <button onClick={() => { setFilterThreads(null); setFilterViableOnly(false); setFilterRamMb('') }}
+            {(filterThreads != null || filterViableOnly || filterRamMb !== '' || hasNonDefaultSort) && (
+              <button onClick={() => { setFilterThreads(null); setFilterViableOnly(false); setFilterRamMb(''); setSortPriorities(['wer']) }}
                 className="text-gray-400 hover:text-gray-700 text-xs underline">
-                reset filtrů
+                reset filtrů/řazení
               </button>
             )}
             <span className="ml-auto text-gray-400">{sorted.length} / {job.results.filter(r => r.wer != null).length} triálů</span>
@@ -968,15 +1878,27 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
                 <th className="px-3 py-2 text-center">#</th>
                 {job.model_ids?.length > 1 && <th className="px-3 py-2 text-left">Model</th>}
                 <th className="px-3 py-2 text-left">Parametry</th>
-                {([ ['wer','WER'], ['wer_soft','WER soft'], ['cer','CER'], ['wer_normalized','WER norm.'], ['rtf','RTF'],
-                    ['rtf_viable','Live mic'], ['perceived_delay_s','Zpoždění'], ['latency_ms','Latence'], ['is_pareto','Pareto']
-                ] as [SortCol, string][]).map(([col, label], i) => (
-                  <th key={i} onClick={() => toggleSort(col)}
-                    className="px-3 py-2 text-center cursor-pointer select-none hover:bg-gray-100 whitespace-nowrap"
-                    title={col === 'perceived_delay_s' ? 'Čas od promluvení do zobrazení přepisu = chunk + chunk×RTF' : undefined}>
-                    {label}{sortCol === col ? (sortDir === 1 ? ' ▲' : ' ▼') : ''}
-                  </th>
-                ))}
+                {SORT_COLUMNS.map(([col, label], i) => {
+                  const idx = sortPriorities.indexOf(col)
+                  return (
+                    <th key={i}
+                      className="px-3 py-2 text-center select-none whitespace-nowrap"
+                      title={col === 'perceived_delay_s' ? 'Perceived delay: preferuje měřenou first-word latenci (live), jinak fallback proxy.' : undefined}>
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={idx >= 0}
+                          onChange={e => toggleSortPriority(col, e.target.checked)}
+                          className="accent-blue-600"
+                        />
+                        <span>{label}</span>
+                        {idx >= 0 && (
+                          <span className="text-[10px] px-1 rounded bg-blue-100 text-blue-700 font-mono">{idx + 1}</span>
+                        )}
+                      </label>
+                    </th>
+                  )
+                })}
               </tr>
             </thead>
             <tbody>
@@ -984,7 +1906,7 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
                 <>
                   <tr key={r.trial_idx}
                     onClick={() => setExpandedTrial(expandedTrial === r.trial_idx ? null : r.trial_idx)}
-                    className={`border-t border-gray-100 cursor-pointer ${r.trial_idx === job.best_trial_idx ? 'bg-green-50 hover:bg-green-100' : 'hover:bg-gray-50'}`}>
+                    className={`border-t border-gray-100 cursor-pointer ${r.trial_idx === highlightedBestTrialIdx ? 'bg-green-50 hover:bg-green-100' : 'hover:bg-gray-50'}`}>
                     <td className="px-3 py-2 text-center text-gray-400 font-mono">
                       {rank === 0 ? '🏆' : rank + 1}
                     </td>
@@ -996,6 +1918,11 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1 items-center">
                         <span className="text-blue-500 mr-1 text-xs font-bold">{expandedTrial === r.trial_idx ? '▼' : '▶'}</span>
+                        {r.is_repeat && (
+                          <span className="bg-indigo-100 text-indigo-700 rounded px-1.5 py-0.5 font-mono">
+                            repeat {r.repeat_no ?? '?'} of #{r.repeat_of_trial_idx ?? '?'}
+                          </span>
+                        )}
                         {Object.entries(r.params).map(([k, v]) => (
                           <span key={k} className="bg-gray-100 rounded px-1.5 py-0.5 font-mono text-gray-700">
                             {k}=<strong>{String(v)}</strong>
@@ -1026,19 +1953,29 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
                           : <span className="text-red-600 font-bold" title="✗ Nestíhá live přepis (RTF &gt; 1.0)">✗ Pomalý</span>
                         : '–'}
                     </td>
-                    <td className="px-3 py-2 text-center font-mono text-gray-600" title="Čas od promluvení do zobrazení přepisu">
-                      {r.perceived_delay_s != null ? `${r.perceived_delay_s.toFixed(1)}s` : '–'}
+                    <td
+                      className="px-3 py-2 text-center font-mono text-gray-600"
+                      title={`Čas od promluvení do zobrazení přepisu (${r.perceived_delay_method ?? 'n/a'})`}
+                    >
+                      {r.perceived_delay_s != null
+                        ? `${r.perceived_delay_quality === 'low' ? '~' : ''}${r.perceived_delay_s.toFixed(1)}s`
+                        : '–'}
                     </td>
                     <td className="px-3 py-2 text-center font-mono text-gray-600">
-                      {r.latency_ms != null ? `${r.latency_ms.toFixed(0)}ms` : '–'}
+                      {r.latency_ms != null
+                        ? `${r.latency_quality === 'proxy_offline' ? '~' : ''}${r.latency_ms.toFixed(0)}ms`
+                        : '–'}
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono text-gray-600">
+                      {formatClockHHMMSS(r.trial_finished_at)}
                     </td>
                     <td className="px-3 py-2 text-center">
                       {r.is_pareto ? <span className="text-yellow-600 font-bold">★</span> : ''}
                     </td>
                   </tr>
                   {expandedTrial === r.trial_idx && (
-                    <tr key={`${r.trial_idx}-detail`} className={r.trial_idx === job.best_trial_idx ? 'bg-green-50' : 'bg-gray-50'}>
-                      <td colSpan={10} className="px-4 py-3 border-t border-gray-100">
+                    <tr key={`${r.trial_idx}-detail`} className={r.trial_idx === highlightedBestTrialIdx ? 'bg-green-50' : 'bg-gray-50'}>
+                      <td colSpan={detailColSpan} className="px-4 py-3 border-t border-gray-100">
                         <div className="space-y-4 text-xs">
                           {r.error && (
                             <div className="bg-red-50 border border-red-200 rounded p-2 text-red-700 font-mono">{r.error}</div>
@@ -1065,10 +2002,72 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
                               RTF: <strong>{r.rtf?.toFixed(3) ?? '–'}</strong>
                             </span>
                             <span>Latence: <strong>{r.latency_ms != null ? r.latency_ms.toFixed(0)+'ms' : '–'}</strong></span>
-                            {r.perceived_delay_s != null && (
-                              <span title="Čas od promluvení do zobrazení přepisu = chunk + chunk×RTF">
-                                Zpoždění: <strong>{r.perceived_delay_s.toFixed(1)}s</strong>
+                            {r.ram_mb != null && (
+                              <span title="Průměrná RAM model procesu přes videa v trialu">
+                                RAM avg: <strong>{r.ram_mb.toFixed(0)} MB</strong>
                               </span>
+                            )}
+                            {r.ram_peak_mb != null && (
+                              <span title="Nejvyšší RAM model procesu přes videa v trialu">
+                                RAM peak: <strong>{r.ram_peak_mb.toFixed(0)} MB</strong>
+                              </span>
+                            )}
+                            {r.worker_rss_peak_mb != null && (
+                              <span title="Peak RSS tuning worker procesu během trialu">
+                                Worker RSS peak: <strong>{r.worker_rss_peak_mb.toFixed(0)} MB</strong>
+                              </span>
+                            )}
+                            {(r.load_cpu_target_pct != null || r.load_ram_target_pct != null) && (
+                              <span title={`Profil: ${r.load_profile ?? 'custom'}`}>
+                                Load cíl: <strong>CPU {r.load_cpu_target_pct != null ? `${r.load_cpu_target_pct.toFixed(0)}%` : '–'}</strong>
+                                {' / '}
+                                <strong>RAM {r.load_ram_target_pct != null ? `${r.load_ram_target_pct.toFixed(0)}%` : '–'}</strong>
+                              </span>
+                            )}
+                            {(r.load_cpu_actual_avg_pct != null || r.load_ram_actual_avg_pct != null) && (
+                              <span>
+                                Load skutečnost: <strong>CPU {r.load_cpu_actual_avg_pct != null ? `${r.load_cpu_actual_avg_pct.toFixed(0)}%` : '–'}</strong>
+                                {' / '}
+                                <strong>RAM {r.load_ram_actual_avg_pct != null ? `${r.load_ram_actual_avg_pct.toFixed(0)}%` : '–'}</strong>
+                                {r.load_samples != null && <span className="text-gray-400 ml-1">({r.load_samples} vzorků)</span>}
+                              </span>
+                            )}
+                            {r.load_control_ok === false && (
+                              <span className="text-amber-700">
+                                Load control: mimo toleranci
+                              </span>
+                            )}
+                            {(r.constraints_cpu_cores != null || r.constraints_ram_limit_mb != null) && (
+                              <span>
+                                Cap: <strong>{r.constraints_cpu_cores != null ? `${r.constraints_cpu_cores}C` : '—'}</strong>
+                                {' / '}
+                                <strong>{r.constraints_ram_limit_mb != null ? `${r.constraints_ram_limit_mb} MB` : '—'}</strong>
+                                {' / '}
+                                <strong>{r.constraints_priority ?? 'below_normal'}</strong>
+                                {' / '}
+                                <strong>{r.constraints_ram_mode ?? 'none'}</strong>
+                              </span>
+                            )}
+                            {r.constraints_applied === false && (
+                              <span className="text-amber-700">Cap: neaplikováno</span>
+                            )}
+                            {r.perceived_delay_s != null && (
+                              <span title={`Perceived delay method: ${r.perceived_delay_method ?? 'n/a'}`}>
+                                Zpoždění: <strong>{r.perceived_delay_s.toFixed(1)}s</strong>
+                                {r.perceived_delay_quality === 'low' && <span className="ml-1 text-amber-700">(proxy)</span>}
+                              </span>
+                            )}
+                            {r.latency_quality && (
+                              <span title="Kvalita latence podle způsobu měření">
+                                Latence kvalita: <strong>{r.latency_quality}</strong>
+                              </span>
+                            )}
+                            {r.rtf_p95 != null && <span>RTF p95: <strong>{r.rtf_p95.toFixed(3)}</strong></span>}
+                            {r.latency_p95_ms != null && <span>Latence p95: <strong>{r.latency_p95_ms.toFixed(0)}ms</strong></span>}
+                            {r.ram_p95_mb != null && <span>RAM p95: <strong>{r.ram_p95_mb.toFixed(0)} MB</strong></span>}
+                            {r.success_rate != null && <span>Stabilita: <strong>{(r.success_rate * 100).toFixed(0)}%</strong></span>}
+                            {r.resource_metrics_available === false && (
+                              <span className="text-amber-700">RAM/RSS: nedostupné (chybí psutil)</span>
                             )}
                             {r.elapsed_s != null && <span>Engine: <strong>{r.elapsed_s.toFixed(1)}s</strong></span>}
                             {r.total_audio_s != null && <span>Audio: <strong>{r.total_audio_s.toFixed(1)}s</strong></span>}
@@ -1076,14 +2075,24 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
                           </div>
 
                           {/* Per-video breakdown */}
-                          {r.source_metrics && r.source_metrics.length > 1 && (
+                          {r.source_metrics && r.source_metrics.length > 0 && (
                             <div>
                               <div className="font-semibold text-gray-600 mb-1">Výsledky per video (průměr v tabulce):</div>
                               <div className="flex flex-wrap gap-2">
                                 {r.source_metrics.map(sm => (
                                   <div key={sm.video_id} className={`border rounded px-2 py-1 font-mono text-center ${sm.error ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-white'}`}>
-                                    <div className="text-gray-500 text-xs truncate max-w-28" title={sm.video_id}>
-                                      {videoLabel(library.find(v => v.video_id === sm.video_id)?.title ?? sm.video_id, sm.video_id)}
+                                    <div className="flex items-center justify-center gap-1">
+                                      <div className="text-gray-500 text-xs truncate max-w-28" title={sm.video_id}>
+                                        {videoLabel(library.find(v => v.video_id === sm.video_id)?.title ?? sm.video_id, sm.video_id)}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => api.openDir.subtitlesVideo(sm.video_id)}
+                                        className="text-[11px] text-gray-400 hover:text-gray-700"
+                                        title={`Otevřít titulky videa ${sm.video_id}`}
+                                      >
+                                        📁
+                                      </button>
                                     </div>
                                     {sm.error
                                       ? <div className="text-red-600 text-xs">chyba</div>
@@ -1099,39 +2108,75 @@ function TuningJobDetail({ job, library, onCancel }: { job: TuningJobStatus; lib
                             </div>
                           )}
 
+                          {/* Plné texty */}
+                          {(r.transcript || r.reference_text) && (
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <div className="font-semibold text-gray-600">Srovnání textů (plné znění):</div>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleFullText(r.trial_idx)}
+                                  className="text-[11px] text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5"
+                                >
+                                  {showFullTextByTrial[r.trial_idx] ? '▼ Skrýt texty' : '▶ Zobrazit texty'}
+                                </button>
+                              </div>
+                              <div className="mt-1 text-[11px] text-gray-500">
+                                Přepsaný: {textWordCount(r.transcript).toLocaleString()} slov · {textCharCount(r.transcript).toLocaleString()} znaků
+                                {' '}|{' '}
+                                Referenční: {textWordCount(r.reference_text).toLocaleString()} slov · {textCharCount(r.reference_text).toLocaleString()} znaků
+                                {' '}|{' '}
+                                Δ slov {Math.abs(textWordCount(r.transcript) - textWordCount(r.reference_text)).toLocaleString()}
+                                {' '}·{' '}
+                                Δ znaků {Math.abs(textCharCount(r.transcript) - textCharCount(r.reference_text)).toLocaleString()}
+                              </div>
+                              {showFullTextByTrial[r.trial_idx] && (
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 mt-2">
+                                  <div className="bg-white border border-gray-200 rounded p-2">
+                                    <div className="text-[11px] text-gray-500">
+                                      Přepsaný text
+                                    </div>
+                                    <div className="mt-1 text-xs leading-5 whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+                                      {r.transcript || '—'}
+                                    </div>
+                                  </div>
+                                  <div className="bg-white border border-gray-200 rounded p-2">
+                                    <div className="text-[11px] text-gray-500">
+                                      Referenční text
+                                    </div>
+                                    <div className="mt-1 text-xs leading-5 italic whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+                                      {r.reference_text || '—'}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           {/* Word diff */}
                           {r.word_diff && r.word_diff.length > 0 && (
                             <div>
                               <div className="font-semibold text-gray-600 mb-1">Word diff (přepis vs reference):</div>
-                              <div className="bg-white border border-gray-200 rounded p-2 leading-6 max-h-48 overflow-y-auto">
-                                {r.word_diff.map((d, i) => {
-                                  const op = d.op
-                                  if (op === '=' || op === 'equal')
-                                    return <span key={i} className="text-gray-700">{d.hyp} </span>
-                                  if (op === 'S' || op === 'replace') {
-                                    const isSoft = d.is_soft
-                                    return (
-                                      <span key={i}>
-                                        <span className={isSoft
-                                          ? 'bg-yellow-100 text-yellow-700 rounded px-0.5'
-                                          : 'bg-red-100 text-red-700 rounded px-0.5 font-semibold'}
-                                          title={isSoft ? `Drobná záměna: "${d.ref}" → "${d.hyp}"` : `Záměna: "${d.ref}" → "${d.hyp}"`}>
-                                          {d.hyp}
-                                        </span>
-                                        <span className="bg-gray-100 text-gray-400 line-through rounded px-0.5 ml-0.5 text-xs">{d.ref}</span>{' '}
-                                      </span>
-                                    )
-                                  }
-                                  if (op === 'I' || op === 'insert')
-                                    return <span key={i} className="bg-gray-100 text-gray-500 rounded px-0.5 line-through">{d.hyp} </span>
-                                  if (op === 'D' || op === 'delete')
-                                    return <span key={i} className="bg-red-200 text-red-800 rounded px-0.5 font-semibold">[{d.ref}] </span>
-                                  return null
-                                })}
+                              <div className="bg-white border border-gray-200 rounded p-2 max-h-48 overflow-auto">
+                                <div className="inline-block max-w-full align-top">
+                                  <div className="inline-flex gap-1 font-mono text-xs leading-6 whitespace-nowrap">
+                                    {buildWordDiffAlignedCells(r.word_diff as WordDiffItem[]).map((cell) => (
+                                      <div
+                                        key={cell.key}
+                                        className="shrink-0"
+                                        style={{ width: `${cell.widthCh}ch` }}
+                                        title={cell.title}
+                                      >
+                                        <div className={`${cell.topClass} block`}>{cell.top || '\u00A0'}</div>
+                                        <div className={`${cell.bottomClass} block mt-0.5 text-xs not-italic`}>{cell.bottom || '\u00A0'}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
                               </div>
                               <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-400">
-                                <span><span className="bg-red-100 text-red-700 rounded px-1 font-semibold">slovo</span> záměna (skutečná)</span>
-                                <span><span className="bg-yellow-100 text-yellow-700 rounded px-1">slovo</span> záměna (drobná)</span>
+                                <span><span className="bg-sky-100 text-sky-700 rounded px-1 font-semibold">slovo</span> záměna</span>
+                                <span><span className="bg-green-100 text-green-700 rounded px-1">slovo</span> záměna (drobná)</span>
                                 <span><span className="bg-red-200 text-red-800 rounded px-1 font-semibold">[slovo]</span> chybí</span>
                                 <span><span className="bg-gray-100 text-gray-500 rounded px-1 line-through">slovo</span> přebývá</span>
                               </div>

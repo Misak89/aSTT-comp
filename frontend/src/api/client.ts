@@ -2,6 +2,8 @@ import type {
   LibraryItem, LatestResult, BenchmarkJobRequest, BenchmarkJobStatus,
   BenchmarkOptions, Scenario, RunDetail, LiveJobProgress, ModelStatus,
   ModelDescriptor, MicSessionState, AudioDevice, TuningJobStatus, YTSearchResult,
+  TuningDecisionReport,
+  WebAppAutostartStatus,
 } from '../types'
 
 const BASE = '/api'
@@ -80,6 +82,8 @@ export const api = {
     runs: () => post<{ path: string }>('/open-dir/runs'),
     modelStore: () => post<{ path: string }>('/open-dir/model_store'),
     modelsLog: () => post<{ path: string }>('/open-dir/models_log'),
+    subtitles: () => post<{ path: string }>('/open-dir/subtitles'),
+    subtitlesVideo: (videoId: string) => post<{ path: string }>(`/open-dir/subtitles/${videoId}`),
   },
   models: {
     list: () => get<ModelStatus[]>('/models'),
@@ -92,6 +96,10 @@ export const api = {
       del(`/models/${id}`),
     addNote: (id: string, note: string) =>
       post<ModelStatus>(`/models/${id}/note`, { note }),
+    getWebAppAutostart: () => get<WebAppAutostartStatus>('/models/webapp-autostart'),
+    enableWebAppAutostart: () => post<WebAppAutostartStatus>('/models/webapp-autostart/enable'),
+    disableWebAppAutostart: () => post<WebAppAutostartStatus>('/models/webapp-autostart/disable'),
+    openWebAppStartupDir: () => post<{ path: string }>('/models/webapp-autostart/open-startup-dir'),
     openLogsDir: () => post<{ path: string }>('/open-dir/models_log'),
     openStoreDir: (id: string) => post<{ path: string }>(`/open-dir/model_store/${id}`),
   },
@@ -99,6 +107,16 @@ export const api = {
     createJob: (req: unknown) => post<TuningJobStatus>('/tuning/jobs', req),
     listJobs: () => get<TuningJobStatus[]>('/tuning/jobs'),
     getJob: (id: string) => get<TuningJobStatus>(`/tuning/jobs/${id}`),
+    decisionReport: (id: string, opts?: { min_success_rate?: number; max_rtf?: number; allow_proxy?: boolean; require_repro_n?: number; top?: number }) => {
+      const q = new URLSearchParams()
+      if (opts?.min_success_rate != null) q.set('min_success_rate', String(opts.min_success_rate))
+      if (opts?.max_rtf != null) q.set('max_rtf', String(opts.max_rtf))
+      if (opts?.allow_proxy != null) q.set('allow_proxy', String(opts.allow_proxy))
+      if (opts?.require_repro_n != null) q.set('require_repro_n', String(opts.require_repro_n))
+      if (opts?.top != null) q.set('top', String(opts.top))
+      const suffix = q.toString() ? `?${q.toString()}` : ''
+      return get<TuningDecisionReport>(`/tuning/jobs/${id}/decision${suffix}`)
+    },
     cancelJob: (id: string) => post<TuningJobStatus>(`/tuning/jobs/${id}/cancel`),
     openJobDir: (id: string) => post<{ path: string }>(`/tuning/jobs/${id}/open-dir`),
   },

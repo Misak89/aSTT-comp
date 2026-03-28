@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from packages.common.network_access import ensure_online_allowed
+
 from ..config import LIBRARY_ROOT, SUBTITLES_ROOT, RESULTS_ROOT, MODEL_STORE_ROOT, AUDIO_CACHE_ROOT
 from ..models.library import LibraryItem, SubtitleFile, LatestResult, UpsertLibraryItemRequest
 
@@ -74,6 +76,13 @@ def list_items() -> list[LibraryItem]:
 def _fetch_and_save_upload_date(video_id: str, url: str) -> None:
     """Background: stáhne upload_date z YouTube přes yt-dlp a uloží do items.json."""
     try:
+        ensure_online_allowed(
+            component="backend.app.services.library_service",
+            action="_fetch_and_save_upload_date",
+            reason="yt-dlp čte metadata videa (upload_date)",
+            target=url,
+            details={"video_id": video_id},
+        )
         import yt_dlp as _yt
         with _yt.YoutubeDL({"quiet": True, "skip_download": True, "extract_flat": True}) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -88,6 +97,13 @@ def _fetch_and_save_upload_date(video_id: str, url: str) -> None:
 def _detect_and_save_language(video_id: str, url: str) -> None:
     """Background: stream YouTube audio od 60s, detekuje jazyk přes whisper-cli."""
     try:
+        ensure_online_allowed(
+            component="backend.app.services.library_service",
+            action="_detect_and_save_language",
+            reason="potřebuje stream audio z YouTube pro detekci jazyka",
+            target=url,
+            details={"video_id": video_id},
+        )
         from packages.adapters.whisper_cpp_runner import resolve_whisper_cli
         from packages.ingest.youtube.stream_pipe import stream_youtube_audio
         from array import array
@@ -171,6 +187,13 @@ def _download_and_cache_audio(video_id: str, url: str) -> None:
     if out_path.exists():
         return
     try:
+        ensure_online_allowed(
+            component="backend.app.services.library_service",
+            action="_download_and_cache_audio",
+            reason="yt-dlp + ffmpeg stahují plné audio do lokální cache",
+            target=url,
+            details={"video_id": video_id},
+        )
         ytdlp_cmd = [
             sys.executable, "-m", "yt_dlp",
             "--quiet", "--no-playlist",
@@ -264,6 +287,13 @@ def download_subtitles(video_id: str, url: str) -> dict:
     out_dir = SUBTITLES_ROOT / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
+        ensure_online_allowed(
+            component="backend.app.services.library_service",
+            action="download_subtitles",
+            reason="stažení titulků přes yt-dlp",
+            target=url,
+            details={"video_id": video_id},
+        )
         result = subprocess.run(
             [
                 sys.executable, "-m", "yt_dlp",
@@ -391,6 +421,19 @@ def search_youtube(
     categories: list[str] | None = None,
 ) -> list[dict]:
     """Vyhledá videa na YouTube přes yt-dlp (bez API klíče)."""
+    ensure_online_allowed(
+        component="backend.app.services.library_service",
+        action="search_youtube",
+        reason="vyhledání YouTube videí a metadata přes yt-dlp",
+        target="https://www.youtube.com",
+        details={
+            "query": q,
+            "max_results": max_results,
+            "min_duration": min_duration,
+            "max_duration": max_duration,
+            "min_views": min_views,
+        },
+    )
     import yt_dlp as _yt
     from concurrent.futures import ThreadPoolExecutor, as_completed
 

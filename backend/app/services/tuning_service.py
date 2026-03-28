@@ -5,6 +5,7 @@ Každý job = subprocess (tuning_worker.py), výsledky přes soubory.
 from __future__ import annotations
 
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,25 @@ from typing import Optional
 from ..config import TUNING_ROOT, ROOT
 from ..models.tuning import TuningJobStatus, TuningTrialResult, TuningJobRequest
 
+try:
+    import psutil
+except ModuleNotFoundError:
+    psutil = None  # type: ignore[assignment]
+
+WEAK_MAX_LOGICAL_CORES = 4
+WEAK_MAX_RAM_MB = 8192
+MID_MAX_LOGICAL_CORES = 8
+MID_MAX_RAM_MB = 16384
+CONSTRAINTS_PROFILE_DEFAULTS: dict[str, dict[str, object]] = {
+    "weak_cap": {"cpu_cores": 2, "ram_limit_mb": 4096, "priority": "idle"},
+    "mid_cap": {"cpu_cores": 4, "ram_limit_mb": 8192, "priority": "below_normal"},
+}
+LOAD_PROFILE_DEFAULTS: dict[str, tuple[float, float]] = {
+    "light": (25.0, 35.0),
+    "medium": (45.0, 55.0),
+    "heavy": (65.0, 75.0),
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -25,6 +45,121 @@ def _job_dir(job_id: str) -> Path:
     return TUNING_ROOT / job_id
 
 
+def _classify_hardware_profile(logical_cores: int | None, ram_total_mb: float | None) -> str:
+    # NOTE: HW profil je třída stroje podle celkových zdrojů, ne podle aktuálního zatížení CPU/RAM.
+    if logical_cores is None and ram_total_mb is None:
+        return "mid_office"
+    if ((logical_cores is not None and logical_cores <= WEAK_MAX_LOGICAL_CORES)
+            or (ram_total_mb is not None and ram_total_mb <= WEAK_MAX_RAM_MB)):
+        return "weak_office"
+    if ((logical_cores is not None and logical_cores <= MID_MAX_LOGICAL_CORES)
+            or (ram_total_mb is not None and ram_total_mb <= MID_MAX_RAM_MB)):
+        return "mid_office"
+    return "strong_office"
+
+
+def _clamp_pct(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except Exception:
+        return None
+    return max(0.0, min(95.0, round(v, 1)))
+
+
+def _resolve_load_profile(
+    load_profile: str | None,
+    load_cpu_target_pct: float | None,
+    load_ram_target_pct: float | None,
+) -> tuple[str, float | None, float | None]:
+    profile = (load_profile or "none").strip().lower()
+    if profile not in {"none", "custom", *LOAD_PROFILE_DEFAULTS.keys()}:
+        profile = "none"
+
+    if profile == "none":
+        return "none", None, None
+
+    if profile in LOAD_PROFILE_DEFAULTS:
+        default_cpu, default_ram = LOAD_PROFILE_DEFAULTS[profile]
+        cpu_target = _clamp_pct(load_cpu_target_pct)
+        ram_target = _clamp_pct(load_ram_target_pct)
+        cpu_target = default_cpu if cpu_target is None else cpu_target
+        ram_target = default_ram if ram_target is None else ram_target
+    else:
+        cpu_target = _clamp_pct(load_cpu_target_pct)
+        ram_target = _clamp_pct(load_ram_target_pct)
+
+    if (cpu_target or 0.0) <= 0.0 and (ram_target or 0.0) <= 0.0:
+        return "none", None, None
+    return profile, cpu_target, ram_target
+
+
+def _resolve_constraints(
+    profile: str | None,
+    cpu_cores: int | None,
+    ram_limit_mb: int | None,
+    priority: str | None,
+) -> tuple[str, int | None, int | None, str]:
+    p = (profile or "none").strip().lower()
+    if p not in {"none", "custom", *CONSTRAINTS_PROFILE_DEFAULTS.keys()}:
+        p = "none"
+    prio = (priority or "below_normal").strip().lower()
+    if prio not in {"normal", "below_normal", "idle"}:
+        prio = "below_normal"
+
+    c = int(cpu_cores) if isinstance(cpu_cores, int) else None
+    r = int(ram_limit_mb) if isinstance(ram_limit_mb, int) else None
+    if c is not None:
+        c = max(1, min(128, c))
+    if r is not None:
+        r = max(256, min(262144, r))
+
+    if p in CONSTRAINTS_PROFILE_DEFAULTS:
+        defaults = CONSTRAINTS_PROFILE_DEFAULTS[p]
+        c = int(defaults["cpu_cores"]) if c is None else c
+        r = int(defaults["ram_limit_mb"]) if r is None else r
+        prio = str(defaults["priority"])
+
+    if p == "none":
+        return "none", None, None, prio
+    if p == "custom" and c is None and r is None:
+        return "none", None, None, prio
+    return p, c, r, prio
+
+
+def _detect_hardware_info() -> dict:
+    logical_cores = None
+    physical_cores = None
+    ram_total_mb = None
+    if psutil is not None:
+        try:
+            logical_cores = int(psutil.cpu_count(logical=True) or 0) or None
+        except Exception:
+            logical_cores = None
+        try:
+            physical_cores = int(psutil.cpu_count(logical=False) or 0) or None
+        except Exception:
+            physical_cores = None
+        try:
+            ram_total_mb = round(float(psutil.virtual_memory().total) / (1024 * 1024), 1)
+        except Exception:
+            ram_total_mb = None
+
+    cpu_model = (platform.processor() or "").strip()
+    if not cpu_model:
+        cpu_model = (platform.uname().processor or "").strip()
+    return {
+        "hostname": platform.node(),
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "cpu_model": cpu_model or None,
+        "logical_cores": logical_cores,
+        "physical_cores": physical_cores,
+        "ram_total_mb": ram_total_mb,
+    }
+
+
 def create_job(req: TuningJobRequest) -> TuningJobStatus:
     job_id = f"tune_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     job_dir = _job_dir(job_id)
@@ -32,9 +167,29 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
 
     # Resolve effective model_ids (nové pole má přednost, fallback na starý model_id)
     effective_model_ids = req.model_ids if req.model_ids else ([req.model_id] if req.model_id else [])
+    hardware_info = _detect_hardware_info()
+    hardware_profile = (req.hardware_profile or "").strip() or _classify_hardware_profile(
+        hardware_info.get("logical_cores"),
+        hardware_info.get("ram_total_mb"),
+    )
+    hardware_note = (req.hardware_note or "").strip() or None
+    constraints_profile, constraints_cpu_cores, constraints_ram_limit_mb, constraints_priority = _resolve_constraints(
+        req.constraints_profile,
+        req.constraints_cpu_cores,
+        req.constraints_ram_limit_mb,
+        req.constraints_priority,
+    )
+    load_profile, load_cpu_target_pct, load_ram_target_pct = _resolve_load_profile(
+        req.load_profile,
+        req.load_cpu_target_pct,
+        req.load_ram_target_pct,
+    )
 
     # Vygeneruj trial kombinace (cross-product přes modely)
     trials = _generate_trials(req, effective_model_ids)
+    repeat_top_k = max(0, int(req.repeat_top_k or 0))
+    repeat_runs = max(1, int(req.repeat_runs or 1))
+    planned_total_trials = len(trials) + (repeat_top_k * max(0, repeat_runs - 1))
 
     config = {
         "job_id": job_id,
@@ -43,9 +198,23 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         "video_ids": req.video_ids,
         "sample_seconds": req.sample_seconds,
         "clip_seed": req.clip_seed,
+        "random_seed": req.random_seed,
         "clip_start_seconds": req.clip_start_seconds,
         "evaluation_mode": req.evaluation_mode,
         "label": req.label,
+        "hardware_profile": hardware_profile,
+        "hardware_note": hardware_note,
+        "hardware_info": hardware_info,
+        "constraints_profile": constraints_profile,
+        "constraints_cpu_cores": constraints_cpu_cores,
+        "constraints_ram_limit_mb": constraints_ram_limit_mb,
+        "constraints_priority": constraints_priority,
+        "load_profile": load_profile,
+        "load_cpu_target_pct": load_cpu_target_pct,
+        "load_ram_target_pct": load_ram_target_pct,
+        "validate_beam_preflight": bool(req.validate_beam_preflight),
+        "repeat_top_k": repeat_top_k,
+        "repeat_runs": repeat_runs,
         "baseline_params": req.baseline_params,
         "trials": trials,          # seznam dict s params + _chunk_seconds + _model_id
         "subtitles_root": str(ROOT / "runtime" / "library" / "subtitles"),
@@ -62,8 +231,22 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         model_id=effective_model_ids[0] if effective_model_ids else "",
         model_ids=effective_model_ids,
         label=req.label,
+        hardware_profile=hardware_profile,
+        hardware_note=hardware_note,
+        hardware_info=hardware_info,
+        constraints_profile=constraints_profile,
+        constraints_cpu_cores=constraints_cpu_cores,
+        constraints_ram_limit_mb=constraints_ram_limit_mb,
+        constraints_priority=constraints_priority,
+        constraints_applied=False,
+        constraints_warnings=[],
+        constraints_ram_mode="none",
+        load_profile=load_profile,
+        load_cpu_target_pct=load_cpu_target_pct,
+        load_ram_target_pct=load_ram_target_pct,
+        validate_beam_preflight=bool(req.validate_beam_preflight),
         created_at=_now(),
-        total_trials=len(trials),
+        total_trials=planned_total_trials,
         completed_trials=0,
     )
     _write_status(job_dir, status)
@@ -71,7 +254,25 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
     # Spusť worker subprocess
     worker = ROOT / "scripts" / "tuning_worker.py"
     import os as _os
-    env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    env = {
+        **_os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        # Default: povolit whisper-server model cache v tuning workeru (výrazně zkrátí load modelu mezi trialy).
+        "ASTT_WHISPER_SERVER_CACHE": _os.environ.get("ASTT_WHISPER_SERVER_CACHE", "1"),
+        "ASTT_WHISPER_ONLINE_PROBE": _os.environ.get("ASTT_WHISPER_ONLINE_PROBE", "1"),
+        "ASTT_REQUIRE_RESOURCE_METRICS": _os.environ.get("ASTT_REQUIRE_RESOURCE_METRICS", "1"),
+    }
+    has_large_whisper = any(str(mid).startswith("whisper_cpp_large_v3") for mid in effective_model_ids)
+    if has_large_whisper:
+        # large_v3* pod cap/load profilem potřebuje delší timeout, jinak končí falešným timeoutem ve validaci
+        if constraints_profile in {"weak_cap", "mid_cap"}:
+            env.setdefault("ASTT_WHISPER_TIMEOUT_FACTOR", "6")
+            env.setdefault("ASTT_WHISPER_TIMEOUT_LARGE_MIN_S", "300")
+        else:
+            env.setdefault("ASTT_WHISPER_TIMEOUT_FACTOR", "4")
+            env.setdefault("ASTT_WHISPER_TIMEOUT_LARGE_MIN_S", "240")
+        env.setdefault("ASTT_WHISPER_TIMEOUT_MAX_S", "900")
     subprocess.Popen(
         [sys.executable, str(worker), "--job-id", job_id, "--tuning-root", str(TUNING_ROOT)],
         stdout=subprocess.DEVNULL,
@@ -98,7 +299,7 @@ def get_job(job_id: str) -> Optional[TuningJobStatus]:
         if status.status != "completed" or status.best_trial_idx is None:
             candidates = [
                 r for r in status.results
-                if r.wer is not None and not r.error and (r.rtf is None or r.rtf <= 1.2)
+                if (not r.is_repeat) and r.wer is not None and not r.error and (r.rtf is None or r.rtf <= 1.2)
             ]
             if candidates:
                 best = min(candidates, key=lambda r: r.wer)  # type: ignore
@@ -250,7 +451,8 @@ def _generate_trials(req: TuningJobRequest, model_ids: list[str] | None = None) 
         param_names = [ps.name for ps in model_param_space]
         param_values = [ps.values for ps in model_param_space]
         all_combos = list(itertools.product(*param_values, chunk_values)) if param_values else [(cs,) for cs in chunk_values]
-        random.shuffle(all_combos)
+        rnd = random.Random(req.random_seed if req.random_seed is not None else 42)
+        rnd.shuffle(all_combos)
         trials = []
         for mid in effective_model_ids:
             for combo in all_combos:
@@ -271,7 +473,7 @@ def _generate_trials(req: TuningJobRequest, model_ids: list[str] | None = None) 
 
 def _mark_pareto(results: list[TuningTrialResult]) -> None:
     """Označí Pareto-optimální body (minimalizace WER a RTF). Error triály jsou vyloučeny."""
-    valid = [(r, r.wer, r.rtf) for r in results if r.wer is not None and not r.error]
+    valid = [(r, r.wer, r.rtf) for r in results if (not r.is_repeat) and r.wer is not None and not r.error]
     for r in results:
         r.is_pareto = False
     for r, wer, rtf in valid:
