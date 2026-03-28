@@ -275,7 +275,39 @@ def _create_adapter_session(adapter: str, model_id: str, params: dict) -> Any:
         )
         return create_moonshine_live_session(config=cfg)
 
-    elif adapter in ("whisper_cpp", "qwen_asr"):
+    elif adapter == "whisper_cpp":
+        from packages.adapters.whisper_cpp_runner import (
+            WhisperRunConfig,
+            create_whisper_live_session,
+            resolve_whisper_cli,
+            resolve_whisper_model_file,
+        )
+        whisper_bin = resolve_whisper_cli(model_store)
+        if not whisper_bin:
+            raise RuntimeError("whisper-cli binary nenalezen")
+        model_file = resolve_whisper_model_file(model_store, model_id)
+        if not model_file:
+            raise RuntimeError(f"whisper model file nenalezen pro {model_id}")
+
+        cfg = WhisperRunConfig(
+            whisper_bin=str(whisper_bin),
+            model_path=str(model_file),
+            language=str(params.get("language", "cs")),
+            threads=int(params.get("threads", 4)),
+            beam_size=int(params["beam_size"]) if params.get("beam_size") is not None else None,
+            best_of=int(params["best_of"]) if params.get("best_of") is not None else None,
+            no_fallback=bool(params.get("no_fallback", True)),
+            initial_prompt=(str(params.get("initial_prompt", "")).strip() or None),
+            use_server_cache=True,
+        )
+        return create_whisper_live_session(
+            config=cfg,
+            sample_rate=int(params.get("sample_rate", SAMPLE_RATE)),
+            analysis_interval_ms=int(params.get("analysis_interval_ms", 1200)),
+            analysis_window_seconds=int(params.get("analysis_window_seconds", 12)),
+        )
+
+    elif adapter == "qwen_asr":
         raise ValueError(
             f"Model '{model_id}' nepodporuje mic mode — potřebuje celý audio soubor. "
             "Použij vosk, sherpa_onnx nebo moonshine."
@@ -294,6 +326,9 @@ def _get_chunk_fn(adapter: str):
     if adapter == "moonshine":
         from packages.adapters.moonshine_runner import transcribe_moonshine_live_chunk
         return transcribe_moonshine_live_chunk
+    if adapter == "whisper_cpp":
+        from packages.adapters.whisper_cpp_runner import transcribe_whisper_live_chunk
+        return transcribe_whisper_live_chunk
     raise ValueError(f"Chunk fn pro '{adapter}' neexistuje")
 
 
@@ -307,4 +342,7 @@ def _get_finalize_fn(adapter: str):
     if adapter == "moonshine":
         from packages.adapters.moonshine_runner import finalize_moonshine_live_session
         return finalize_moonshine_live_session
+    if adapter == "whisper_cpp":
+        from packages.adapters.whisper_cpp_runner import finalize_whisper_live_session
+        return finalize_whisper_live_session
     raise ValueError(f"Finalize fn pro '{adapter}' neexistuje")

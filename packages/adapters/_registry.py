@@ -68,8 +68,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             adapter="whisper_cpp",
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
-            supports_microphone=False,
-            notes="Doporučený model pro CZ (~244 MB). Dobrý poměr přesnost/rychlost. WER cca 8–15% na CZ.",
+            supports_microphone=True,
+            notes="Doporučený model pro CZ (~244 MB). Dobrý poměr přesnost/rychlost. Mic v4 (experimental).",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
                 ParamSpec("threads",        "Vlákna CPU",     "int",  4,     "Počet CPU vláken", min=1, max=16),
@@ -77,6 +77,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
                 ParamSpec("best_of",        "Best of",        "int",  5,     "Počet kandidátů dekódování", min=1, max=10),
                 ParamSpec("no_fallback",    "Bez fallbacku",  "bool", True,  "Zakáže fallback na menší model"),
                 ParamSpec("initial_prompt", "Počáteční text", "str",  "",    "Kontext pro model (např. 'Rozhovor v češtině:')"),
+                ParamSpec("analysis_interval_ms", "Mic interval (ms)", "int", 1200, "Jak často se aktualizuje live přepis", min=300, max=5000),
+                ParamSpec("analysis_window_seconds", "Mic okno (s)", "int", 12, "Délka analyzovaného audio okna pro live partial", min=3, max=45),
             ],
         ),
 
@@ -104,8 +106,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             adapter="whisper_cpp",
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
-            supports_microphone=False,
-            notes="Rychlá varianta large-v3 (~547 MB q5_0). ~6× rychlejší než large-v3, podobná přesnost. RTF < 1 reálné na CPU.",
+            supports_microphone=True,
+            notes="Rychlá varianta large-v3 (~547 MB q5_0). Mic v4 (experimental).",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
                 ParamSpec("threads",        "Vlákna CPU",     "int",  4,     "Počet CPU vláken", min=1, max=16),
@@ -113,6 +115,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
                 ParamSpec("best_of",        "Best of",        "int",  5,     "Počet kandidátů dekódování", min=1, max=10),
                 ParamSpec("no_fallback",    "Bez fallbacku",  "bool", True,  "Zakáže fallback na menší model"),
                 ParamSpec("initial_prompt", "Počáteční text", "str",  "",    "Kontext pro model"),
+                ParamSpec("analysis_interval_ms", "Mic interval (ms)", "int", 1200, "Jak často se aktualizuje live přepis", min=300, max=5000),
+                ParamSpec("analysis_window_seconds", "Mic okno (s)", "int", 12, "Délka analyzovaného audio okna pro live partial", min=3, max=45),
             ],
         ),
 

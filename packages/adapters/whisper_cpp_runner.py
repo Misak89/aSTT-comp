@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import atexit
-from dataclasses import dataclass
+from array import array
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
 import os
@@ -42,6 +43,23 @@ class _WhisperServerRuntime:
     process: subprocess.Popen
     port: int
     proc_handle: Any
+
+
+@dataclass
+class WhisperLiveSessionState:
+    runtime: _WhisperServerRuntime
+    sample_rate: int
+    analysis_interval_ms: int
+    analysis_window_seconds: int
+    started_perf: float
+    audio_samples_processed: int = 0
+    first_wall_ms: int | None = None
+    first_audio_ms: int | None = None
+    current_text: str = ""
+    pcm16: array = field(default_factory=lambda: array("h"))
+    request_seq: int = 0
+    last_analysis_perf: float = 0.0
+    temp_dir: Path | None = None
 
 
 _SERVER_CACHE: dict[tuple[str, str, str, int], _WhisperServerRuntime] = {}
@@ -401,6 +419,205 @@ def _run_whisper_source_server(
     return record
 
 
+def create_whisper_live_session(
+    *,
+    config: WhisperRunConfig,
+    sample_rate: int = 16000,
+    analysis_interval_ms: int = 1200,
+    analysis_window_seconds: int = 12,
+) -> WhisperLiveSessionState:
+    runtime = _get_or_start_cached_server(config=config)
+    temp_dir = Path(".runtime") / "runs" / "mic_whisper_live" / f"session_{uuid.uuid4().hex[:8]}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return WhisperLiveSessionState(
+        runtime=runtime,
+        sample_rate=max(8000, int(sample_rate)),
+        analysis_interval_ms=max(300, int(analysis_interval_ms)),
+        analysis_window_seconds=max(3, int(analysis_window_seconds)),
+        started_perf=time.perf_counter(),
+        temp_dir=temp_dir,
+    )
+
+
+def transcribe_whisper_live_chunk(
+    *,
+    session: WhisperLiveSessionState,
+    sample_rate: int,
+    samples: list[float],
+) -> dict[str, Any]:
+    started_perf = time.perf_counter()
+    previous_text = session.current_text
+
+    normalized = _resample_f32_samples(
+        samples=samples,
+        source_rate=max(1, int(sample_rate)),
+        target_rate=max(1, int(session.sample_rate)),
+    )
+    if normalized:
+        session.pcm16.extend(_f32_to_pcm16_array(normalized))
+        session.audio_samples_processed += len(normalized)
+
+    should_analyze = _should_analyze_live_buffer(session=session)
+    if should_analyze:
+        inferred = _infer_live_text(session=session, tail_only=True)
+        if inferred:
+            session.current_text = inferred
+            session.last_analysis_perf = time.perf_counter()
+
+    if session.first_wall_ms is None and session.current_text:
+        session.first_wall_ms = int((time.perf_counter() - session.started_perf) * 1000.0)
+    if session.first_audio_ms is None and session.current_text:
+        session.first_audio_ms = int((session.audio_samples_processed / max(1, session.sample_rate)) * 1000.0)
+
+    latency_ms = None
+    if session.first_wall_ms is not None or session.first_audio_ms is not None:
+        latency_ms = max(session.first_wall_ms or 0, session.first_audio_ms or 0)
+
+    transcript_delta = _diff_transcript_suffix(previous_text, session.current_text)
+    elapsed_s = max(0.0001, time.perf_counter() - started_perf)
+    return {
+        "text": session.current_text,
+        "text_delta": transcript_delta,
+        "latency_ms": round(float(latency_ms), 1) if isinstance(latency_ms, (int, float)) else round(elapsed_s * 1000.0, 1),
+        "first_word_latency_ms": round(float(latency_ms), 1) if isinstance(latency_ms, (int, float)) else None,
+        "first_word_wall_ms": round(float(session.first_wall_ms), 1) if isinstance(session.first_wall_ms, (int, float)) else None,
+        "first_word_audio_ms": round(float(session.first_audio_ms), 1) if isinstance(session.first_audio_ms, (int, float)) else None,
+        "engine_elapsed_seconds": round(elapsed_s, 4),
+        "audio_samples_processed": session.audio_samples_processed,
+    }
+
+
+def finalize_whisper_live_session(*, session: WhisperLiveSessionState) -> dict[str, Any]:
+    previous_text = session.current_text
+    if session.pcm16:
+        inferred = _infer_live_text(session=session, tail_only=False)
+        if inferred:
+            session.current_text = inferred
+
+    if session.first_wall_ms is None and session.current_text:
+        session.first_wall_ms = int((time.perf_counter() - session.started_perf) * 1000.0)
+    if session.first_audio_ms is None and session.current_text:
+        session.first_audio_ms = int((session.audio_samples_processed / max(1, session.sample_rate)) * 1000.0)
+
+    latency_ms = None
+    if session.first_wall_ms is not None or session.first_audio_ms is not None:
+        latency_ms = max(session.first_wall_ms or 0, session.first_audio_ms or 0)
+
+    if session.temp_dir is not None:
+        try:
+            shutil.rmtree(session.temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    return {
+        "text": session.current_text,
+        "text_delta": _diff_transcript_suffix(previous_text, session.current_text),
+        "latency_ms": round(float(latency_ms), 1) if isinstance(latency_ms, (int, float)) else None,
+        "first_word_latency_ms": round(float(latency_ms), 1) if isinstance(latency_ms, (int, float)) else None,
+        "first_word_wall_ms": round(float(session.first_wall_ms), 1) if isinstance(session.first_wall_ms, (int, float)) else None,
+        "first_word_audio_ms": round(float(session.first_audio_ms), 1) if isinstance(session.first_audio_ms, (int, float)) else None,
+        "audio_samples_processed": session.audio_samples_processed,
+    }
+
+
+def _should_analyze_live_buffer(*, session: WhisperLiveSessionState) -> bool:
+    if not session.pcm16:
+        return False
+    now = time.perf_counter()
+    if session.last_analysis_perf <= 0:
+        min_samples = int(max(0.30, session.analysis_interval_ms / 1000.0) * session.sample_rate)
+        return len(session.pcm16) >= max(1, min_samples)
+    return (now - session.last_analysis_perf) * 1000.0 >= float(session.analysis_interval_ms)
+
+
+def _infer_live_text(*, session: WhisperLiveSessionState, tail_only: bool) -> str:
+    if not session.pcm16:
+        return ""
+
+    window_samples = len(session.pcm16)
+    if tail_only:
+        max_window = max(1, int(session.analysis_window_seconds * session.sample_rate))
+        window_samples = min(window_samples, max_window)
+    start_idx = max(0, len(session.pcm16) - window_samples)
+    pcm_window = session.pcm16[start_idx:]
+
+    session.request_seq += 1
+    if session.temp_dir is None:
+        session.temp_dir = Path(".runtime") / "runs" / "mic_whisper_live" / f"session_{uuid.uuid4().hex[:8]}"
+        session.temp_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = session.temp_dir / f"chunk_{session.request_seq:06d}.wav"
+    _write_pcm16_wave(path=wav_path, sample_rate=session.sample_rate, pcm=pcm_window)
+
+    timeout_s = _compute_timeout_seconds(
+        sample_seconds=max(1, int(round(window_samples / max(1, session.sample_rate)))),
+        model_path=None,
+    )
+    payload = _post_server_inference(
+        port=session.runtime.port,
+        audio_path=wav_path,
+        timeout_s=timeout_s,
+    )
+    text = _extract_payload_text(payload)
+    return " ".join(text.split())
+
+
+def _extract_payload_text(payload: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    direct = payload.get("text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    segments = payload.get("transcription")
+    if isinstance(segments, list):
+        return "\n".join(
+            str(item.get("text", "")).strip()
+            for item in segments
+            if isinstance(item, dict) and item.get("text")
+        ).strip()
+    return ""
+
+
+def _f32_to_pcm16_array(samples: list[float]) -> array:
+    pcm = array("h")
+    for value in samples:
+        clipped = max(-1.0, min(1.0, float(value)))
+        pcm.append(int(clipped * 32767.0))
+    return pcm
+
+
+def _resample_f32_samples(*, samples: list[float], source_rate: int, target_rate: int) -> list[float]:
+    if source_rate <= 0 or target_rate <= 0 or source_rate == target_rate:
+        return [float(item) for item in samples]
+    if not samples:
+        return []
+    source = [float(item) for item in samples]
+    target_length = max(1, int(round(len(source) * float(target_rate) / float(source_rate))))
+    if target_length == 1:
+        return [source[0]]
+    ratio = float(source_rate) / float(target_rate)
+    output: list[float] = []
+    source_max_index = len(source) - 1
+    for index in range(target_length):
+        source_index = index * ratio
+        left = int(source_index)
+        right = min(source_max_index, left + 1)
+        frac = source_index - left
+        sample = source[left] * (1.0 - frac) + source[right] * frac
+        output.append(float(sample))
+    return output
+
+
+def _write_pcm16_wave(*, path: Path, sample_rate: int, pcm: array) -> None:
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(max(8000, int(sample_rate)))
+        handle.writeframes(pcm.tobytes())
+
+
 def resolve_whisper_server(
     model_store_root: str | Path = ".runtime/model_store",
     whisper_bin: str | None = None,
@@ -641,6 +858,16 @@ def resolve_whisper_model_file(model_store_root: str | Path, model_id: str) -> P
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
+
+
+def _diff_transcript_suffix(previous_text: str, current_text: str) -> str:
+    before = str(previous_text or "").strip()
+    after = str(current_text or "").strip()
+    if not before:
+        return after
+    if after.startswith(before):
+        return after[len(before) :].strip()
+    return after
 
 
 def _build_cmd(
