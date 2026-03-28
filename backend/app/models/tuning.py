@@ -92,6 +92,13 @@ class TuningTrialResult(BaseModel):
     latency_p50_ms: Optional[float] = None
     latency_p95_ms: Optional[float] = None
     latency_quality: Optional[str] = None  # measured_live | probe_online | proxy_offline | mixed | unknown
+    first_token_ms_p50: Optional[float] = None
+    first_token_ms_p95: Optional[float] = None
+    segment_finalize_ms_p50: Optional[float] = None
+    segment_finalize_ms_p95: Optional[float] = None
+    drop_rate: Optional[float] = None
+    session_resets: Optional[int] = None
+    reason_code: Optional[str] = None
     ram_mb: Optional[float] = None         # průměrná RAM model procesu přes videa (MB)
     ram_peak_mb: Optional[float] = None    # max RAM model procesu přes videa (MB)
     ram_p95_mb: Optional[float] = None

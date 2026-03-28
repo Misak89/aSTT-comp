@@ -544,6 +544,257 @@ def _run_one_video(
     }
 
 
+def _run_one_video_real_mic(
+    *,
+    video_id: str,
+    model_id: str,
+    model_params: dict,
+    sample_seconds: int,
+    clip_start_s: float,
+    trial_idx: int,
+    job_dir: Path,
+    subtitles_root: Path,
+    extract_vtt_clip_text,
+    word_error_rate,
+    char_error_rate,
+    word_error_rate_normalized,
+    word_error_rate_soft,
+    match_error_rate,
+    word_information_lost,
+    word_diff,
+    progress_cb,
+    mic_chunk_seconds: float = 0.20,
+    mic_prepare_seconds: int = 4,
+    mic_device: int | str | None = None,
+) -> dict:
+    """
+    Reálný mic běh pro jedno video:
+    - nahraje sample_seconds audia z mikrofonu,
+    - průběžně transkribuje přes backend mic_service (live session),
+    - porovná transcript s referencí z VTT pro zadaný clip_start.
+
+    Pozn.: Operátor musí pustit na mobilu správný úsek videa ve chvíli nahrávání.
+    """
+    from array import array as _array
+    import wave as _wave
+
+    from backend.app.services import mic_service
+    from packages.ingest.youtube.stream_pipe import stream_mic_audio
+
+    prep_s = max(0, int(mic_prepare_seconds))
+    if prep_s > 0:
+        progress_cb(
+            f"🎤 Real mic {video_id}: připrav přehrání od {int(clip_start_s)}s. "
+            f"Nahrávání startuje za {prep_s}s."
+        )
+        time.sleep(float(prep_s))
+
+    target_sample_rate = 16000
+    target_samples = max(1, int(max(1, sample_seconds) * target_sample_rate))
+    mic_chunk_s = max(0.05, float(mic_chunk_seconds))
+
+    session_id = mic_service.create_session(model_id, dict(model_params))
+    mic_started = False
+    mic_error: str | None = None
+    reason_code: str | None = None
+    final: dict = {}
+
+    captured_pcm = _array("h")
+    total_samples = 0
+    sample_rate = target_sample_rate
+    chunk_metrics: list[dict] = []
+    started_perf = time.perf_counter()
+    last_progress_audio_s = -10.0
+
+    try:
+        mic_service.start_recording(session_id)
+        mic_started = True
+
+        for samples, sr in stream_mic_audio(
+            chunk_seconds=mic_chunk_s,
+            sample_rate=target_sample_rate,
+            device=mic_device,
+        ):
+            sample_rate = int(sr) if isinstance(sr, int) else target_sample_rate
+            remaining = target_samples - total_samples
+            if remaining <= 0:
+                break
+            clipped_samples = samples[:remaining]
+            if not clipped_samples:
+                continue
+
+            for s in clipped_samples:
+                captured_pcm.append(int(max(-1.0, min(1.0, float(s))) * 32767.0))
+            total_samples += len(clipped_samples)
+
+            chunk_started = time.perf_counter()
+            partial = mic_service.process_audio_chunk(
+                session_id=session_id,
+                samples=clipped_samples,
+                sample_rate=sample_rate,
+            )
+            chunk_processing_s = max(0.0, time.perf_counter() - chunk_started)
+            chunk_audio_s = len(clipped_samples) / max(1, sample_rate)
+            elapsed_s = max(0.0, time.perf_counter() - started_perf)
+            partial_text = str(partial.get("text") or "").strip()
+
+            chunk_metrics.append({
+                "chunk_duration_s": round(chunk_audio_s, 3),
+                "processing_s": round(chunk_processing_s, 4),
+                "rtf": round(chunk_processing_s / max(0.001, chunk_audio_s), 4),
+                "total_elapsed_s": round(elapsed_s, 4),
+                "words": len(partial_text.split()) if partial_text else 0,
+            })
+
+            if partial.get("error"):
+                mic_error = str(partial.get("error"))
+                reason_code = str(partial.get("reason_code") or "adapter_error")
+                break
+
+            audio_s = total_samples / max(1, sample_rate)
+            if (audio_s - last_progress_audio_s) >= 10.0:
+                last_progress_audio_s = audio_s
+                progress_cb(
+                    f"🎤 Real mic {video_id}: nahráno {audio_s:.1f}s / {float(sample_seconds):.1f}s"
+                )
+
+            if total_samples >= target_samples:
+                break
+
+    except Exception as exc:
+        mic_error = str(exc)
+        if not reason_code:
+            reason_code = "mic_capture_error"
+    finally:
+        if mic_started:
+            try:
+                final = mic_service.stop_recording(session_id)
+            except Exception as exc:
+                if mic_error is None:
+                    mic_error = str(exc)
+                if not reason_code:
+                    reason_code = "mic_finalize_error"
+
+    if final.get("error") and mic_error is None:
+        mic_error = str(final.get("error"))
+    if final.get("reason_code") and not reason_code:
+        reason_code = str(final.get("reason_code"))
+
+    transcript = str(final.get("text") or "").strip()
+    actual_audio_s = (total_samples / max(1, sample_rate)) if total_samples > 0 else 0.0
+    elapsed_s = float(final.get("elapsed_s")) if isinstance(final.get("elapsed_s"), (int, float)) else max(0.001, time.perf_counter() - started_perf)
+    rtf = float(final.get("rtf")) if isinstance(final.get("rtf"), (int, float)) else (elapsed_s / max(0.1, actual_audio_s if actual_audio_s > 0 else float(sample_seconds)))
+
+    first_word_latency_ms = (
+        float(final.get("first_word_latency_ms"))
+        if isinstance(final.get("first_word_latency_ms"), (int, float))
+        else None
+    )
+    latency_ms = first_word_latency_ms if first_word_latency_ms is not None else round(elapsed_s * 1000.0, 1)
+
+    # Ulož raw mic capture (audit/replay).
+    trial_dir = job_dir / f"trial_{trial_idx:03d}"
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    capture_wav = trial_dir / f"mic_{video_id}.wav"
+    try:
+        with _wave.open(str(capture_wav), "wb") as wf_out:
+            wf_out.setnchannels(1)
+            wf_out.setsampwidth(2)
+            wf_out.setframerate(max(8000, int(sample_rate)))
+            wf_out.writeframes(captured_pcm.tobytes())
+    except Exception:
+        # Capture je pomocný artefakt; chyba zápisu nesmí shodit trial.
+        pass
+
+    ref_text = extract_vtt_clip_text(
+        video_id=video_id,
+        clip_start_s=clip_start_s,
+        clip_end_s=clip_start_s + min(actual_audio_s, float(sample_seconds)),
+        subtitles_root=subtitles_root,
+    )
+
+    wer = cer = wer_norm = wer_soft = mer = wil = None
+    wdiff = None
+    if ref_text and transcript:
+        wer = word_error_rate(ref_text, transcript)
+        cer = char_error_rate(ref_text, transcript)
+        wer_norm = word_error_rate_normalized(ref_text, transcript)
+        wer_soft = word_error_rate_soft(ref_text, transcript)
+        mer = match_error_rate(ref_text, transcript)
+        wil = word_information_lost(ref_text, transcript)
+        try:
+            wdiff = word_diff(ref_text, transcript)
+        except Exception:
+            pass
+
+    worker_rss_peak_mb = (
+        float(final.get("worker_rss_peak_mb"))
+        if isinstance(final.get("worker_rss_peak_mb"), (int, float))
+        else _get_rss_mb(psutil.Process() if psutil is not None else None)
+    )
+    if mic_error is None and not transcript:
+        mic_error = "Real mic přepis nevrátil text (no_tokens)."
+        if not reason_code:
+            reason_code = "no_tokens"
+
+    return {
+        "video_id": video_id,
+        "wer": round(wer, 4) if wer is not None else None,
+        "cer": round(cer, 4) if cer is not None else None,
+        "wer_normalized": round(wer_norm, 4) if wer_norm is not None else None,
+        "wer_soft": round(wer_soft, 4) if wer_soft is not None else None,
+        "mer": round(mer, 4) if mer is not None else None,
+        "wil": round(wil, 4) if wil is not None else None,
+        "cpu_percent": None,
+        "ram_mb": round(float(worker_rss_peak_mb), 1) if isinstance(worker_rss_peak_mb, (int, float)) else None,
+        "rtf": round(float(rtf), 4) if isinstance(rtf, (int, float)) else None,
+        "latency_ms": round(float(latency_ms), 1) if isinstance(latency_ms, (int, float)) else None,
+        "first_word_latency_ms": round(float(first_word_latency_ms), 1) if isinstance(first_word_latency_ms, (int, float)) else None,
+        "first_word_audio_ms": None,
+        "latency_mode": "online_first_text_or_elapsed_ms",
+        "model_cached": None,
+        "elapsed_s": round(float(elapsed_s), 4) if isinstance(elapsed_s, (int, float)) else None,
+        "total_audio_s": round(float(actual_audio_s), 3),
+        "word_count": len(transcript.split()) if transcript else 0,
+        "transcript": transcript[:3000] if transcript else None,
+        "reference_text": ref_text[:3000] if ref_text else None,
+        "word_diff": wdiff,
+        "chunk_metrics": chunk_metrics if chunk_metrics else None,
+        "first_token_ms_p50": (
+            round(float(final.get("first_token_ms_p50")), 1)
+            if isinstance(final.get("first_token_ms_p50"), (int, float))
+            else (round(float(first_word_latency_ms), 1) if first_word_latency_ms is not None else None)
+        ),
+        "first_token_ms_p95": (
+            round(float(final.get("first_token_ms_p95")), 1)
+            if isinstance(final.get("first_token_ms_p95"), (int, float))
+            else (round(float(first_word_latency_ms), 1) if first_word_latency_ms is not None else None)
+        ),
+        "segment_finalize_ms_p50": (
+            round(float(final.get("segment_finalize_ms_p50")), 1)
+            if isinstance(final.get("segment_finalize_ms_p50"), (int, float))
+            else None
+        ),
+        "segment_finalize_ms_p95": (
+            round(float(final.get("segment_finalize_ms_p95")), 1)
+            if isinstance(final.get("segment_finalize_ms_p95"), (int, float))
+            else None
+        ),
+        "drop_rate": (
+            round(float(final.get("drop_rate")), 4)
+            if isinstance(final.get("drop_rate"), (int, float))
+            else None
+        ),
+        "session_resets": (
+            int(final.get("session_resets"))
+            if isinstance(final.get("session_resets"), int)
+            else None
+        ),
+        "reason_code": reason_code,
+        "error": mic_error,
+    }
+
+
 def _avg(values: list) -> float | None:
     vals = [v for v in values if v is not None]
     return round(sum(vals) / len(vals), 4) if vals else None
@@ -1247,6 +1498,7 @@ def main() -> int:
     config = json.loads(config_file.read_text(encoding="utf-8"))
     trials: list[dict] = config["trials"]
     model_id: str = config["model_id"]          # fallback pro old-style joby (single model)
+    input_mode: str = str(config.get("input_mode") or "replay").strip().lower()
     video_ids: list[str] = config["video_ids"]
     sample_seconds: int = config["sample_seconds"]
     clip_seed: int | None = config.get("clip_seed")
@@ -1263,6 +1515,10 @@ def main() -> int:
     load_cpu_target_pct = _coerce_pct(config.get("load_cpu_target_pct"))
     load_ram_target_pct = _coerce_pct(config.get("load_ram_target_pct"))
     validate_beam_preflight = bool(config.get("validate_beam_preflight", True))
+    mic_chunk_seconds = max(0.05, float(os.environ.get("ASTT_REAL_MIC_CHUNK_SECONDS", "0.20")))
+    mic_prepare_seconds = max(0, int(os.environ.get("ASTT_REAL_MIC_PREPARE_SECONDS", "4")))
+    mic_device_raw = config.get("mic_device")
+    mic_device = mic_device_raw if isinstance(mic_device_raw, (int, str)) else None
     if load_profile == "none":
         load_cpu_target_pct = None
         load_ram_target_pct = None
@@ -1273,6 +1529,10 @@ def main() -> int:
     audio_cache_dir: Path | None = Path(config["audio_cache_dir"]) if config.get("audio_cache_dir") else None
     items_json = subtitles_root.parent / "items.json"
     whisper_server_cache_enabled = os.environ.get("ASTT_WHISPER_SERVER_CACHE", "0") == "1"
+
+    if input_mode not in {"replay", "real_mic"}:
+        _update_status(status_file, {"status": "failed", "error": f"Neplatný input_mode: {input_mode}"})
+        return 1
 
     # Pre-compute clip_start per video — stejný offset pro všechny trialy (férovné srovnání)
     if clip_start_seconds is not None:
@@ -1362,7 +1622,6 @@ def main() -> int:
 
     try:
         from packages.benchmarks.runners.streaming_runner import run_streaming_benchmark, StreamingRunConfig
-        from packages.ingest.youtube.stream_pipe import stream_youtube_audio
         from packages.benchmarks.metrics.text_metrics import (
             word_error_rate, char_error_rate,
             word_error_rate_normalized, word_error_rate_soft, match_error_rate, word_information_lost,
@@ -1370,29 +1629,38 @@ def main() -> int:
         )
         from packages.benchmarks.ground_truth.vtt_reference import extract_vtt_clip_text
 
-        # Pre-download audio pro každé video jednou — žádné opakované YouTube požadavky
         audio_wavs: dict[str, Path] = {}
-        audio_ready: list[str] = []
-        for video_id in video_ids:
-            try:
-                wav = _predownload_audio(
-                    video_id=video_id,
-                    clip_start_s=clip_starts.get(video_id, 0.0),
-                    sample_seconds=sample_seconds,
-                    job_dir=job_dir,
-                    stream_youtube_audio=stream_youtube_audio,
-                    progress_cb=lambda msg: _set_progress(status_file, msg),
-                    audio_cache_dir=audio_cache_dir,
-                )
-                audio_wavs[video_id] = wav
-                audio_ready.append(video_id)
-                _update_status(status_file, {"audio_ready": audio_ready})
-            except Exception as e:
-                _set_progress(status_file, f"⚠ Nelze stáhnout audio {video_id}: {e}")
+        if input_mode == "replay":
+            from packages.ingest.youtube.stream_pipe import stream_youtube_audio
 
-        if not audio_wavs:
-            _update_status(status_file, {"status": "failed", "error": "Žádné audio se nepodařilo stáhnout"})
-            return 1
+            # Pre-download audio pro každé video jednou — žádné opakované YouTube požadavky
+            audio_ready: list[str] = []
+            for video_id in video_ids:
+                try:
+                    wav = _predownload_audio(
+                        video_id=video_id,
+                        clip_start_s=clip_starts.get(video_id, 0.0),
+                        sample_seconds=sample_seconds,
+                        job_dir=job_dir,
+                        stream_youtube_audio=stream_youtube_audio,
+                        progress_cb=lambda msg: _set_progress(status_file, msg),
+                        audio_cache_dir=audio_cache_dir,
+                    )
+                    audio_wavs[video_id] = wav
+                    audio_ready.append(video_id)
+                    _update_status(status_file, {"audio_ready": audio_ready})
+                except Exception as e:
+                    _set_progress(status_file, f"⚠ Nelze stáhnout audio {video_id}: {e}")
+
+            if not audio_wavs:
+                _update_status(status_file, {"status": "failed", "error": "Žádné audio se nepodařilo stáhnout"})
+                return 1
+        else:
+            _update_status(status_file, {"audio_ready": list(video_ids)})
+            _set_progress(
+                status_file,
+                "Real mic režim: přeskakuji audio predownload/YouTube fetch, trialy se měří přímo z mikrofonu.",
+            )
 
         # Validace beam_size hodnot před spuštěním trialů — zabrání stovkám timeoutů
         # Testujeme per-model: (model_id, beam_size) — beam_size=5 může selhat jen na large_v3, ne na small
@@ -1403,7 +1671,11 @@ def main() -> int:
             if bs is not None:
                 model_beam_pairs.add((t_model_id, int(bs)))
 
-        if model_beam_pairs and validate_beam_preflight:
+        if input_mode != "replay":
+            validated_pairs = None
+            if model_beam_pairs:
+                _set_progress(status_file, "Real mic: pre-flight validace beam_size se přeskočí (validní jen pro replay).")
+        elif model_beam_pairs and validate_beam_preflight:
             validated_pairs = _validate_beam_sizes(
                 model_beam_pairs=model_beam_pairs,
                 audio_wavs=audio_wavs,
@@ -1435,7 +1707,7 @@ def main() -> int:
                 "is_repeat": False,
                 "repeat_of_trial_idx": None,
                 "repeat_no": 1,
-                "allow_cache": True,
+                "allow_cache": input_mode == "replay",
             })
             next_trial_idx += 1
         repeats_enqueued = False
@@ -1689,100 +1961,161 @@ def main() -> int:
             load_summary: dict | None = None
             try:
                 for v_idx, video_id in enumerate(video_ids):
-                    if video_id not in audio_wavs:
-                        source_metrics.append({"video_id": video_id, "error": "Audio nebylo staženo"})
-                        continue
-                    cache_key = _trial_cache_key(
-                        model_id=trial_model_id,
-                        model_params=trial_params,
-                        video_id=video_id,
-                        sample_seconds=sample_seconds,
-                        chunk_seconds=chunk_seconds,
-                        clip_start_s=clip_starts.get(video_id, 0.0),
-                        audio_wav=audio_wavs[video_id],
-                    )
-                    if allow_cache and cache_key in trial_video_cache:
-                        vm = copy.deepcopy(trial_video_cache[cache_key])
-                        vm["cached"] = True
-                        soft_ram_err = _soft_ram_violation(
-                            limit_mb=constraints_ram_soft_limit_mb,
-                            measured_ram_mb=(float(vm.get("ram_mb")) if isinstance(vm.get("ram_mb"), (int, float)) else None),
-                        )
-                        if soft_ram_err:
-                            vm["error"] = soft_ram_err
-                            trial_error = soft_ram_err
-                        source_metrics.append(vm)
-                        _set_progress(
-                            status_file,
-                            f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) ♻ cache hit "
-                            f"WER={vm.get('wer')} RTF={vm.get('rtf')}"
-                        )
-                        rss_now = _get_rss_mb(worker_proc)
-                        if rss_now is not None:
-                            worker_rss_peak_mb = max(v for v in [worker_rss_peak_mb, rss_now] if v is not None)
-                        if soft_ram_err:
-                            break
-                        continue
-
-                    _set_progress(status_file, f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) ▶ přepisuji...")
-                    try:
-                        vm = _run_one_video(
-                            video_id=video_id,
+                    if input_mode == "replay":
+                        if video_id not in audio_wavs:
+                            source_metrics.append({"video_id": video_id, "error": "Audio nebylo staženo"})
+                            continue
+                        cache_key = _trial_cache_key(
                             model_id=trial_model_id,
-                            model_params=dict(trial_params),  # kopie — nesmí se mutovat
-                            chunk_seconds=chunk_seconds,
+                            model_params=trial_params,
+                            video_id=video_id,
                             sample_seconds=sample_seconds,
-                            audio_wav=audio_wavs[video_id],
+                            chunk_seconds=chunk_seconds,
                             clip_start_s=clip_starts.get(video_id, 0.0),
-                            job_dir=job_dir,
-                            trial_idx=trial_idx,
-                            subtitles_root=subtitles_root,
-                            model_store_root=model_store_root,
-                            run_streaming_benchmark=run_streaming_benchmark,
-                            StreamingRunConfig=StreamingRunConfig,
-                            extract_vtt_clip_text=extract_vtt_clip_text,
-                            word_error_rate=word_error_rate,
-                            char_error_rate=char_error_rate,
-                            word_error_rate_normalized=word_error_rate_normalized,
-                            word_error_rate_soft=word_error_rate_soft,
-                            match_error_rate=match_error_rate,
-                            word_information_lost=word_information_lost,
-                            word_diff=word_diff,
-                            progress_cb=lambda msg: _set_progress(
-                                status_file,
-                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)}: {msg}"
-                            ),
-                            source_wav_path=str(audio_wavs[video_id]),
+                            audio_wav=audio_wavs[video_id],
                         )
-                        if allow_cache:
-                            trial_video_cache[cache_key] = copy.deepcopy(vm)
-                        soft_ram_err = _soft_ram_violation(
-                            limit_mb=constraints_ram_soft_limit_mb,
-                            measured_ram_mb=(float(vm.get("ram_mb")) if isinstance(vm.get("ram_mb"), (int, float)) else None),
-                        )
-                        if soft_ram_err:
-                            vm["error"] = soft_ram_err
-                            trial_error = soft_ram_err
+                        if allow_cache and cache_key in trial_video_cache:
+                            vm = copy.deepcopy(trial_video_cache[cache_key])
+                            vm["cached"] = True
+                            soft_ram_err = _soft_ram_violation(
+                                limit_mb=constraints_ram_soft_limit_mb,
+                                measured_ram_mb=(float(vm.get("ram_mb")) if isinstance(vm.get("ram_mb"), (int, float)) else None),
+                            )
+                            if soft_ram_err:
+                                vm["error"] = soft_ram_err
+                                trial_error = soft_ram_err
                             source_metrics.append(vm)
                             _set_progress(
                                 status_file,
-                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ⚠ {soft_ram_err}",
+                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) ♻ cache hit "
+                                f"WER={vm.get('wer')} RTF={vm.get('rtf')}"
                             )
-                            break
-                        source_metrics.append(vm)
+                            rss_now = _get_rss_mb(worker_proc)
+                            if rss_now is not None:
+                                worker_rss_peak_mb = max(v for v in [worker_rss_peak_mb, rss_now] if v is not None)
+                            if soft_ram_err:
+                                break
+                            continue
+
+                        _set_progress(status_file, f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) ▶ přepisuji...")
+                        try:
+                            vm = _run_one_video(
+                                video_id=video_id,
+                                model_id=trial_model_id,
+                                model_params=dict(trial_params),  # kopie — nesmí se mutovat
+                                chunk_seconds=chunk_seconds,
+                                sample_seconds=sample_seconds,
+                                audio_wav=audio_wavs[video_id],
+                                clip_start_s=clip_starts.get(video_id, 0.0),
+                                job_dir=job_dir,
+                                trial_idx=trial_idx,
+                                subtitles_root=subtitles_root,
+                                model_store_root=model_store_root,
+                                run_streaming_benchmark=run_streaming_benchmark,
+                                StreamingRunConfig=StreamingRunConfig,
+                                extract_vtt_clip_text=extract_vtt_clip_text,
+                                word_error_rate=word_error_rate,
+                                char_error_rate=char_error_rate,
+                                word_error_rate_normalized=word_error_rate_normalized,
+                                word_error_rate_soft=word_error_rate_soft,
+                                match_error_rate=match_error_rate,
+                                word_information_lost=word_information_lost,
+                                word_diff=word_diff,
+                                progress_cb=lambda msg: _set_progress(
+                                    status_file,
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)}: {msg}"
+                                ),
+                                source_wav_path=str(audio_wavs[video_id]),
+                            )
+                            if allow_cache:
+                                trial_video_cache[cache_key] = copy.deepcopy(vm)
+                            soft_ram_err = _soft_ram_violation(
+                                limit_mb=constraints_ram_soft_limit_mb,
+                                measured_ram_mb=(float(vm.get("ram_mb")) if isinstance(vm.get("ram_mb"), (int, float)) else None),
+                            )
+                            if soft_ram_err:
+                                vm["error"] = soft_ram_err
+                                trial_error = soft_ram_err
+                                source_metrics.append(vm)
+                                _set_progress(
+                                    status_file,
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ⚠ {soft_ram_err}",
+                                )
+                                break
+                            source_metrics.append(vm)
+                            _set_progress(
+                                status_file,
+                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ✓ "
+                                f"WER={vm['wer']} RTF={vm['rtf']}"
+                            )
+                            rss_now = _get_rss_mb(worker_proc)
+                            if rss_now is not None:
+                                worker_rss_peak_mb = max(v for v in [worker_rss_peak_mb, rss_now] if v is not None)
+                        except Exception as e:
+                            source_metrics.append({"video_id": video_id, "error": str(e)})
+                            trial_error = str(e)
+                            print(f"Trial {trial_idx} video {video_id} FAILED: {e}", file=sys.stderr)
+                            traceback.print_exc(file=sys.stderr)
+                    else:
                         _set_progress(
                             status_file,
-                            f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ✓ "
-                            f"WER={vm['wer']} RTF={vm['rtf']}"
+                            f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) 🎤 real mic capture...",
                         )
-                        rss_now = _get_rss_mb(worker_proc)
-                        if rss_now is not None:
-                            worker_rss_peak_mb = max(v for v in [worker_rss_peak_mb, rss_now] if v is not None)
-                    except Exception as e:
-                        source_metrics.append({"video_id": video_id, "error": str(e)})
-                        trial_error = str(e)
-                        print(f"Trial {trial_idx} video {video_id} FAILED: {e}", file=sys.stderr)
-                        traceback.print_exc(file=sys.stderr)
+                        try:
+                            vm = _run_one_video_real_mic(
+                                video_id=video_id,
+                                model_id=trial_model_id,
+                                model_params=dict(trial_params),
+                                sample_seconds=sample_seconds,
+                                clip_start_s=clip_starts.get(video_id, 0.0),
+                                trial_idx=trial_idx,
+                                job_dir=job_dir,
+                                subtitles_root=subtitles_root,
+                                extract_vtt_clip_text=extract_vtt_clip_text,
+                                word_error_rate=word_error_rate,
+                                char_error_rate=char_error_rate,
+                                word_error_rate_normalized=word_error_rate_normalized,
+                                word_error_rate_soft=word_error_rate_soft,
+                                match_error_rate=match_error_rate,
+                                word_information_lost=word_information_lost,
+                                word_diff=word_diff,
+                                progress_cb=lambda msg: _set_progress(
+                                    status_file,
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)}: {msg}"
+                                ),
+                                mic_chunk_seconds=mic_chunk_seconds,
+                                mic_prepare_seconds=mic_prepare_seconds,
+                                mic_device=mic_device,
+                            )
+                            soft_ram_err = _soft_ram_violation(
+                                limit_mb=constraints_ram_soft_limit_mb,
+                                measured_ram_mb=(float(vm.get("ram_mb")) if isinstance(vm.get("ram_mb"), (int, float)) else None),
+                            )
+                            if soft_ram_err:
+                                vm["error"] = soft_ram_err
+                                trial_error = soft_ram_err
+                                source_metrics.append(vm)
+                                _set_progress(
+                                    status_file,
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ⚠ {soft_ram_err}",
+                                )
+                                break
+                            source_metrics.append(vm)
+                            _set_progress(
+                                status_file,
+                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ✓ "
+                                f"WER={vm.get('wer')} RTF={vm.get('rtf')}"
+                            )
+                            if vm.get("error") and trial_error is None:
+                                trial_error = str(vm.get("error"))
+                            rss_now = _get_rss_mb(worker_proc)
+                            if rss_now is not None:
+                                worker_rss_peak_mb = max(v for v in [worker_rss_peak_mb, rss_now] if v is not None)
+                        except Exception as e:
+                            source_metrics.append({"video_id": video_id, "error": str(e)})
+                            trial_error = str(e)
+                            print(f"Trial {trial_idx} video {video_id} FAILED: {e}", file=sys.stderr)
+                            traceback.print_exc(file=sys.stderr)
             finally:
                 load_summary = load_controller.stop()
                 if load_summary.get("load_control_ok") is False:
@@ -1810,6 +2143,41 @@ def main() -> int:
             ram_p95_mb = _percentile([float(v) for v in ram_values if isinstance(v, (int, float))], 95)
             latency_values = [float(m.get("latency_ms")) for m in source_metrics if not m.get("error") and isinstance(m.get("latency_ms"), (int, float))]
             rtf_values = [float(m.get("rtf")) for m in source_metrics if not m.get("error") and isinstance(m.get("rtf"), (int, float))]
+            first_token_values = [
+                float(m.get("first_token_ms_p50"))
+                for m in source_metrics
+                if not m.get("error") and isinstance(m.get("first_token_ms_p50"), (int, float))
+            ]
+            first_token_p95_values = [
+                float(m.get("first_token_ms_p95"))
+                for m in source_metrics
+                if not m.get("error") and isinstance(m.get("first_token_ms_p95"), (int, float))
+            ]
+            segment_finalize_values = [
+                float(m.get("segment_finalize_ms_p50"))
+                for m in source_metrics
+                if not m.get("error") and isinstance(m.get("segment_finalize_ms_p50"), (int, float))
+            ]
+            segment_finalize_p95_values = [
+                float(m.get("segment_finalize_ms_p95"))
+                for m in source_metrics
+                if not m.get("error") and isinstance(m.get("segment_finalize_ms_p95"), (int, float))
+            ]
+            drop_rate_values = [
+                float(m.get("drop_rate"))
+                for m in source_metrics
+                if not m.get("error") and isinstance(m.get("drop_rate"), (int, float))
+            ]
+            session_reset_values = [
+                int(m.get("session_resets"))
+                for m in source_metrics
+                if not m.get("error") and isinstance(m.get("session_resets"), int)
+            ]
+            reason_codes = [
+                str(m.get("reason_code"))
+                for m in source_metrics
+                if m.get("reason_code")
+            ]
             source_success_count = len([m for m in source_metrics if not m.get("error")])
             source_error_count = len(source_metrics) - source_success_count
             success_rate = round(source_success_count / len(source_metrics), 4) if source_metrics else None
@@ -1835,6 +2203,13 @@ def main() -> int:
                 "latency_p50_ms": _percentile(latency_values, 50),
                 "latency_p95_ms": _percentile(latency_values, 95),
                 "latency_quality": latency_quality,
+                "first_token_ms_p50": _percentile(first_token_values, 50),
+                "first_token_ms_p95": _percentile(first_token_p95_values, 95),
+                "segment_finalize_ms_p50": _percentile(segment_finalize_values, 50),
+                "segment_finalize_ms_p95": _percentile(segment_finalize_p95_values, 95),
+                "drop_rate": _avg(drop_rate_values),
+                "session_resets": int(sum(session_reset_values)) if session_reset_values else None,
+                "reason_code": ",".join(sorted(set(reason_codes))) if reason_codes else None,
                 "ram_mb": ram_avg_mb,
                 "ram_peak_mb": ram_peak_mb,
                 "ram_p95_mb": ram_p95_mb,

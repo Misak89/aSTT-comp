@@ -22,6 +22,7 @@ from ..models.tuning import (
     TuningMicCalibration,
     TuningMicCalibrationCheckResponse,
 )
+from packages.adapters._registry import get_model
 
 try:
     import psutil
@@ -209,6 +210,11 @@ def _detect_hardware_info() -> dict:
 
 
 def create_job(req: TuningJobRequest) -> TuningJobStatus:
+    # Resolve effective model_ids (nové pole má přednost, fallback na starý model_id)
+    effective_model_ids = req.model_ids if req.model_ids else ([req.model_id] if req.model_id else [])
+    if not effective_model_ids:
+        raise ValueError("Musí být vybrán alespoň jeden model.")
+
     input_mode = (req.input_mode or "replay").strip().lower()
     if input_mode not in {"replay", "real_mic"}:
         raise ValueError("input_mode musí být 'replay' nebo 'real_mic'.")
@@ -229,18 +235,26 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         if not req.mic_calibration.passed or not calibration_check.passed:
             details = "; ".join(calibration_check.reasons) if calibration_check.reasons else "kalibrace neprošla."
             raise ValueError(f"Kalibrace real_mic režimu neprošla: {details}")
-        # Worker pipeline je zatím replay-only; zabráníme zavádějícím výsledkům.
-        raise ValueError(
-            "real_mic tuning job zatím není implementovaný v tuning_workeru. "
-            "Použij Benchmark > Mikrofon pro live test; real_mic tuning pipeline bude v dalším kroku."
-        )
+
+        unsupported: list[str] = []
+        for model_id in effective_model_ids:
+            descriptor = get_model(str(model_id))
+            if descriptor is None:
+                unsupported.append(f"{model_id} (neznámý model)")
+            elif not descriptor.supports_microphone:
+                unsupported.append(f"{model_id} (supports_microphone=false)")
+        if unsupported:
+            raise ValueError(
+                "Tyto modely nepodporují real_mic režim: "
+                + ", ".join(unsupported)
+            )
+
+    effective_validate_beam_preflight = bool(req.validate_beam_preflight) and input_mode == "replay"
 
     job_id = f"tune_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     job_dir = _job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve effective model_ids (nové pole má přednost, fallback na starý model_id)
-    effective_model_ids = req.model_ids if req.model_ids else ([req.model_id] if req.model_id else [])
     hardware_info = _detect_hardware_info()
     hardware_profile = (req.hardware_profile or "").strip() or _classify_hardware_profile(
         hardware_info.get("logical_cores"),
@@ -287,7 +301,7 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         "load_profile": load_profile,
         "load_cpu_target_pct": load_cpu_target_pct,
         "load_ram_target_pct": load_ram_target_pct,
-        "validate_beam_preflight": bool(req.validate_beam_preflight),
+        "validate_beam_preflight": effective_validate_beam_preflight,
         "mic_protocol": req.mic_protocol.model_dump() if req.mic_protocol else None,
         "mic_calibration": req.mic_calibration.model_dump() if req.mic_calibration else None,
         "repeat_top_k": repeat_top_k,
@@ -322,7 +336,7 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         load_profile=load_profile,
         load_cpu_target_pct=load_cpu_target_pct,
         load_ram_target_pct=load_ram_target_pct,
-        validate_beam_preflight=bool(req.validate_beam_preflight),
+        validate_beam_preflight=effective_validate_beam_preflight,
         mic_protocol=req.mic_protocol,
         mic_calibration=req.mic_calibration,
         created_at=_now(),

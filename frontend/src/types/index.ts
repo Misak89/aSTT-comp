@@ -284,6 +284,13 @@ export interface TuningTrialResult {
   latency_p50_ms?: number | null
   latency_p95_ms?: number | null
   latency_quality?: 'measured_live' | 'probe_online' | 'proxy_offline' | 'mixed' | 'unknown' | null
+  first_token_ms_p50?: number | null
+  first_token_ms_p95?: number | null
+  segment_finalize_ms_p50?: number | null
+  segment_finalize_ms_p95?: number | null
+  drop_rate?: number | null
+  session_resets?: number | null
+  reason_code?: string | null
   ram_mb?: number | null
   ram_peak_mb?: number | null
   ram_p95_mb?: number | null

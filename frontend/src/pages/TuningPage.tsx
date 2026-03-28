@@ -981,7 +981,7 @@ export function TuningPage() {
                 </label>
               </div>
               <p className="text-[11px] text-blue-900">
-                Pozn.: real_mic tuning worker bude aktivován v dalším kroku; nyní je zde validace protokolu/kalibrace.
+                Real mic tuning běží přímo v workeru: před každým videem sleduj stavový řádek a spusť přehrání mobilu v momentu startu nahrávání.
               </p>
             </div>
           )}
