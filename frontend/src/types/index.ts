@@ -453,6 +453,7 @@ export interface TuningJobStatus {
   model_id: string
   model_ids: string[]
   input_mode?: TuningInputMode
+  strategy?: string | null
   label: string | null
   hardware_profile?: string | null
   hardware_note?: string | null

@@ -303,6 +303,7 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         "clip_seed": req.clip_seed,
         "random_seed": req.random_seed,
         "clip_start_seconds": req.clip_start_seconds,
+        "strategy": req.strategy,
         "evaluation_mode": req.evaluation_mode,
         "label": req.label,
         "hardware_profile": hardware_profile,
@@ -339,6 +340,7 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         model_id=effective_model_ids[0] if effective_model_ids else "",
         model_ids=effective_model_ids,
         input_mode=input_mode,
+        strategy=req.strategy,
         label=req.label,
         hardware_profile=hardware_profile,
         hardware_note=hardware_note,
@@ -560,6 +562,30 @@ def _generate_trials(req: TuningJobRequest, model_ids: list[str] | None = None) 
                     trials.append(t)
             for cs in chunk_values[1:]:
                 trials.append({**baseline, "_chunk_seconds": cs, "_model_id": mid})
+
+    elif req.strategy == "smart":
+        # Smart: vygeneruj kandidátní pool, vlastní výběr/vyřazování dělá tuning_worker (successive halving).
+        param_names = [ps.name for ps in model_param_space]
+        param_values = [sorted(ps.values, key=lambda v: (str(type(v)), v if not isinstance(v, bool) else int(v))) for ps in model_param_space]
+        combos = list(itertools.product(*param_values)) if param_values else [()]
+        rnd = random.Random(req.random_seed if req.random_seed is not None else 42)
+        trials = []
+        max_per_model = max(1, int(req.max_trials or 20))
+        for mid in effective_model_ids:
+            model_candidates: list[dict] = []
+            for combo in combos:
+                params = dict(req.baseline_params)
+                for name, val in zip(param_names, combo):
+                    params[name] = val
+                if _is_invalid_combo(params):
+                    continue
+                for cs in chunk_values:
+                    model_candidates.append({**params, "_chunk_seconds": cs, "_model_id": mid})
+            if len(model_candidates) > max_per_model:
+                rnd.shuffle(model_candidates)
+                model_candidates = model_candidates[:max_per_model]
+            trials.extend(model_candidates)
+        return trials
 
     else:  # random
         param_names = [ps.name for ps in model_param_space]

@@ -189,6 +189,46 @@ def _select_repeat_seed_trials(results: list[dict], repeat_top_k: int) -> list[d
     return seeds[:repeat_top_k]
 
 
+def _smart_candidate_key(*, model_id: str, params_raw: dict) -> str:
+    clean = dict(params_raw)
+    chunk = int(clean.pop("_chunk_seconds", clean.pop("chunk_seconds", 30)))
+    clean.pop("_model_id", None)
+    frozen = tuple(
+        sorted((str(k), json.dumps(v, ensure_ascii=False, sort_keys=True)) for k, v in clean.items())
+    )
+    return json.dumps(
+        {
+            "model_id": str(model_id),
+            "chunk_seconds": chunk,
+            "params": frozen,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _smart_score_tuple(result: dict) -> tuple[float, float, float, float, float]:
+    wer_soft = result.get("wer_soft")
+    wer = result.get("wer")
+    quality = (
+        float(wer_soft) if isinstance(wer_soft, (int, float))
+        else (float(wer) if isinstance(wer, (int, float)) else float("inf"))
+    )
+    rtf = float(result.get("rtf")) if isinstance(result.get("rtf"), (int, float)) else float("inf")
+    rtf_penalty = 0.0 if rtf <= 1.2 else 1.0
+    delay = (
+        float(result.get("perceived_delay_s"))
+        if isinstance(result.get("perceived_delay_s"), (int, float))
+        else float("inf")
+    )
+    ram_peak = (
+        float(result.get("ram_peak_mb"))
+        if isinstance(result.get("ram_peak_mb"), (int, float))
+        else float("inf")
+    )
+    return (rtf_penalty, quality, rtf, delay, ram_peak)
+
+
 def _metric_stats(values: list[float]) -> dict | None:
     vals = [float(v) for v in values if isinstance(v, (int, float))]
     if not vals:
@@ -1498,6 +1538,7 @@ def main() -> int:
     config = json.loads(config_file.read_text(encoding="utf-8"))
     trials: list[dict] = config["trials"]
     model_id: str = config["model_id"]          # fallback pro old-style joby (single model)
+    strategy: str = str(config.get("strategy") or "grid").strip().lower()
     input_mode: str = str(config.get("input_mode") or "replay").strip().lower()
     video_ids: list[str] = config["video_ids"]
     sample_seconds: int = config["sample_seconds"]
@@ -1711,21 +1752,97 @@ def main() -> int:
             _set_progress(status_file, "WARN: psutil není dostupný — RAM/RSS metriky budou prázdné.")
         repeat_top_k = max(0, int(config.get("repeat_top_k", 0) or 0))
         repeat_runs = max(1, int(config.get("repeat_runs", 1) or 1))
+        smart_mode = strategy == "smart"
+        if smart_mode and (repeat_top_k > 0 or repeat_runs > 1):
+            _set_progress(status_file, "Smart režim: reproducibility repeat_top_k/repeat_runs se použijí až na finální shortlist (nyní vypnuto).")
+            repeat_top_k = 0
+            repeat_runs = 1
+
         all_results: list[dict] = []
         next_trial_idx = 0
         execution_queue: list[dict] = []
-        for trial_params_raw in trials:
-            execution_queue.append({
-                "trial_idx": next_trial_idx,
-                "trial_params_raw": trial_params_raw,
-                "is_repeat": False,
-                "repeat_of_trial_idx": None,
-                "repeat_no": 1,
-                "allow_cache": input_mode == "replay",
-            })
-            next_trial_idx += 1
+        smart_state: dict | None = None
+        if smart_mode:
+            candidate_by_key: dict[str, dict] = {}
+            for trial_params_raw in trials:
+                tr = dict(trial_params_raw)
+                cand_model_id = str(tr.get("_model_id", model_id))
+                cand_key = _smart_candidate_key(model_id=cand_model_id, params_raw=tr)
+                if cand_key in candidate_by_key:
+                    continue
+                candidate_by_key[cand_key] = {
+                    "trial_params_raw": tr,
+                    "model_id": cand_model_id,
+                }
+
+            candidate_keys = list(candidate_by_key.keys())
+            if not candidate_keys:
+                _update_status(status_file, {"status": "failed", "error": "Smart režim: žádní kandidáti po validaci prostoru parametrů."})
+                return 1
+
+            rounds: list[dict] = []
+            rounds.append({"round_idx": 1, "label": "gate", "video_ids": video_ids[:1], "keep_ratio": 0.5})
+            if len(video_ids) >= 2 and len(candidate_keys) > 1:
+                rounds.append({"round_idx": 2, "label": "search", "video_ids": video_ids[:2], "keep_ratio": 0.5})
+            rounds.append({"round_idx": len(rounds) + 1, "label": "confirm", "video_ids": list(video_ids), "keep_ratio": 0.5})
+
+            dedup_rounds: list[dict] = []
+            for rd in rounds:
+                vids = tuple(rd.get("video_ids") or [])
+                if dedup_rounds and tuple(dedup_rounds[-1].get("video_ids") or []) == vids:
+                    dedup_rounds[-1]["label"] = rd.get("label") or dedup_rounds[-1].get("label")
+                    continue
+                dedup_rounds.append(rd)
+            rounds = dedup_rounds
+            total_rounds = len(rounds)
+            first_round = rounds[0]
+            prefilter = total_rounds > 1
+
+            for cand_key in candidate_keys:
+                payload = candidate_by_key[cand_key]
+                execution_queue.append({
+                    "trial_idx": next_trial_idx,
+                    "trial_params_raw": payload["trial_params_raw"],
+                    "is_repeat": prefilter,
+                    "repeat_of_trial_idx": None,
+                    "repeat_no": 1,
+                    "allow_cache": input_mode == "replay",
+                    "smart_round": 1,
+                    "smart_total_rounds": total_rounds,
+                    "smart_stage": first_round.get("label"),
+                    "smart_candidate_key": cand_key,
+                    "trial_video_ids": list(first_round.get("video_ids") or video_ids),
+                })
+                next_trial_idx += 1
+
+            smart_state = {
+                "enabled": True,
+                "rounds": rounds,
+                "current_round": 1,
+                "total_rounds": total_rounds,
+                "remaining_in_round": len(candidate_keys),
+                "candidate_by_key": candidate_by_key,
+                "results_by_round": {1: []},
+            }
+            _set_progress(
+                status_file,
+                f"Smart search: {len(candidate_keys)} kandidátů, {total_rounds} kola (gate/search/confirm).",
+            )
+            _update_status(status_file, {"total_trials": len(execution_queue)})
+        else:
+            for trial_params_raw in trials:
+                execution_queue.append({
+                    "trial_idx": next_trial_idx,
+                    "trial_params_raw": trial_params_raw,
+                    "is_repeat": False,
+                    "repeat_of_trial_idx": None,
+                    "repeat_no": 1,
+                    "allow_cache": input_mode == "replay",
+                })
+                next_trial_idx += 1
+
         repeats_enqueued = False
-        if repeat_top_k > 0 and repeat_runs > 1:
+        if (not smart_mode) and repeat_top_k > 0 and repeat_runs > 1:
             _update_status(status_file, {
                 "total_trials": len(trials) + (repeat_top_k * (repeat_runs - 1)),
             })
@@ -1767,6 +1884,102 @@ def main() -> int:
             # Uprav total_trials na skutečný počet (může být < plán, když je málo validních seedů).
             _update_status(status_file, {"total_trials": len(execution_queue)})
 
+        def _enqueue_smart_next_round_if_ready() -> None:
+            nonlocal next_trial_idx
+            if not smart_state or not smart_state.get("enabled"):
+                return
+
+            remaining = int(smart_state.get("remaining_in_round") or 0)
+            if remaining > 0:
+                return
+
+            current_round = int(smart_state.get("current_round") or 1)
+            total_rounds = int(smart_state.get("total_rounds") or 1)
+            if current_round >= total_rounds:
+                return
+
+            rounds: list[dict] = list(smart_state.get("rounds") or [])
+            results_by_round: dict = smart_state.get("results_by_round") or {}
+            candidate_by_key: dict = smart_state.get("candidate_by_key") or {}
+            round_results = list(results_by_round.get(current_round) or [])
+            if not round_results:
+                _set_progress(status_file, f"Smart round {current_round}/{total_rounds}: žádná validní data, job končí.")
+                return
+
+            valid = [
+                r for r in round_results
+                if not r.get("error")
+                and isinstance(r.get("wer"), (int, float))
+                and isinstance(r.get("rtf"), (int, float))
+                and isinstance(r.get("_smart_candidate_key"), str)
+            ]
+            ranked = sorted(valid, key=_smart_score_tuple)
+            if not ranked:
+                fallback = [r for r in round_results if isinstance(r.get("_smart_candidate_key"), str)]
+                ranked = sorted(
+                    fallback,
+                    key=lambda r: (
+                        0.0 if isinstance(r.get("rtf"), (int, float)) else 1.0,
+                        float(r.get("rtf")) if isinstance(r.get("rtf"), (int, float)) else float("inf"),
+                        float(r.get("wer")) if isinstance(r.get("wer"), (int, float)) else float("inf"),
+                    ),
+                )
+            if not ranked:
+                _set_progress(status_file, f"Smart round {current_round}/{total_rounds}: bez přeživších kandidátů.")
+                return
+
+            next_round = current_round + 1
+            next_def = rounds[next_round - 1]
+            keep_ratio = float(next_def.get("keep_ratio") or 1.0)
+            keep_n = max(1, int(math.ceil(len(ranked) * keep_ratio)))
+            survivors = ranked[:keep_n]
+            survivor_keys = [str(r.get("_smart_candidate_key")) for r in survivors if r.get("_smart_candidate_key")]
+            stage = str(next_def.get("label") or f"round_{next_round}")
+            trial_video_ids = list(next_def.get("video_ids") or video_ids)
+            final_round = next_round == total_rounds
+
+            _set_progress(
+                status_file,
+                f"Smart round {current_round}/{total_rounds} done: postupuje {len(survivor_keys)}/{len(ranked)} → {stage}.",
+            )
+
+            for cand_key in survivor_keys:
+                payload = candidate_by_key.get(cand_key)
+                if not payload:
+                    continue
+                execution_queue.append({
+                    "trial_idx": next_trial_idx,
+                    "trial_params_raw": dict(payload.get("trial_params_raw") or {}),
+                    "is_repeat": not final_round,
+                    "repeat_of_trial_idx": None,
+                    "repeat_no": 1,
+                    "allow_cache": input_mode == "replay",
+                    "smart_round": next_round,
+                    "smart_total_rounds": total_rounds,
+                    "smart_stage": stage,
+                    "smart_candidate_key": cand_key,
+                    "trial_video_ids": trial_video_ids,
+                })
+                next_trial_idx += 1
+
+            smart_state["current_round"] = next_round
+            smart_state["remaining_in_round"] = len(survivor_keys)
+            smart_state["results_by_round"][next_round] = []
+            _update_status(status_file, {"total_trials": len(execution_queue)})
+
+        def _on_trial_finished(result_item: dict) -> None:
+            all_results.append(result_item)
+            if smart_state and smart_state.get("enabled"):
+                round_idx = int(result_item.get("smart_round") or smart_state.get("current_round") or 1)
+                rb = smart_state.get("results_by_round")
+                if isinstance(rb, dict):
+                    rb.setdefault(round_idx, []).append(result_item)
+                remaining = int(smart_state.get("remaining_in_round") or 0)
+                smart_state["remaining_in_round"] = max(0, remaining - 1)
+                _enqueue_smart_next_round_if_ready()
+            else:
+                _enqueue_repeats_if_ready()
+
         while queue_pos < len(execution_queue):
             run_item = execution_queue[queue_pos]
             queue_pos += 1
@@ -1776,6 +1989,11 @@ def main() -> int:
             repeat_of_trial_idx = run_item.get("repeat_of_trial_idx")
             repeat_no = int(run_item.get("repeat_no", 1) or 1)
             allow_cache = bool(run_item.get("allow_cache", True))
+            smart_round = int(run_item.get("smart_round", 0) or 0)
+            smart_total_rounds = int(run_item.get("smart_total_rounds", 0) or 0)
+            smart_stage = str(run_item.get("smart_stage") or "")
+            smart_candidate_key = str(run_item.get("smart_candidate_key") or "") or None
+            trial_video_ids = list(run_item.get("trial_video_ids") or video_ids)
             trial_pos = queue_pos
             # Kontrola cancel flagu
             if (job_dir / "cancel").exists():
@@ -1795,7 +2013,7 @@ def main() -> int:
                     and isinstance(beam_size, int)
                     and (trial_model_id, beam_size) not in validated_pairs):
                 _set_progress(status_file, f"Trial {trial_pos}/{len(execution_queue)}: SKIP — {trial_model_id} beam_size={beam_size} selhalo při validaci (timeout)")
-                _append_result(status_file, {
+                skip_result = {
                     "trial_idx": trial_idx,
                     "model_id": trial_model_id,
                     "params": {**trial_params, "chunk_seconds": chunk_seconds},
@@ -1830,52 +2048,19 @@ def main() -> int:
                     "repeat_of_trial_idx": repeat_of_trial_idx,
                     "repeat_no": repeat_no,
                     "repeat_group_key": f"trial_{repeat_of_trial_idx if repeat_of_trial_idx is not None else trial_idx}",
+                    "smart_round": smart_round if smart_round > 0 else None,
+                    "smart_stage": smart_stage or None,
+                    "_smart_candidate_key": smart_candidate_key,
                     "trial_finished_at": _now(),
-                })
-                all_results.append({
-                    "trial_idx": trial_idx,
-                    "model_id": trial_model_id,
-                    "params": {**trial_params, "chunk_seconds": chunk_seconds},
-                    "chunk_seconds": chunk_seconds,
-                    "wer": None, "cer": None, "wer_normalized": None, "wer_soft": None, "wer_llm": None, "mer": None, "wil": None,
-                    "rtf": None, "latency_ms": None, "source_metrics": [],
-                    "ram_mb": None, "ram_peak_mb": None,
-                    "worker_rss_before_mb": None, "worker_rss_after_mb": None, "worker_rss_peak_mb": None,
-                    **_load_result_fields(
-                        load_profile=load_profile,
-                        load_cpu_target_pct=load_cpu_target_pct,
-                        load_ram_target_pct=load_ram_target_pct,
-                    ),
-                    **_constraints_result_fields(
-                        constraints_profile=constraints_profile,
-                        constraints_cpu_cores=(int(constraints_cpu_cores) if isinstance(constraints_cpu_cores, int) else None),
-                        constraints_ram_limit_mb=(int(constraints_ram_limit_mb) if isinstance(constraints_ram_limit_mb, int) else None),
-                        constraints_priority=constraints_priority,
-                        constraints_applied=constraints_applied,
-                        constraints_warnings=constraints_warnings,
-                        constraints_ram_mode=constraints_ram_mode,
-                        constraints_cpu_applied=constraints_cpu_applied,
-                        constraints_priority_applied=constraints_priority_applied,
-                        constraints_ram_hard_cap_applied=constraints_ram_hard_cap_applied,
-                        constraints_ram_hard_cap_error=constraints_ram_hard_cap_error,
-                    ),
-                    "transcript": None, "reference_text": None, "word_diff": None,
-                    "chunk_metrics": None, "word_count": 0,
-                    "error": f"Přeskočeno: {trial_model_id} beam_size={beam_size} selhalo při validaci (timeout)",
-                    "is_pareto": False, "rtf_viable": False, "perceived_delay_s": None,
-                    "is_repeat": is_repeat,
-                    "repeat_of_trial_idx": repeat_of_trial_idx,
-                    "repeat_no": repeat_no,
-                    "repeat_group_key": f"trial_{repeat_of_trial_idx if repeat_of_trial_idx is not None else trial_idx}",
-                    "trial_finished_at": _now(),
-                })
-                _enqueue_repeats_if_ready()
+                }
+                _append_result(status_file, skip_result)
+                _on_trial_finished(skip_result)
                 continue
 
             # Validace: best_of nesmí být větší než beam_size
             if isinstance(best_of, int) and isinstance(beam_size, int) and best_of > beam_size:
                 _set_progress(status_file, f"Trial {trial_pos}/{len(execution_queue)}: SKIP — best_of={best_of} > beam_size={beam_size}")
-                _append_result(status_file, {
+                skip_result = {
                     "trial_idx": trial_idx,
                     "model_id": trial_model_id,
                     "params": {**trial_params, "chunk_seconds": chunk_seconds},
@@ -1910,46 +2095,13 @@ def main() -> int:
                     "repeat_of_trial_idx": repeat_of_trial_idx,
                     "repeat_no": repeat_no,
                     "repeat_group_key": f"trial_{repeat_of_trial_idx if repeat_of_trial_idx is not None else trial_idx}",
+                    "smart_round": smart_round if smart_round > 0 else None,
+                    "smart_stage": smart_stage or None,
+                    "_smart_candidate_key": smart_candidate_key,
                     "trial_finished_at": _now(),
-                })
-                all_results.append({
-                    "trial_idx": trial_idx,
-                    "model_id": trial_model_id,
-                    "params": {**trial_params, "chunk_seconds": chunk_seconds},
-                    "chunk_seconds": chunk_seconds,
-                    "wer": None, "cer": None, "wer_normalized": None, "wer_soft": None, "wer_llm": None, "mer": None, "wil": None,
-                    "rtf": None, "latency_ms": None, "source_metrics": [],
-                    "ram_mb": None, "ram_peak_mb": None,
-                    "worker_rss_before_mb": None, "worker_rss_after_mb": None, "worker_rss_peak_mb": None,
-                    **_load_result_fields(
-                        load_profile=load_profile,
-                        load_cpu_target_pct=load_cpu_target_pct,
-                        load_ram_target_pct=load_ram_target_pct,
-                    ),
-                    **_constraints_result_fields(
-                        constraints_profile=constraints_profile,
-                        constraints_cpu_cores=(int(constraints_cpu_cores) if isinstance(constraints_cpu_cores, int) else None),
-                        constraints_ram_limit_mb=(int(constraints_ram_limit_mb) if isinstance(constraints_ram_limit_mb, int) else None),
-                        constraints_priority=constraints_priority,
-                        constraints_applied=constraints_applied,
-                        constraints_warnings=constraints_warnings,
-                        constraints_ram_mode=constraints_ram_mode,
-                        constraints_cpu_applied=constraints_cpu_applied,
-                        constraints_priority_applied=constraints_priority_applied,
-                        constraints_ram_hard_cap_applied=constraints_ram_hard_cap_applied,
-                        constraints_ram_hard_cap_error=constraints_ram_hard_cap_error,
-                    ),
-                    "transcript": None, "reference_text": None, "word_diff": None,
-                    "chunk_metrics": None, "word_count": 0,
-                    "error": f"Přeskočeno: best_of={best_of} > beam_size={beam_size}",
-                    "is_pareto": False, "rtf_viable": False, "perceived_delay_s": None,
-                    "is_repeat": is_repeat,
-                    "repeat_of_trial_idx": repeat_of_trial_idx,
-                    "repeat_no": repeat_no,
-                    "repeat_group_key": f"trial_{repeat_of_trial_idx if repeat_of_trial_idx is not None else trial_idx}",
-                    "trial_finished_at": _now(),
-                })
-                _enqueue_repeats_if_ready()
+                }
+                _append_result(status_file, skip_result)
+                _on_trial_finished(skip_result)
                 continue
 
             param_str = ", ".join(f"{k}={v}" for k, v in trial_params.items() if k != "initial_prompt")
@@ -1960,7 +2112,15 @@ def main() -> int:
                 if is_repeat and repeat_of_trial_idx is not None
                 else ""
             )
-            _set_progress(status_file, f"Trial {trial_pos}/{len(execution_queue)} [{trial_model_id}]: chunk={chunk_seconds}s | {param_str}{repeat_suffix}")
+            smart_suffix = (
+                f" | smart {smart_round}/{smart_total_rounds} {smart_stage}"
+                if smart_round > 0 and smart_total_rounds > 0
+                else ""
+            )
+            _set_progress(
+                status_file,
+                f"Trial {trial_pos}/{len(execution_queue)} [{trial_model_id}]: chunk={chunk_seconds}s | {param_str}{repeat_suffix}{smart_suffix}"
+            )
 
             source_metrics: list[dict] = []
             trial_error: str | None = None
@@ -1974,7 +2134,7 @@ def main() -> int:
             load_controller.start()
             load_summary: dict | None = None
             try:
-                for v_idx, video_id in enumerate(video_ids):
+                for v_idx, video_id in enumerate(trial_video_ids):
                     if input_mode == "replay":
                         if video_id not in audio_wavs:
                             source_metrics.append({"video_id": video_id, "error": "Audio nebylo staženo"})
@@ -2001,7 +2161,7 @@ def main() -> int:
                             source_metrics.append(vm)
                             _set_progress(
                                 status_file,
-                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) ♻ cache hit "
+                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)} ({video_id}) ♻ cache hit "
                                 f"WER={vm.get('wer')} RTF={vm.get('rtf')}"
                             )
                             rss_now = _get_rss_mb(worker_proc)
@@ -2011,7 +2171,7 @@ def main() -> int:
                                 break
                             continue
 
-                        _set_progress(status_file, f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) ▶ přepisuji...")
+                        _set_progress(status_file, f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)} ({video_id}) ▶ přepisuji...")
                         try:
                             vm = _run_one_video(
                                 video_id=video_id,
@@ -2037,7 +2197,7 @@ def main() -> int:
                                 word_diff=word_diff,
                                 progress_cb=lambda msg: _set_progress(
                                     status_file,
-                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)}: {msg}"
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)}: {msg}"
                                 ),
                                 source_wav_path=str(audio_wavs[video_id]),
                             )
@@ -2053,13 +2213,13 @@ def main() -> int:
                                 source_metrics.append(vm)
                                 _set_progress(
                                     status_file,
-                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ⚠ {soft_ram_err}",
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)} ⚠ {soft_ram_err}",
                                 )
                                 break
                             source_metrics.append(vm)
                             _set_progress(
                                 status_file,
-                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ✓ "
+                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)} ✓ "
                                 f"WER={vm['wer']} RTF={vm['rtf']}"
                             )
                             rss_now = _get_rss_mb(worker_proc)
@@ -2073,7 +2233,7 @@ def main() -> int:
                     else:
                         _set_progress(
                             status_file,
-                            f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ({video_id}) 🎤 real mic capture...",
+                            f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)} ({video_id}) 🎤 real mic capture...",
                         )
                         try:
                             vm = _run_one_video_real_mic(
@@ -2095,7 +2255,7 @@ def main() -> int:
                                 word_diff=word_diff,
                                 progress_cb=lambda msg: _set_progress(
                                     status_file,
-                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)}: {msg}"
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)}: {msg}"
                                 ),
                                 mic_chunk_seconds=mic_chunk_seconds,
                                 mic_prepare_seconds=mic_prepare_seconds,
@@ -2111,13 +2271,13 @@ def main() -> int:
                                 source_metrics.append(vm)
                                 _set_progress(
                                     status_file,
-                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ⚠ {soft_ram_err}",
+                                    f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)} ⚠ {soft_ram_err}",
                                 )
                                 break
                             source_metrics.append(vm)
                             _set_progress(
                                 status_file,
-                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(video_ids)} ✓ "
+                                f"Trial {trial_pos}/{len(execution_queue)}: video {v_idx+1}/{len(trial_video_ids)} ✓ "
                                 f"WER={vm.get('wer')} RTF={vm.get('rtf')}"
                             )
                             if vm.get("error") and trial_error is None:
@@ -2273,11 +2433,13 @@ def main() -> int:
                 "repeat_of_trial_idx": repeat_of_trial_idx,
                 "repeat_no": repeat_no,
                 "repeat_group_key": f"trial_{repeat_of_trial_idx if repeat_of_trial_idx is not None else trial_idx}",
+                "smart_round": smart_round if smart_round > 0 else None,
+                "smart_stage": smart_stage or None,
+                "_smart_candidate_key": smart_candidate_key,
                 "trial_finished_at": _now(),
             }
             _append_result(status_file, trial_result)
-            all_results.append(trial_result)
-            _enqueue_repeats_if_ready()
+            _on_trial_finished(trial_result)
 
         # Po dokončení všech trialů: spočti best + Pareto
         with _status_lock:

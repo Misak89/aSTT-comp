@@ -17,7 +17,7 @@ import type {
 import { WerBadge } from '../components/WerBadge'
 import { videoLabel } from '../utils'
 
-type Strategy = 'grid' | 'ablation' | 'random'
+type Strategy = 'grid' | 'ablation' | 'random' | 'smart'
 
 // Parametry (bez initial_prompt — ten má vlastní UI)
 const WHISPER_PARAM_DEFS = [
@@ -500,6 +500,10 @@ export function TuningPage() {
           if (bestOf <= beam) validBeamBestOf++
       return (validBeamBestOf * otherCount * promptCount * modelCount) + repeatExtraFactor
     }
+    if (strategy === 'smart') {
+      // Smart běží v kolech (gate/search/confirm), takže odhad je ~2x kandidátní pool.
+      return Math.max(modelCount, (maxTrials * modelCount * 2))
+    }
     return (maxTrials * modelCount) + repeatExtraFactor
   }
 
@@ -850,6 +854,7 @@ export function TuningPage() {
                 ['ablation', 'Ablace — jeden param najednou'],
                 ['grid', 'Grid — všechny kombinace'],
                 ['random', 'Náhodné vzorkování'],
+                ['smart', 'Smart — postupné vyřazování'],
               ] as [Strategy, string][]).map(([s, label]) => (
                 <label key={s} className="flex items-center gap-2 text-xs cursor-pointer">
                   <input type="radio" name="strategy" value={s}
@@ -1073,9 +1078,9 @@ export function TuningPage() {
                 onChange={e => setClipStartSeconds(e.target.value === '' ? null : +e.target.value)}
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
-            {strategy === 'random' && (
+            {(['random', 'smart'] as Strategy[]).includes(strategy) && (
               <div>
-                <label className="text-xs text-gray-500">Max triálů</label>
+                <label className="text-xs text-gray-500">{strategy === 'smart' ? 'Max kandidátů/model' : 'Max triálů'}</label>
                 <input type="number" value={maxTrials} min={4} max={50}
                   onChange={e => setMaxTrials(+e.target.value)}
                   className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
@@ -1527,6 +1532,11 @@ export function TuningPage() {
                         {j.input_mode}
                       </span>
                     )}
+                    {j.strategy && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border border-violet-300 text-violet-700 font-mono">
+                        {j.strategy}
+                      </span>
+                    )}
                     {j.hardware_profile && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 font-mono">
                         {j.hardware_profile}
@@ -1789,6 +1799,11 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
                 : 'border-gray-300 text-gray-700'
             }`}>
               {job.input_mode}
+            </span>
+          )}
+          {job.strategy && (
+            <span className="text-xs px-2 py-0.5 rounded border border-violet-300 text-violet-700 font-mono">
+              {job.strategy}
             </span>
           )}
           {job.hardware_profile && (

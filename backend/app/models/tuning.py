@@ -159,6 +159,7 @@ class TuningJobStatus(BaseModel):
     model_id: str = ""              # backward compat — první z model_ids
     model_ids: list[str] = Field(default_factory=list)       # všechny modely v tomto jobu
     input_mode: str = "replay"
+    strategy: Optional[str] = None
     label: Optional[str]
     hardware_profile: Optional[str] = None
     hardware_note: Optional[str] = None
