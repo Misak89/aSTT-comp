@@ -1515,8 +1515,22 @@ def main() -> int:
     load_cpu_target_pct = _coerce_pct(config.get("load_cpu_target_pct"))
     load_ram_target_pct = _coerce_pct(config.get("load_ram_target_pct"))
     validate_beam_preflight = bool(config.get("validate_beam_preflight", True))
-    mic_chunk_seconds = max(0.05, float(os.environ.get("ASTT_REAL_MIC_CHUNK_SECONDS", "0.20")))
-    mic_prepare_seconds = max(0, int(os.environ.get("ASTT_REAL_MIC_PREPARE_SECONDS", "4")))
+    mic_chunk_seconds = max(
+        0.05,
+        float(
+            config.get("mic_chunk_seconds")
+            if config.get("mic_chunk_seconds") is not None
+            else os.environ.get("ASTT_REAL_MIC_CHUNK_SECONDS", "0.20")
+        ),
+    )
+    mic_prepare_seconds = max(
+        0,
+        int(
+            config.get("mic_prepare_seconds")
+            if config.get("mic_prepare_seconds") is not None
+            else os.environ.get("ASTT_REAL_MIC_PREPARE_SECONDS", "4")
+        ),
+    )
     mic_device_raw = config.get("mic_device")
     mic_device = mic_device_raw if isinstance(mic_device_raw, (int, str)) else None
     if load_profile == "none":

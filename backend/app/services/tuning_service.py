@@ -219,6 +219,10 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
     if input_mode not in {"replay", "real_mic"}:
         raise ValueError("input_mode musí být 'replay' nebo 'real_mic'.")
 
+    mic_device: int | str | None = None
+    mic_chunk_seconds: float | None = None
+    mic_prepare_seconds: int | None = None
+
     if input_mode == "real_mic":
         if req.mic_protocol is None:
             raise ValueError("Pro real_mic režim chybí mic_protocol.")
@@ -248,6 +252,16 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
                 "Tyto modely nepodporují real_mic režim: "
                 + ", ".join(unsupported)
             )
+
+        mic_chunk_seconds = float(req.mic_chunk_seconds) if req.mic_chunk_seconds is not None else 0.20
+        mic_prepare_seconds = int(req.mic_prepare_seconds) if req.mic_prepare_seconds is not None else 4
+        if req.mic_device is not None:
+            if isinstance(req.mic_device, int):
+                mic_device = int(req.mic_device)
+            else:
+                raw_device = str(req.mic_device).strip()
+                if raw_device and raw_device.lower() != "default":
+                    mic_device = int(raw_device) if raw_device.lstrip("-").isdigit() else raw_device
 
     effective_validate_beam_preflight = bool(req.validate_beam_preflight) and input_mode == "replay"
 
@@ -304,6 +318,9 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         "validate_beam_preflight": effective_validate_beam_preflight,
         "mic_protocol": req.mic_protocol.model_dump() if req.mic_protocol else None,
         "mic_calibration": req.mic_calibration.model_dump() if req.mic_calibration else None,
+        "mic_device": mic_device,
+        "mic_chunk_seconds": mic_chunk_seconds,
+        "mic_prepare_seconds": mic_prepare_seconds,
         "repeat_top_k": repeat_top_k,
         "repeat_runs": repeat_runs,
         "baseline_params": req.baseline_params,
@@ -339,6 +356,9 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         validate_beam_preflight=effective_validate_beam_preflight,
         mic_protocol=req.mic_protocol,
         mic_calibration=req.mic_calibration,
+        mic_device=mic_device,
+        mic_chunk_seconds=mic_chunk_seconds,
+        mic_prepare_seconds=mic_prepare_seconds,
         created_at=_now(),
         total_trials=planned_total_trials,
         completed_trials=0,

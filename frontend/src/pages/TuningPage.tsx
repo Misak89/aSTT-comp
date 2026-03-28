@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import { api } from '../api/client'
 import type {
+  AudioDevice,
   LibraryItem,
   ModelDescriptor,
   TuningDecisionReport,
@@ -319,6 +320,10 @@ export function TuningPage() {
   const [repeatRuns, setRepeatRuns] = useState<number>(cfg.repeatRuns ?? 1)
   const [evaluationMode, setEvaluationMode] = useState<'heuristic' | 'heuristic+llm'>(cfg.evaluationMode ?? 'heuristic')
   const [inputMode, setInputMode] = useState<TuningInputMode>(cfg.inputMode ?? 'replay')
+  const [micDevices, setMicDevices] = useState<AudioDevice[]>([])
+  const [micDeviceId, setMicDeviceId] = useState<string>(cfg.micDeviceId ?? '')
+  const [micChunkSeconds, setMicChunkSeconds] = useState<number>(cfg.micChunkSeconds ?? 0.2)
+  const [micPrepareSeconds, setMicPrepareSeconds] = useState<number>(cfg.micPrepareSeconds ?? 4)
   const [micDistanceCm, setMicDistanceCm] = useState<number>(cfg.micDistanceCm ?? 30)
   const [micPhoneVolumePct, setMicPhoneVolumePct] = useState<number>(cfg.micPhoneVolumePct ?? 70)
   const [micInputGainPct, setMicInputGainPct] = useState<number>(cfg.micInputGainPct ?? 70)
@@ -375,6 +380,12 @@ export function TuningPage() {
   }, [])
 
   useEffect(() => {
+    api.mic.devices()
+      .then(setMicDevices)
+      .catch(() => setMicDevices([]))
+  }, [])
+
+  useEffect(() => {
     const iv = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(iv)
   }, [])
@@ -384,6 +395,7 @@ export function TuningPage() {
     const cfg = {
       selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode,
       inputMode,
+      micDeviceId, micChunkSeconds, micPrepareSeconds,
       micDistanceCm, micPhoneVolumePct, micInputGainPct, micEnvironment, micDeviceNote, micChecklistConfirmed,
       calibrationRmsDbfs, calibrationClippingPct, calibrationNoiseFloorDbfs, calibrationResult, calibrationCheckedAt,
       hardwareProfile, hardwareNote,
@@ -398,7 +410,7 @@ export function TuningPage() {
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
   }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode,
-      inputMode, micDistanceCm, micPhoneVolumePct, micInputGainPct, micEnvironment, micDeviceNote, micChecklistConfirmed,
+      inputMode, micDeviceId, micChunkSeconds, micPrepareSeconds, micDistanceCm, micPhoneVolumePct, micInputGainPct, micEnvironment, micDeviceNote, micChecklistConfirmed,
       calibrationRmsDbfs, calibrationClippingPct, calibrationNoiseFloorDbfs, calibrationResult, calibrationCheckedAt,
       hardwareProfile, hardwareNote,
       constraintsProfile, constraintsCpuCores, constraintsRamLimitMb, constraintsPriority,
@@ -572,6 +584,14 @@ export function TuningPage() {
       const hardwareNotePayload = hardwareNote.trim() ? hardwareNote.trim() : undefined
       const resolvedConstraints = resolveConstraintsTargets()
       const resolvedLoad = resolveLoadTargets()
+      const micDevicePayload = (() => {
+        const raw = micDeviceId.trim()
+        if (!raw || raw.toLowerCase() === 'default') return undefined
+        if (/^-?\d+$/.test(raw)) return Number(raw)
+        return raw
+      })()
+      const micChunkPayload = Math.max(0.05, Math.min(2.0, Number.isFinite(micChunkSeconds) ? micChunkSeconds : 0.2))
+      const micPreparePayload = Math.max(0, Math.min(60, Number.isFinite(micPrepareSeconds) ? Math.floor(micPrepareSeconds) : 4))
       const job = await api.tuning.createJob({
         model_ids: modelIdsForJob,
         input_mode: inputMode,
@@ -613,6 +633,9 @@ export function TuningPage() {
           checked_at: calibrationCheckedAt ?? new Date().toISOString(),
           reasons: calibrationResult?.reasons ?? [],
         } : undefined,
+        mic_device: inputMode === 'real_mic' ? micDevicePayload : undefined,
+        mic_chunk_seconds: inputMode === 'real_mic' ? micChunkPayload : undefined,
+        mic_prepare_seconds: inputMode === 'real_mic' ? micPreparePayload : undefined,
       })
       setJobs(prev => [job, ...prev])
       setSelectedJob(job)
@@ -905,6 +928,44 @@ export function TuningPage() {
                     <option value="quiet">quiet</option>
                     <option value="office_noise">office_noise</option>
                   </select>
+                </div>
+                <div>
+                  <label className="text-gray-600">Mic zařízení</label>
+                  <select
+                    value={micDeviceId}
+                    onChange={e => setMicDeviceId(e.target.value)}
+                    className="border rounded px-2 py-1 w-56 block mt-0.5"
+                  >
+                    <option value="">default</option>
+                    {micDevices.map(d => (
+                      <option key={d.index} value={String(d.index)}>
+                        {d.index}: {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-gray-600">Mic chunk (s)</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min={0.05}
+                    max={2}
+                    value={micChunkSeconds}
+                    onChange={e => setMicChunkSeconds(Math.max(0.05, Math.min(2, +e.target.value || 0.2)))}
+                    className="border rounded px-2 py-1 w-24 block mt-0.5"
+                  />
+                </div>
+                <div>
+                  <label className="text-gray-600">Příprava (s)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={micPrepareSeconds}
+                    onChange={e => setMicPrepareSeconds(Math.max(0, Math.min(60, Math.floor(+e.target.value || 0))))}
+                    className="border rounded px-2 py-1 w-24 block mt-0.5"
+                  />
                 </div>
               </div>
               <div>

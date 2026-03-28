@@ -474,6 +474,9 @@ export interface TuningJobStatus {
   validate_beam_preflight?: boolean
   mic_protocol?: TuningMicProtocol | null
   mic_calibration?: TuningMicCalibration | null
+  mic_device?: number | string | null
+  mic_chunk_seconds?: number | null
+  mic_prepare_seconds?: number | null
   created_at: string
   total_trials: number
   completed_trials: number

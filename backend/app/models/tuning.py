@@ -71,6 +71,9 @@ class TuningJobRequest(BaseModel):
     validate_beam_preflight: bool = True
     mic_protocol: Optional[TuningMicProtocol] = None
     mic_calibration: Optional[TuningMicCalibration] = None
+    mic_device: Optional[int | str] = None
+    mic_chunk_seconds: Optional[float] = Field(default=None, ge=0.05, le=2.0)
+    mic_prepare_seconds: Optional[int] = Field(default=None, ge=0, le=60)
 
 
 class TuningTrialResult(BaseModel):
@@ -178,6 +181,9 @@ class TuningJobStatus(BaseModel):
     validate_beam_preflight: bool = True
     mic_protocol: Optional[TuningMicProtocol] = None
     mic_calibration: Optional[TuningMicCalibration] = None
+    mic_device: Optional[int | str] = None
+    mic_chunk_seconds: Optional[float] = None
+    mic_prepare_seconds: Optional[int] = None
     total_trials: int
     completed_trials: int
     results: list[TuningTrialResult] = Field(default_factory=list)
