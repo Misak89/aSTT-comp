@@ -9,6 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
+
 try:
     from backend.app.services.tuning_service import evaluate_mic_calibration as _evaluate_backend
 except Exception:

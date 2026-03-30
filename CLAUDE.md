@@ -12,7 +12,7 @@ Kriticky změřit a ohodnotit různé STT modely pro **online přepis češtiny*
 - Model musí stíhat přepisovat jak audio přichází (RTF < 1.0 = stíhá, RTF > 1.0 = nestíhá)
 - Tím testujeme skutečnou použitelnost pro live dialog, ne jen offline přesnost
 
-Vstup: YouTube videa s CZ titulky (ground truth)
+Vstup: YouTube videa s `cs` titulky (ground truth)
 Výstup: WER/CER, latence, RTF, HW nároky pro každý model × nastavení × video
 
 ## Tech stack
@@ -20,6 +20,18 @@ Výstup: WER/CER, latence, RTF, HW nároky pro každý model × nastavení × vi
 - **Frontend:** React 18 + Vite + TypeScript + TailwindCSS + TanStack Table + Recharts
 - **Packages:** zkopírovány z aSTT-comparison (benchmarks, adapters, ingest)
 - **Soubory:** bez přísného limitu řádků — každý soubor = jedna zodpovědnost, přehledný na první přečtení
+
+## Jazykové Kódy (Důležité)
+- Čeština se v projektu značí výhradně `cs` (ISO 639-1).
+- Regionální zápis může být `cs-CZ` (jazyk + země).
+
+## Kategorie STT Modelů
+- `whisper_cpp`: whisper.cpp modely (offline, mic režim dostupný dle konkrétního modelu).
+- `faster_whisper`: CTranslate2 streaming modely (streaming + mic).
+- `vosk`: lehké streaming modely (streaming + mic, nízké HW nároky).
+- `sherpa_onnx`: ONNX streaming modely (streaming + mic, jazyk dle bundle).
+- `qwen_asr`: LLM ASR modely (offline/dávkové, bez live mic režimu).
+- `moonshine`: moderní streaming model (aktuálně EN).
 
 ## Adresářová struktura
 ```
@@ -187,7 +199,7 @@ cd C:\Users\adamf\OneDrive\Dokumenty\aSTT-comp
 .venv\Scripts\python -m pytest tests/ -v
 ```
 
-## Testovací videa (6 videí s CZ titulky)
+## Testovací videa (6 videí s `cs` titulky)
 | video_id | Název | Délka |
 |---|---|---|
 | R3BsjbDtWrY | PlayStation VR2 Tech rozhovor | 143s |

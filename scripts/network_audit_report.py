@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
+
 LOG_PATH = ROOT / "runtime" / "network_access" / "network_access_log.jsonl"
 
 

@@ -5,6 +5,7 @@ import { BenchmarkPage } from './pages/BenchmarkPage'
 import { ResultsPage } from './pages/ResultsPage'
 import { ModelsPage } from './pages/ModelsPage'
 import { TuningPage } from './pages/TuningPage'
+import { HWFlowPage } from './pages/HWFlowPage'
 
 export default function App() {
   return (
@@ -17,6 +18,9 @@ export default function App() {
           <Route path="results" element={<ResultsPage />} />
           <Route path="tuning" element={<TuningPage />} />
           <Route path="models" element={<ModelsPage />} />
+          <Route path="hwflow" element={<HWFlowPage />} />
+          <Route path="hw-flow" element={<HWFlowPage />} />
+          <Route path="HWFlow" element={<HWFlowPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

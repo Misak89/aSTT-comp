@@ -654,6 +654,8 @@ def _run_one_video_real_mic(
             chunk_seconds=mic_chunk_s,
             sample_rate=target_sample_rate,
             device=mic_device,
+            reconnect_attempts=2,
+            reconnect_delay_s=1.0,
         ):
             sample_rate = int(sr) if isinstance(sr, int) else target_sample_rate
             remaining = target_samples - total_samples
@@ -684,6 +686,17 @@ def _run_one_video_real_mic(
                 "rtf": round(chunk_processing_s / max(0.001, chunk_audio_s), 4),
                 "total_elapsed_s": round(elapsed_s, 4),
                 "words": len(partial_text.split()) if partial_text else 0,
+                "dropped_by_backpressure": bool(partial.get("dropped_by_backpressure")),
+                "processing_debt_ms": (
+                    round(float(partial.get("processing_debt_ms")), 1)
+                    if isinstance(partial.get("processing_debt_ms"), (int, float))
+                    else None
+                ),
+                "queue_depth_peak_ms": (
+                    round(float(partial.get("queue_depth_peak_ms")), 1)
+                    if isinstance(partial.get("queue_depth_peak_ms"), (int, float))
+                    else None
+                ),
             })
 
             if partial.get("error"):
@@ -820,9 +833,49 @@ def _run_one_video_real_mic(
             if isinstance(final.get("segment_finalize_ms_p95"), (int, float))
             else None
         ),
+        "processing_ms_p50": (
+            round(float(final.get("processing_ms_p50")), 1)
+            if isinstance(final.get("processing_ms_p50"), (int, float))
+            else None
+        ),
+        "processing_ms_p95": (
+            round(float(final.get("processing_ms_p95")), 1)
+            if isinstance(final.get("processing_ms_p95"), (int, float))
+            else None
+        ),
+        "capture_jitter_ms_p50": (
+            round(float(final.get("capture_jitter_ms_p50")), 1)
+            if isinstance(final.get("capture_jitter_ms_p50"), (int, float))
+            else None
+        ),
+        "capture_jitter_ms_p95": (
+            round(float(final.get("capture_jitter_ms_p95")), 1)
+            if isinstance(final.get("capture_jitter_ms_p95"), (int, float))
+            else None
+        ),
+        "capture_lag_ms_p50": (
+            round(float(final.get("capture_lag_ms_p50")), 1)
+            if isinstance(final.get("capture_lag_ms_p50"), (int, float))
+            else None
+        ),
+        "capture_lag_ms_p95": (
+            round(float(final.get("capture_lag_ms_p95")), 1)
+            if isinstance(final.get("capture_lag_ms_p95"), (int, float))
+            else None
+        ),
         "drop_rate": (
             round(float(final.get("drop_rate")), 4)
             if isinstance(final.get("drop_rate"), (int, float))
+            else None
+        ),
+        "backpressure_events": (
+            int(final.get("backpressure_events"))
+            if isinstance(final.get("backpressure_events"), int)
+            else None
+        ),
+        "queue_depth_peak_s": (
+            round(float(final.get("queue_depth_peak_s")), 3)
+            if isinstance(final.get("queue_depth_peak_s"), (int, float))
             else None
         ),
         "session_resets": (

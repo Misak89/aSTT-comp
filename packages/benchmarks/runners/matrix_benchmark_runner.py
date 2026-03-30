@@ -15,6 +15,11 @@ from packages.benchmarks.ground_truth.vtt_reference import extract_vtt_clip_text
 from packages.benchmarks.metrics.text_metrics import char_error_rate, word_error_rate
 from packages.benchmarks.runners.host_telemetry import HostTelemetryRecorder
 from packages.adapters.qwen_asr_runner import QwenRunConfig, run_qwen_source
+from packages.adapters.faster_whisper_runner import (
+    FasterWhisperRunConfig,
+    resolve_faster_whisper_model_path,
+    run_faster_whisper_source,
+)
 from packages.adapters.sherpa_onnx_runner import (
     SherpaRunConfig,
     resolve_sherpa_model_bundle,
@@ -101,6 +106,15 @@ DEFAULT_MODELS: dict[str, ModelPreset] = {
         diarization_factor=0.66,
         cpu_factor=0.85,
     ),
+    "sherpa_onnx_parakeet_cs_int8": ModelPreset(
+        model_id="sherpa_onnx_parakeet_cs_int8",
+        label="sherpa-onnx Parakeet 0.6B int8 (CZ)",
+        quality_factor=0.90,
+        speed_factor=0.78,
+        memory_factor=1.35,
+        diarization_factor=0.80,
+        cpu_factor=1.10,
+    ),
     "vosk_small_cs_0_4": ModelPreset(
         model_id="vosk_small_cs_0_4",
         label="VOSK small cs-0.4",
@@ -109,6 +123,24 @@ DEFAULT_MODELS: dict[str, ModelPreset] = {
         memory_factor=0.48,
         diarization_factor=0.61,
         cpu_factor=0.68,
+    ),
+    "faster_whisper_small_cs_int8": ModelPreset(
+        model_id="faster_whisper_small_cs_int8",
+        label="faster-whisper small (CZ int8)",
+        quality_factor=0.87,
+        speed_factor=1.05,
+        memory_factor=1.00,
+        diarization_factor=0.76,
+        cpu_factor=0.95,
+    ),
+    "faster_whisper_medium_cs_int8": ModelPreset(
+        model_id="faster_whisper_medium_cs_int8",
+        label="faster-whisper medium (CZ int8)",
+        quality_factor=0.92,
+        speed_factor=0.82,
+        memory_factor=1.35,
+        diarization_factor=0.79,
+        cpu_factor=1.15,
     ),
     "qwen3_asr_0_6b": ModelPreset(
         model_id="qwen3_asr_0_6b",
@@ -530,7 +562,7 @@ def run_real_source_once(
 
 
 def default_model_ids() -> list[str]:
-    return ["whisper_cpp_base", "whisper_cpp_small", "sherpa_onnx_small"]
+    return ["whisper_cpp_base", "whisper_cpp_small", "sherpa_onnx_small", "vosk_small_cs_0_4"]
 
 
 def default_setting_ids() -> list[str]:
@@ -1176,13 +1208,15 @@ def _run_real_matrix(
         "whisper_cpp_large_v3",
         "sherpa_onnx_small",
         "vosk_small_cs_0_4",
+        "faster_whisper_small_cs_int8",
+        "faster_whisper_medium_cs_int8",
         "qwen3_asr_0_6b",
         "qwen3_asr_1_7b",
     }
     unsupported = [model.model_id for model in selected_models if model.model_id not in supported_models]
     if unsupported:
         raise ValueError(
-            "real mode supports whisper_cpp_{base,small,large_v3}, sherpa_onnx_small, vosk_small_cs_0_4 and qwen3_asr_{0_6b,1_7b}. Unsupported: "
+            "real mode supports whisper_cpp_{base,small,large_v3}, sherpa_onnx_small, faster_whisper_{small,medium}_cs_int8, vosk_small_cs_0_4 and qwen3_asr_{0_6b,1_7b}. Unsupported: "
             + ", ".join(unsupported)
         )
 
@@ -1200,8 +1234,6 @@ def _run_real_matrix(
 
     combos: list[dict[str, object]] = []
     whisper_bin = resolve_whisper_cli(model_store_root)
-    sherpa_bundle = resolve_sherpa_model_bundle(model_store_root)
-
     for model in selected_models:
         whisper_model_path = _resolve_whisper_model_path(model_store_root, model.model_id)
         if whisper_model_path is not None:
@@ -1210,7 +1242,13 @@ def _run_real_matrix(
             if not whisper_model_path.exists():
                 raise ValueError(f"whisper model file not found: {whisper_model_path}")
 
-        if model.model_id == "sherpa_onnx_small":
+        sherpa_bundle = None
+        if model.model_id in {"sherpa_onnx_small", "sherpa_onnx_parakeet_cs_int8"}:
+            preferred_language = "cs" if model.model_id == "sherpa_onnx_parakeet_cs_int8" else None
+            sherpa_bundle = resolve_sherpa_model_bundle(
+                model_store_root,
+                preferred_language=preferred_language,
+            )
             if sherpa_bundle is None:
                 raise ValueError(
                     "No sherpa-onnx transducer bundle found. Expected tokens+encoder+decoder+joiner .onnx files "
@@ -1227,6 +1265,14 @@ def _run_real_matrix(
             )
         if vosk_model_path is not None and not vosk_model_path.exists():
             raise ValueError(f"VOSK model directory not found: {vosk_model_path}")
+        faster_model_path = _resolve_faster_whisper_model_path(model_store_root, model.model_id)
+        if model.model_id in {"faster_whisper_small_cs_int8", "faster_whisper_medium_cs_int8"} and faster_model_path is None:
+            raise ValueError(
+                f"faster-whisper CTranslate2 model missing for {model.model_id}. "
+                f"Expected runtime/model_store/{model.model_id}/model.bin"
+            )
+        if faster_model_path is not None and not faster_model_path.exists():
+            raise ValueError(f"faster-whisper model directory not found: {faster_model_path}")
 
         for setting in selected_settings:
             source_metrics: list[dict[str, object]] = []
@@ -1250,7 +1296,7 @@ def _run_real_matrix(
                             output_dir=source_out,
                             config=whisper_cfg,
                         )
-                    elif model.model_id == "sherpa_onnx_small":
+                    elif model.model_id in {"sherpa_onnx_small", "sherpa_onnx_parakeet_cs_int8"}:
                         if sherpa_bundle is None:
                             raise ValueError("Sherpa bundle unexpectedly missing after validation.")
                         sherpa_cfg = _setting_to_sherpa_config(
@@ -1267,6 +1313,22 @@ def _run_real_matrix(
                             start_offset_seconds=selection.clip_start_seconds,
                             output_dir=source_out,
                             config=sherpa_cfg,
+                        )
+                    elif model.model_id in {"faster_whisper_small_cs_int8", "faster_whisper_medium_cs_int8"}:
+                        if faster_model_path is None:
+                            raise ValueError("faster-whisper model unexpectedly missing after validation.")
+                        faster_cfg = _setting_to_faster_whisper_config(
+                            setting_id=setting.setting_id,
+                            model_id=model.model_id,
+                            model_path=str(faster_model_path),
+                        )
+                        runtime_cfg_snapshot = asdict(faster_cfg)
+                        metrics = run_faster_whisper_source(
+                            source=source,
+                            sample_seconds=sample_seconds,
+                            start_offset_seconds=selection.clip_start_seconds,
+                            output_dir=source_out,
+                            config=faster_cfg,
                         )
                     elif model.model_id in {"qwen3_asr_0_6b", "qwen3_asr_1_7b"}:
                         qwen_cfg = _setting_to_qwen_config(
@@ -1456,6 +1518,12 @@ def _resolve_vosk_model_path(model_store_root: Path, model_id: str) -> Path | No
     return resolve_vosk_model_dir(model_store_root)
 
 
+def _resolve_faster_whisper_model_path(model_store_root: Path, model_id: str) -> Path | None:
+    if not model_id.startswith("faster_whisper_"):
+        return None
+    return resolve_faster_whisper_model_path(model_store_root, model_id)
+
+
 def _setting_to_qwen_config(*, setting_id: str, model_id: str, model_path: str) -> QwenRunConfig:
     if setting_id == "low_latency":
         return QwenRunConfig(
@@ -1502,6 +1570,53 @@ def _setting_to_vosk_config(*, setting_id: str, model_path: str) -> VoskRunConfi
     if setting_id == "memory_saver":
         return VoskRunConfig(model_dir=model_path, sample_rate=16000, chunk_seconds=0.20, set_words=False)
     return VoskRunConfig(model_dir=model_path, sample_rate=16000, chunk_seconds=0.20, set_words=False)
+
+
+def _setting_to_faster_whisper_config(*, setting_id: str, model_id: str, model_path: str) -> FasterWhisperRunConfig:
+    cpu_total = max(1, os_cpu_count() or 4)
+    is_medium = "medium" in model_id
+    low_threads = max(1, min(cpu_total, 4 if is_medium else 6))
+    bal_threads = max(1, min(cpu_total, 5 if is_medium else 6))
+    acc_threads = max(1, min(cpu_total, 6 if is_medium else 8))
+    if setting_id == "low_latency":
+        return FasterWhisperRunConfig(
+            model_path=model_path,
+            language="cs",
+            threads=low_threads,
+            beam_size=1,
+            best_of=1,
+            device="cpu",
+            compute_type="int8",
+        )
+    if setting_id == "high_accuracy":
+        return FasterWhisperRunConfig(
+            model_path=model_path,
+            language="cs",
+            threads=acc_threads,
+            beam_size=3,
+            best_of=3,
+            device="cpu",
+            compute_type="int8",
+        )
+    if setting_id == "memory_saver":
+        return FasterWhisperRunConfig(
+            model_path=model_path,
+            language="cs",
+            threads=max(1, min(cpu_total, 3 if is_medium else 4)),
+            beam_size=1,
+            best_of=1,
+            device="cpu",
+            compute_type="int8",
+        )
+    return FasterWhisperRunConfig(
+        model_path=model_path,
+        language="cs",
+        threads=bal_threads,
+        beam_size=2,
+        best_of=2,
+        device="cpu",
+        compute_type="int8",
+    )
 
 
 def _apply_reference_scoring(

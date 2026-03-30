@@ -57,6 +57,14 @@ def list_items() -> list[LibraryItem]:
     for r in raw:
         video_id = r.get("video_id", "")
         subtitle_files = _list_subtitle_files(video_id)
+        subtitle_manual = [str(x) for x in (r.get("subtitle_manual") or []) if str(x).strip()]
+        subtitle_auto = [str(x) for x in (r.get("subtitle_auto") or []) if str(x).strip()]
+        subtitle_languages = [str(x) for x in (r.get("subtitle_languages") or []) if str(x).strip()]
+        if not subtitle_languages:
+            subtitle_languages = _infer_subtitle_languages_from_files(
+                subtitle_files,
+                fallback_language=r.get("language"),
+            )
         result.append(LibraryItem(
             video_id=video_id,
             title=r.get("title", ""),
@@ -64,13 +72,111 @@ def list_items() -> list[LibraryItem]:
             duration_seconds=r.get("duration_seconds"),
             language=r.get("language", "cs"),
             genre=r.get("genre"),
+            visible_in_menus=bool(r.get("visible_in_menus", True)),
             subtitles_local=bool(subtitle_files),
             subtitle_files=subtitle_files,
+            subtitle_manual=subtitle_manual,
+            subtitle_auto=subtitle_auto,
+            subtitle_languages=subtitle_languages,
             added_at=r.get("added_at"),
             upload_date=r.get("upload_date"),
+            view_count=r.get("view_count"),
+            metadata_fetched_at=r.get("metadata_fetched_at"),
             audio_cached=(AUDIO_CACHE_ROOT / f"{video_id}.wav").exists(),
         ))
     return result
+
+
+def _infer_subtitle_languages_from_files(
+    subtitle_files: list[SubtitleFile],
+    fallback_language: str | None = None,
+) -> list[str]:
+    """Odhadne jazyky titulků z názvů lokálních souborů."""
+    langs: set[str] = set()
+    stop_tokens = {"na", "md", "txt", "vtt", "srt", "orig", "edit"}
+    for f in subtitle_files:
+        name = f.filename.lower()
+        # Hledej tokeny typu ".cs.", "_en_", "-de-" apod.
+        for token in re.findall(r"(?:^|[._-])([a-z]{2})(?:$|[._-])", name):
+            if token in stop_tokens:
+                continue
+            langs.add(token)
+    if not langs and fallback_language:
+        lang = str(fallback_language).strip().lower()
+        if len(lang) >= 2:
+            langs.add(lang[:2])
+    return sorted(langs)
+
+
+def _normalize_upload_date(raw_date: str | None) -> Optional[str]:
+    if not raw_date:
+        return None
+    value = str(raw_date).strip()
+    if len(value) == 8 and value.isdigit():
+        return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    if len(value) >= 10:
+        return value[:10]
+    return None
+
+
+def _normalize_language(raw_language: str | None) -> Optional[str]:
+    if not raw_language:
+        return None
+    value = str(raw_language).strip().lower()
+    if not value:
+        return None
+    # yt-dlp může vracet varianty typu "cs-CZ"; držíme krátký kód.
+    return value.split("-")[0]
+
+
+def _fetch_video_metadata(video_id: str, url: str) -> dict:
+    """Načte metadata videa synchronně a vrátí pole pro items.json."""
+    ensure_online_allowed(
+        component="backend.app.services.library_service",
+        action="_fetch_video_metadata",
+        reason="potřebuje načíst metadata videa (délka/jazyk/titulky/žánr/datum/význam zhlédnutí)",
+        target=url,
+        details={"video_id": video_id},
+    )
+    import yt_dlp as _yt
+
+    with _yt.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    manual_subs = sorted((info.get("subtitles") or {}).keys())
+    auto_subs = sorted((info.get("automatic_captions") or {}).keys())
+    subtitle_langs = sorted(set(manual_subs) | set(auto_subs))
+
+    duration_raw = info.get("duration")
+    view_count_raw = info.get("view_count")
+    categories = info.get("categories") or []
+
+    metadata: dict = {
+        "subtitle_manual": manual_subs,
+        "subtitle_auto": auto_subs,
+        "subtitle_languages": subtitle_langs,
+        "metadata_fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if isinstance(duration_raw, (int, float)):
+        metadata["duration_seconds"] = round(float(duration_raw), 1)
+
+    lang = _normalize_language(info.get("language"))
+    if lang:
+        metadata["language"] = lang
+
+    upload_date = _normalize_upload_date(info.get("upload_date"))
+    if upload_date:
+        metadata["upload_date"] = upload_date
+
+    if isinstance(view_count_raw, int):
+        metadata["view_count"] = int(view_count_raw)
+
+    if categories:
+        # Primárně první kategorie, aby genre zůstalo krátké a stabilní.
+        metadata["genre"] = str(categories[0]).strip()
+
+    return metadata
 
 
 def _fetch_and_save_upload_date(video_id: str, url: str) -> None:
@@ -235,42 +341,51 @@ def _download_and_cache_audio(video_id: str, url: str) -> None:
 
 
 def upsert_item(req: UpsertLibraryItemRequest) -> LibraryItem:
+    metadata_fields: dict = {}
+    try:
+        metadata_fields = _fetch_video_metadata(req.video_id, req.url)
+    except Exception:
+        # Metadata fetch nesmí blokovat vložení položky do knihovny.
+        metadata_fields = {
+            "metadata_fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     with _ITEMS_LOCK:
         raw = _load_raw()
         existing = {r["video_id"]: r for r in raw}
         is_new = req.video_id not in existing
+        prev = existing.get(req.video_id, {})
+        merged = {
+            "video_id": req.video_id,
+            "title": req.title,
+            "url": req.url,
+            "duration_seconds": metadata_fields.get(
+                "duration_seconds",
+                req.duration_seconds if req.duration_seconds is not None else prev.get("duration_seconds"),
+            ),
+            "language": metadata_fields.get("language", req.language or prev.get("language", "cs")),
+            "genre": metadata_fields.get(
+                "genre",
+                req.genre if req.genre is not None else prev.get("genre"),
+            ),
+            "visible_in_menus": (
+                req.visible_in_menus
+                if req.visible_in_menus is not None
+                else bool(prev.get("visible_in_menus", True))
+            ),
+            "upload_date": metadata_fields.get("upload_date", prev.get("upload_date")),
+            "view_count": metadata_fields.get("view_count", prev.get("view_count")),
+            "subtitle_manual": metadata_fields.get("subtitle_manual", prev.get("subtitle_manual", [])),
+            "subtitle_auto": metadata_fields.get("subtitle_auto", prev.get("subtitle_auto", [])),
+            "subtitle_languages": metadata_fields.get("subtitle_languages", prev.get("subtitle_languages", [])),
+            "metadata_fetched_at": metadata_fields.get("metadata_fetched_at", prev.get("metadata_fetched_at")),
+            "added_at": prev.get("added_at") or datetime.now(timezone.utc).isoformat(),
+        }
         if not is_new:
-            existing[req.video_id].update({
-                "title": req.title,
-                "url": req.url,
-                "duration_seconds": req.duration_seconds,
-                "language": req.language,
-                "genre": req.genre,
-            })
+            existing[req.video_id].update(merged)
         else:
-            existing[req.video_id] = {
-                "video_id": req.video_id,
-                "title": req.title,
-                "url": req.url,
-                "duration_seconds": req.duration_seconds,
-                "language": req.language,
-                "genre": req.genre,
-                "added_at": datetime.now(timezone.utc).isoformat(),
-            }
+            existing[req.video_id] = merged
         _save_raw(list(existing.values()))
-
-    # Background: detekce jazyka + datum vydání pro nová videa
-    if is_new:
-        threading.Thread(
-            target=_detect_and_save_language,
-            args=(req.video_id, req.url),
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=_fetch_and_save_upload_date,
-            args=(req.video_id, req.url),
-            daemon=True,
-        ).start()
 
     # Background: stažení audio cache (pro nová i existující videa bez audio)
     if not (AUDIO_CACHE_ROOT / f"{req.video_id}.wav").exists():
@@ -283,6 +398,26 @@ def upsert_item(req: UpsertLibraryItemRequest) -> LibraryItem:
     return list_items()[list(existing.keys()).index(req.video_id)]
 
 
+def set_item_visibility(video_id: str, visible_in_menus: bool) -> LibraryItem:
+    with _ITEMS_LOCK:
+        raw = _load_raw()
+        idx = None
+        for i, row in enumerate(raw):
+            if row.get("video_id") == video_id:
+                idx = i
+                break
+        if idx is None:
+            raise KeyError(video_id)
+        raw[idx]["visible_in_menus"] = bool(visible_in_menus)
+        _save_raw(raw)
+
+    items = list_items()
+    for item in items:
+        if item.video_id == video_id:
+            return item
+    raise KeyError(video_id)
+
+
 def download_subtitles(video_id: str, url: str) -> dict:
     out_dir = SUBTITLES_ROOT / video_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,7 +425,7 @@ def download_subtitles(video_id: str, url: str) -> dict:
         ensure_online_allowed(
             component="backend.app.services.library_service",
             action="download_subtitles",
-            reason="stažení titulků přes yt-dlp",
+            reason="stažení titulků všech dostupných jazyků přes yt-dlp",
             target=url,
             details={"video_id": video_id},
         )
@@ -298,8 +433,8 @@ def download_subtitles(video_id: str, url: str) -> dict:
             [
                 sys.executable, "-m", "yt_dlp",
                 "--write-sub", "--write-auto-sub",
-                "--sub-lang", "cs",
-                "--sub-format", "vtt",
+                "--sub-langs", "all,-live_chat",
+                "--sub-format", "vtt/best",
                 "--skip-download",
                 "--output", str(out_dir / "%(id)s.%(ext)s"),
                 url,
@@ -307,7 +442,25 @@ def download_subtitles(video_id: str, url: str) -> dict:
             capture_output=True, text=True, timeout=120,
         )
         files = _list_subtitle_files(video_id)
-        return {"ok": True, "files": [f.model_dump() for f in files], "stderr": result.stderr[-500:]}
+        stderr_tail = (result.stderr or "")[-1200:]
+        stdout_tail = (result.stdout or "")[-500:]
+
+        # yt-dlp může vrátit non-zero i při částečném stažení.
+        # Pokud nevznikl žádný soubor, považujeme to za fail.
+        if result.returncode != 0 and not files:
+            err = stderr_tail.strip() or stdout_tail.strip() or "yt-dlp failed"
+            return {
+                "ok": False,
+                "error": err,
+                "returncode": result.returncode,
+            }
+
+        return {
+            "ok": True,
+            "files": [f.model_dump() for f in files],
+            "stderr": stderr_tail,
+            "returncode": result.returncode,
+        }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

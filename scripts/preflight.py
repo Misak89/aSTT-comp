@@ -5,12 +5,17 @@ Spusť před každým benchmarkem — pokud selže, výsledky mohou být nespole
 """
 from __future__ import annotations
 import argparse
+from pathlib import Path
 import sys
 import time
 
-# Ensure UTF-8 output on Windows
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
 
 # psutil je optional — graceful degradace
 try:

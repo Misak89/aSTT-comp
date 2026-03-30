@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { api } from '../api/client'
 import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor, RunDetail } from '../types'
 import { videoLabel } from '../utils'
@@ -9,6 +9,25 @@ import { ModelParamsForm } from '../components/ModelParamsForm'
 
 type Tab = 'benchmark' | 'mic'
 type EvalMode = 'synthetic' | 'streaming' | 'real'
+type VideoSortKey = 'language' | 'duration' | 'title' | 'upload_date' | 'genre' | 'view_count'
+
+const VIDEO_SORT_LABELS: Array<{ key: VideoSortKey; label: string }> = [
+  { key: 'language', label: 'Jazyk' },
+  { key: 'duration', label: 'Délka' },
+  { key: 'title', label: 'Název' },
+  { key: 'upload_date', label: 'Datum' },
+  { key: 'genre', label: 'Žánr' },
+  { key: 'view_count', label: 'Zhlédnutí' },
+]
+
+const VIDEO_SORT_DEFAULT_DIR: Record<VideoSortKey, 'asc' | 'desc'> = {
+  language: 'asc',
+  duration: 'asc',
+  title: 'asc',
+  upload_date: 'desc',
+  genre: 'asc',
+  view_count: 'desc',
+}
 
 export function BenchmarkPage() {
   const [tab, setTab] = useState<Tab>('benchmark')
@@ -18,6 +37,10 @@ export function BenchmarkPage() {
   const [selectedVideos, setSelectedVideos] = useState<string[]>([])
   const [selectedModels, setSelectedModels] = useState<string[]>(['whisper_cpp_small'])
   const [selectedSettings, setSelectedSettings] = useState<string[]>(['balanced'])
+  const [videoSortOrder, setVideoSortOrder] = useState<VideoSortKey[]>(['language', 'duration', 'title'])
+  const [videoSortDirMap, setVideoSortDirMap] = useState<Record<VideoSortKey, 'asc' | 'desc'>>(
+    () => ({ ...VIDEO_SORT_DEFAULT_DIR }),
+  )
   const [clipSeconds, setClipSeconds] = useState(120)
   const [clipSeed, setClipSeed] = useState<number | ''>('')
   const [label, setLabel] = useState('')
@@ -28,6 +51,50 @@ export function BenchmarkPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const micModels = registry.filter(m => m.supports_microphone)
+  const visibleLibrary = useMemo(
+    () => library.filter(item => item.visible_in_menus !== false),
+    [library],
+  )
+
+  const sortedLibrary = useMemo(() => {
+    const rows = [...visibleLibrary]
+    rows.sort((a, b) => {
+      const activeOrder: VideoSortKey[] = videoSortOrder.length > 0 ? videoSortOrder : ['language', 'duration', 'title']
+      for (const key of activeOrder) {
+        let cmp = 0
+        if (key === 'language') {
+          const aIsCz = isCzechLanguage(a.language)
+          const bIsCz = isCzechLanguage(b.language)
+          if (aIsCz !== bIsCz) cmp = aIsCz ? -1 : 1
+          else cmp = (a.language || '').localeCompare(b.language || '', 'cs')
+        } else if (key === 'duration') {
+          const aDur = typeof a.duration_seconds === 'number' ? a.duration_seconds : Number.POSITIVE_INFINITY
+          const bDur = typeof b.duration_seconds === 'number' ? b.duration_seconds : Number.POSITIVE_INFINITY
+          cmp = aDur === bDur ? 0 : (aDur < bDur ? -1 : 1)
+        } else if (key === 'title') {
+          cmp = (a.title || '').localeCompare(b.title || '', 'cs')
+        } else if (key === 'upload_date') {
+          const aDate = a.upload_date ?? a.added_at ?? ''
+          const bDate = b.upload_date ?? b.added_at ?? ''
+          cmp = aDate < bDate ? -1 : aDate > bDate ? 1 : 0
+        } else if (key === 'genre') {
+          cmp = (a.genre || '').localeCompare(b.genre || '', 'cs')
+        } else if (key === 'view_count') {
+          const aViews = a.view_count ?? -1
+          const bViews = b.view_count ?? -1
+          cmp = aViews === bViews ? 0 : (aViews < bViews ? -1 : 1)
+        }
+        if (cmp !== 0) return videoSortDirMap[key] === 'asc' ? cmp : -cmp
+      }
+      return 0
+    })
+    return rows
+  }, [visibleLibrary, videoSortOrder, videoSortDirMap])
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleLibrary.map(v => v.video_id))
+    setSelectedVideos(prev => prev.filter(id => visibleIds.has(id)))
+  }, [visibleLibrary])
 
   useEffect(() => {
     Promise.all([api.benchmark.options(), api.library.list(), api.models.registry()])
@@ -55,8 +122,23 @@ export function BenchmarkPage() {
     return arr.includes(item) ? arr.filter(x => x !== item) : [...arr, item]
   }
 
+  function toggleVideoSortPriority(key: VideoSortKey) {
+    setVideoSortOrder(prev => (
+      prev.includes(key)
+        ? prev.filter(k => k !== key)
+        : [...prev, key]
+    ))
+  }
+
+  function toggleVideoSortDir(key: VideoSortKey) {
+    setVideoSortDirMap(prev => ({ ...prev, [key]: prev[key] === 'asc' ? 'desc' : 'asc' }))
+  }
+
   async function startBenchmark() {
-    if (!selectedVideos.length) { setMsg('Vyber alespoň jedno video.'); return }
+    if (!selectedVideos.length) {
+      setMsg('Benchmark potřebuje alespoň jedno video. Pokud chceš jen live mikrofon bez videa, použij záložku „Mikrofon“.')
+      return
+    }
     if (!selectedModels.length) { setMsg('Vyber alespoň jeden model.'); return }
     setMsg('')
     try {
@@ -85,13 +167,13 @@ export function BenchmarkPage() {
         <h1 className="text-xl font-bold">Benchmark</h1>
         <div className="flex gap-1 bg-gray-100 rounded p-1 text-sm">
           <button
-            onClick={() => setTab('benchmark')}
+            onClick={() => { setTab('benchmark'); setMsg('') }}
             className={`px-3 py-1 rounded ${tab === 'benchmark' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
             Benchmark
           </button>
           <button
-            onClick={() => setTab('mic')}
+            onClick={() => { setTab('mic'); setMsg('') }}
             className={`px-3 py-1 rounded ${tab === 'mic' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
             Mikrofon
@@ -101,7 +183,7 @@ export function BenchmarkPage() {
 
       {tab === 'mic' && (
         micModels.length > 0
-          ? <MicSession availableModels={micModels} />
+          ? <MicSession availableModels={micModels} library={visibleLibrary} />
           : <p className="text-sm text-gray-500">Žádný model nepodporuje mikrofon.</p>
       )}
 
@@ -109,8 +191,31 @@ export function BenchmarkPage() {
         {/* Výběr videí */}
         <div className="bg-white rounded border border-gray-200 p-4">
           <h2 className="font-semibold text-sm mb-3 text-gray-700">Videa</h2>
+          <div className="mb-2 flex flex-wrap gap-1 text-xs">
+            {VIDEO_SORT_LABELS.map(({ key, label }) => {
+              const idx = videoSortOrder.indexOf(key)
+              const active = idx >= 0
+              return (
+                <label key={key} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${active ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600'}`}>
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={() => toggleVideoSortPriority(key)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleVideoSortDir(key)}
+                    className="hover:underline"
+                    title={`Směr řazení: ${label}`}
+                  >
+                    {label}{active ? ` ${idx + 1}.${videoSortDirMap[key] === 'asc' ? '▲' : '▼'}` : ''}
+                  </button>
+                </label>
+              )
+            })}
+          </div>
           <div className="space-y-1 max-h-64 overflow-y-auto">
-            {library.map(item => (
+            {sortedLibrary.map(item => (
               <label key={item.video_id} className="flex items-center gap-2 text-sm cursor-pointer">
                 <input type="checkbox" checked={selectedVideos.includes(item.video_id)}
                   onChange={() => setSelectedVideos(v => toggleItem(v, item.video_id))} />
@@ -119,9 +224,12 @@ export function BenchmarkPage() {
                   {videoLabel(item.title, item.video_id)}
                   {!item.subtitles_local && <span className="text-orange-400 ml-1 text-xs">(bez titulků)</span>}
                 </span>
+                <span className="ml-auto text-[11px] text-gray-500 tabular-nums">
+                  {formatDurationSeconds(item.duration_seconds)}
+                </span>
               </label>
             ))}
-            {library.length === 0 && <span className="text-gray-400 text-xs">Knihovna prázdná.</span>}
+            {sortedLibrary.length === 0 && <span className="text-gray-400 text-xs">Knihovna prázdná.</span>}
           </div>
         </div>
 
@@ -306,6 +414,21 @@ function formatJobDate(iso: string | null | undefined): string {
     day: '2-digit', month: '2-digit', year: '2-digit',
     hour: '2-digit', minute: '2-digit',
   })
+}
+
+function isCzechLanguage(language: string | null | undefined): boolean {
+  const l = String(language || '').trim().toLowerCase()
+  return l === 'cs' || l.startsWith('cs-')
+}
+
+function formatDurationSeconds(seconds: number | null | undefined): string {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return '—'
+  const total = Math.floor(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
 }
 
 function BestModelBadge({ runId }: { runId: string }) {

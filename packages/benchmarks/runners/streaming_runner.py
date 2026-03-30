@@ -5,6 +5,7 @@ Podporované adaptery (streaming):
   vosk       → create_vosk_live_session / transcribe_vosk_live_chunk / finalize_vosk_live_session
   sherpa_onnx → create_sherpa_live_session / transcribe_sherpa_live_chunk / finalize_sherpa_live_session
   moonshine  → create_moonshine_live_session / transcribe_moonshine_live_chunk / finalize_moonshine_live_session
+  faster_whisper → create_faster_whisper_live_session / transcribe_faster_whisper_live_chunk / finalize_faster_whisper_live_session
   whisper_cpp → bufferuje do temp WAV, pak spustí whisper-cli (nepodporuje streaming nativně)
   qwen_asr   → bufferuje do temp WAV, pak spustí Qwen model
 
@@ -63,7 +64,7 @@ def run_streaming_benchmark(
     out_dir = Path(config.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if adapter in ("vosk", "sherpa_onnx", "moonshine"):
+    if adapter in ("vosk", "sherpa_onnx", "moonshine", "faster_whisper"):
         if audio_generator is None:
             raise ValueError(f"audio_generator je povinný pro live-session adapter '{adapter}'")
         return _run_live_session(
@@ -538,7 +539,8 @@ def _build_live_session_components(*, adapter: str, config: StreamingRunConfig):
             SherpaRunConfig, resolve_sherpa_model_bundle,
             create_sherpa_live_session, transcribe_sherpa_live_chunk, finalize_sherpa_live_session,
         )
-        bundle = resolve_sherpa_model_bundle(model_store)
+        preferred_language = "cs" if config.model_id == "sherpa_onnx_parakeet_cs_int8" else None
+        bundle = resolve_sherpa_model_bundle(model_store, preferred_language=preferred_language)
         if not bundle:
             raise RuntimeError("Sherpa model bundle nenalezen v model_store")
         run_config = SherpaRunConfig(
@@ -568,6 +570,36 @@ def _build_live_session_components(*, adapter: str, config: StreamingRunConfig):
         )
         return create_moonshine_live_session, transcribe_moonshine_live_chunk, finalize_moonshine_live_session, run_config
 
+    elif adapter == "faster_whisper":
+        from packages.adapters.faster_whisper_runner import (
+            FasterWhisperRunConfig,
+            create_faster_whisper_live_session,
+            transcribe_faster_whisper_live_chunk,
+            finalize_faster_whisper_live_session,
+            resolve_faster_whisper_model_path,
+        )
+        model_path = resolve_faster_whisper_model_path(model_store, config.model_id)
+        if model_path is None:
+            raise RuntimeError(
+                f"faster-whisper model bundle nenalezen pro {config.model_id}. "
+                f"Očekáván CTranslate2 model pod runtime/model_store/{config.model_id}/model.bin"
+            )
+        run_config = FasterWhisperRunConfig(
+            model_path=str(model_path),
+            language=str(params.get("language", "cs")),
+            threads=int(params.get("threads", 4)),
+            beam_size=int(params.get("beam_size", 1)),
+            best_of=int(params.get("best_of", 1)),
+            device=str(params.get("device", "cpu")),
+            compute_type=str(params.get("compute_type", "int8")),
+        )
+        return (
+            create_faster_whisper_live_session,
+            transcribe_faster_whisper_live_chunk,
+            finalize_faster_whisper_live_session,
+            run_config,
+        )
+
     raise ValueError(f"Nepodporovaný live session adapter: {adapter}")
 
 
@@ -587,6 +619,8 @@ def _get_adapter_key(model_id: str) -> str:
         return "qwen_asr"
     if model_id.startswith("moonshine"):
         return "moonshine"
+    if model_id.startswith("faster_whisper"):
+        return "faster_whisper"
     raise ValueError(f"Nelze určit adapter pro model_id='{model_id}'")
 
 

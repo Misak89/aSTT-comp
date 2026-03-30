@@ -39,10 +39,16 @@ export interface LibraryItem {
   duration_seconds: number | null
   language: string
   genre: string | null
+  visible_in_menus: boolean
   subtitles_local: boolean
   subtitle_files: SubtitleFile[]
+  subtitle_manual: string[]
+  subtitle_auto: string[]
+  subtitle_languages: string[]
   added_at: string | null
   upload_date: string | null
+  view_count: number | null
+  metadata_fetched_at: string | null
   audio_cached: boolean
   latest_results?: LatestResult[]
 }
@@ -91,15 +97,32 @@ export interface MicSessionState {
   status: 'idle' | 'recording' | 'stopped'
   transcript: string
   first_word_latency_ms: number | null
+  first_word_wall_ms?: number | null
+  first_word_audio_ms?: number | null
   first_token_ms_p50?: number | null
   first_token_ms_p95?: number | null
   segment_finalize_ms_p50?: number | null
   segment_finalize_ms_p95?: number | null
+  processing_ms_p50?: number | null
+  processing_ms_p95?: number | null
+  capture_jitter_ms_p50?: number | null
+  capture_jitter_ms_p95?: number | null
+  capture_lag_ms_p50?: number | null
+  capture_lag_ms_p95?: number | null
+  sample_rate?: number | null
+  input_gain_db?: number | null
+  queue_high_watermark_s?: number | null
+  queue_low_watermark_s?: number | null
+  queue_depth_s?: number | null
+  queue_depth_peak_s?: number | null
+  backpressure_events?: number | null
+  backpressure_active?: boolean | null
   drop_rate?: number | null
   session_resets?: number | null
   worker_rss_peak_mb?: number | null
   chunk_count?: number | null
   dropped_chunks?: number | null
+  sequence_timing?: Record<string, unknown> | null
   reason_code?: string | null
   elapsed_s: number
   rtf: number
@@ -112,6 +135,109 @@ export interface AudioDevice {
   name: string
   max_input_channels: number
   default_samplerate: number
+}
+
+export interface MicManualRecordRequest {
+  model_id: string
+  metrics?: Record<string, unknown>
+  note?: string
+  quality_assessment?: string
+  transcript?: string
+  source?: string
+}
+
+export interface MicManualRecordResponse {
+  record_id: string
+  history_path: string
+  latest_model_path: string
+  latest_path: string
+  saved_at: string
+}
+
+export interface MicManualRecordDeleteResponse {
+  record_id: string
+  deleted: boolean
+  deleted_count: number
+}
+
+export interface MicManualRecordBulkDeleteResponse {
+  deleted: number
+  remaining: number
+  model_id?: string | null
+  mic_test_mode?: 'free_speech' | 'reference_video' | 'unknown' | null
+}
+
+export interface MicManualRecordListItem {
+  record_id: string
+  saved_at: string
+  model_id: string
+  note: string
+  quality_assessment: string
+  source: string
+  transcript: string
+  metrics: Record<string, unknown>
+}
+
+export interface MicManualRecordListResponse {
+  records: MicManualRecordListItem[]
+}
+
+export interface MicMobileLoopPackageRequest {
+  video_id: string
+  clip_from_s: number
+  clip_to_s: number
+  pause_s: number
+  repeat_count: number
+  include_sync_round: boolean
+}
+
+export interface MicMobileLoopPackageResponse {
+  package_id: string
+  created_at: string
+  video_id: string
+  video_title: string
+  clip_from_s: number
+  clip_to_s: number
+  clip_duration_s: number
+  pause_s: number
+  measured_rounds: number
+  sync_rounds: number
+  total_rounds: number
+  total_duration_s: number
+  wav_url: string
+  download_url: string
+  instructions: string
+  reference_excerpt?: string | null
+}
+
+export interface MicMobileLoopPackageListItem {
+  package_id: string
+  created_at: string
+  video_id: string
+  video_title: string
+  clip_from_s: number
+  clip_to_s: number
+  clip_duration_s: number
+  pause_s: number
+  measured_rounds: number
+  sync_rounds: number
+  total_rounds: number
+  total_duration_s: number
+  wav_url: string
+  download_url: string
+  instructions: string
+  reference_excerpt?: string | null
+  wav_exists: boolean
+  zip_exists: boolean
+}
+
+export interface MicMobileLoopPackageListResponse {
+  packages: MicMobileLoopPackageListItem[]
+}
+
+export interface MicMobileLoopPackageDeleteResponse {
+  package_id: string
+  deleted: boolean
 }
 
 export interface BenchmarkJobStatus {
@@ -288,6 +414,14 @@ export interface TuningTrialResult {
   first_token_ms_p95?: number | null
   segment_finalize_ms_p50?: number | null
   segment_finalize_ms_p95?: number | null
+  processing_ms_p50?: number | null
+  processing_ms_p95?: number | null
+  capture_jitter_ms_p50?: number | null
+  capture_jitter_ms_p95?: number | null
+  capture_lag_ms_p50?: number | null
+  capture_lag_ms_p95?: number | null
+  queue_depth_peak_s?: number | null
+  backpressure_events?: number | null
   drop_rate?: number | null
   session_resets?: number | null
   reason_code?: string | null

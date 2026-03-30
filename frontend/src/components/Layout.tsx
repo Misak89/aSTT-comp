@@ -6,6 +6,7 @@ const NAV = [
   { to: '/results',   label: 'Výsledky' },
   { to: '/tuning',    label: 'Tuning' },
   { to: '/models',    label: 'Modely' },
+  { to: '/hwflow',    label: 'HW Flow' },
 ]
 
 export function Layout() {

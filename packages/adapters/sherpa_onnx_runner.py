@@ -110,6 +110,9 @@ def list_sherpa_model_bundles(model_store_root: str | Path) -> list[SherpaModelB
 
 def detect_sherpa_bundle_language(model_dir: str | Path) -> str | None:
     value = str(model_dir or "").replace("\\", "/").lower()
+    if "parakeet-tdt-0.6b-v3" in value or "parakeet-tdt-0.6b-v2" in value:
+        # NeMo Parakeet v2/v3 bundles are multilingual (include Czech among supported EU langs).
+        return "cs"
     if any(token in value for token in ("-cs-", "_cs_", "/cs/", "czech", "cesky")):
         return "cs"
     if any(token in value for token in ("-en-", "_en_", "/en/", "english")):

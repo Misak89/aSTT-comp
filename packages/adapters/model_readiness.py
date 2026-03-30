@@ -12,6 +12,7 @@ from packages.adapters.sherpa_onnx_runner import (
 )
 from packages.adapters.vosk_runner import detect_vosk_model_language, resolve_vosk_model_dir
 from packages.adapters.whisper_cpp_runner import resolve_whisper_cli, resolve_whisper_model_file
+from packages.adapters.faster_whisper_runner import resolve_faster_whisper_model_path
 
 ModuleChecker = Callable[[str], bool]
 
@@ -71,7 +72,10 @@ def collect_model_readiness(
         _check_whisper_large_v3(root, whisper_bin),
         _check_whisper_large_v3_turbo(root, whisper_bin),
         _check_sherpa(root, checker),
+        _check_sherpa_parakeet_cs(root, checker),
         _check_vosk_small_cs(root, checker),
+        _check_faster_whisper_small_cs(root, checker),
+        _check_faster_whisper_medium_cs(root, checker),
         _check_qwen_0_6b(root, checker),
         _check_qwen_1_7b(root, checker),
     ]
@@ -116,10 +120,10 @@ def _check_whisper_base(model_store_root: Path, whisper_bin: str | None) -> Mode
         model_path=str(model_file),
         runtime_hint=whisper_bin or "Install whisper-cli (GitHub release) or set WHISPER_CPP_BIN",
         issues=issues,
-        ready_for_live=False,
-        live_streaming=False,
-        live_block_reason="whisper.cpp CLI je dávkový režim; první text přichází až po uzavření chunku.",
-        live_notes=["Vhodné pro benchmark/batch, ne pro skutečný online přepis mikrofonu."],
+        ready_for_live=model_present and runtime_ready and adapter_implemented,
+        live_streaming=model_present and runtime_ready and adapter_implemented,
+        live_block_reason=None if (model_present and runtime_ready and adapter_implemented) else "whisper runtime/model není připraven.",
+        live_notes=["Mic mód používá whisper-server cache a periodický inference interval (pseudo-streaming)."],
     )
 
 
@@ -149,10 +153,10 @@ def _check_whisper_small(model_store_root: Path, whisper_bin: str | None) -> Mod
         model_path=str(model_file),
         runtime_hint=whisper_bin or "Install whisper-cli (GitHub release) or set WHISPER_CPP_BIN",
         issues=issues,
-        ready_for_live=False,
-        live_streaming=False,
-        live_block_reason="whisper.cpp CLI je dávkový režim; první text přichází až po uzavření chunku.",
-        live_notes=["Vhodné pro benchmark/batch, ne pro skutečný online přepis mikrofonu."],
+        ready_for_live=model_present and runtime_ready and adapter_implemented,
+        live_streaming=model_present and runtime_ready and adapter_implemented,
+        live_block_reason=None if (model_present and runtime_ready and adapter_implemented) else "whisper runtime/model není připraven.",
+        live_notes=["Mic mód používá whisper-server cache a periodický inference interval (pseudo-streaming)."],
     )
 
 
@@ -211,10 +215,10 @@ def _check_whisper_large_v3_turbo(model_store_root: Path, whisper_bin: str | Non
         model_path=str(model_file or (model_dir / "ggml-large-v3-turbo-q5_0.bin")),
         runtime_hint=whisper_bin or "Install whisper-cli (GitHub release) or set WHISPER_CPP_BIN",
         issues=issues,
-        ready_for_live=False,
-        live_streaming=False,
-        live_block_reason="whisper.cpp CLI je dávkový režim; první text přichází až po uzavření chunku.",
-        live_notes=["~6× rychlejší než large-v3, RTF < 1 reálné na CPU."],
+        ready_for_live=model_present and runtime_ready,
+        live_streaming=model_present and runtime_ready,
+        live_block_reason=None if (model_present and runtime_ready) else "whisper runtime/model není připraven.",
+        live_notes=["Mic mód používá whisper-server cache; kvalita vysoká, ale na slabém CPU může mít vysokou latenci."],
     )
 
 
@@ -271,6 +275,41 @@ def _check_sherpa(model_store_root: Path, module_checker: ModuleChecker) -> Mode
         live_notes=live_notes,
         live_language_hint=live_language_hint,
         live_supported_languages=supported_languages,
+    )
+
+
+def _check_sherpa_parakeet_cs(model_store_root: Path, module_checker: ModuleChecker) -> ModelCheckResult:
+    bundles = list_sherpa_model_bundles(model_store_root)
+    cs_bundle = resolve_sherpa_model_bundle(model_store_root, preferred_language="cs")
+    model_present = cs_bundle is not None
+    runtime_ready = module_checker("sherpa_onnx")
+    issues: list[str] = []
+    if not model_present:
+        issues.append("No Czech sherpa-onnx bundle found (tokens + encoder/decoder/joiner .onnx).")
+    if not runtime_ready:
+        issues.append("Python package sherpa_onnx is not installed.")
+    issues.append("Temporarily disabled: Windows runtime incompatibility ('window_size' metadata) in online transducer path.")
+    notes = [
+        "Požadován CZ bundle (např. Parakeet int8) ve runtime/model_store.",
+        "Live streaming je true online přes sherpa_onnx OnlineRecognizer.",
+    ]
+    return ModelCheckResult(
+        model_id="sherpa_onnx_parakeet_cs_int8",
+        label="sherpa-onnx Parakeet 0.6B int8 (CZ)",
+        model_present=model_present,
+        runtime_ready=runtime_ready,
+        adapter_implemented=True,
+        ready_for_real=False,
+        ready_for_synthetic=model_present,
+        model_path=str(Path(cs_bundle.model_dir) if cs_bundle is not None else (model_store_root / "sherpa_onnx_parakeet_cs_int8")),
+        runtime_hint="pip install sherpa-onnx and place CZ Parakeet int8 bundle in runtime/model_store",
+        issues=issues,
+        ready_for_live=False,
+        live_streaming=False,
+        live_block_reason="Temporarily disabled due to sherpa runtime metadata incompatibility on Windows.",
+        live_notes=notes,
+        live_language_hint="cs",
+        live_supported_languages=["cs"],
     )
 
 
@@ -389,6 +428,65 @@ def _check_vosk_small_cs(model_store_root: Path, module_checker: ModuleChecker) 
         live_block_reason=None if (model_present and runtime_ready and adapter_implemented) else "VOSK streaming runtime neni pripraven.",
         live_notes=live_notes,
         live_language_hint=language_hint or "cs",
+        live_supported_languages=["cs"],
+    )
+
+
+def _check_faster_whisper_small_cs(model_store_root: Path, module_checker: ModuleChecker) -> ModelCheckResult:
+    return _check_faster_whisper_model(
+        model_store_root=model_store_root,
+        module_checker=module_checker,
+        model_id="faster_whisper_small_cs_int8",
+        label="faster-whisper small (CZ int8)",
+    )
+
+
+def _check_faster_whisper_medium_cs(model_store_root: Path, module_checker: ModuleChecker) -> ModelCheckResult:
+    return _check_faster_whisper_model(
+        model_store_root=model_store_root,
+        module_checker=module_checker,
+        model_id="faster_whisper_medium_cs_int8",
+        label="faster-whisper medium (CZ int8)",
+    )
+
+
+def _check_faster_whisper_model(
+    *,
+    model_store_root: Path,
+    module_checker: ModuleChecker,
+    model_id: str,
+    label: str,
+) -> ModelCheckResult:
+    model_dir = resolve_faster_whisper_model_path(model_store_root, model_id)
+    model_present = model_dir is not None and (Path(model_dir) / "model.bin").exists()
+    runtime_ready = module_checker("faster_whisper")
+    issues: list[str] = []
+    if not model_present:
+        issues.append(
+            f"Missing faster-whisper CTranslate2 model directory (expected runtime/model_store/{model_id}/model.bin)."
+        )
+    if not runtime_ready:
+        issues.append("Python package faster-whisper is not installed.")
+    notes = [
+        "Model je načítán pouze lokálně (bez auto-download) kvůli offline režimu.",
+        "Mic režim používá periodický inference interval nad rolling audio oknem.",
+    ]
+    return ModelCheckResult(
+        model_id=model_id,
+        label=label,
+        model_present=model_present,
+        runtime_ready=runtime_ready,
+        adapter_implemented=True,
+        ready_for_real=model_present and runtime_ready,
+        ready_for_synthetic=model_present,
+        model_path=str(model_dir or (model_store_root / model_id)),
+        runtime_hint=f"pip install faster-whisper and place local CTranslate2 model under runtime/model_store/{model_id}",
+        issues=issues,
+        ready_for_live=model_present and runtime_ready,
+        live_streaming=model_present and runtime_ready,
+        live_block_reason=None if (model_present and runtime_ready) else "faster-whisper runtime/model není připraven.",
+        live_notes=notes,
+        live_language_hint="cs",
         live_supported_languages=["cs"],
     )
 

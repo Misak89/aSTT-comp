@@ -117,6 +117,23 @@ const CONSTRAINTS_PROFILE_PRESETS: Record<string, { cores: number; ram: number; 
 
 const LS_KEY = 'tuning_config_v1'
 const isLargeWhisperV3Model = (modelId: string): boolean => modelId.startsWith('whisper_cpp_large_v3')
+type TuningVideoSortKey = 'title' | 'language' | 'duration' | 'upload_date' | 'genre' | 'view_count'
+const TUNING_VIDEO_SORT_LABELS: Array<{ key: TuningVideoSortKey; label: string }> = [
+  { key: 'title', label: 'Název' },
+  { key: 'language', label: 'Jazyk' },
+  { key: 'duration', label: 'Délka' },
+  { key: 'upload_date', label: 'Datum' },
+  { key: 'genre', label: 'Žánr' },
+  { key: 'view_count', label: 'Zhlédnutí' },
+]
+const TUNING_VIDEO_SORT_DEFAULT_DIR: Record<TuningVideoSortKey, 'asc' | 'desc'> = {
+  title: 'asc',
+  language: 'asc',
+  duration: 'asc',
+  upload_date: 'desc',
+  genre: 'asc',
+  view_count: 'desc',
+}
 
 function loadConfig() {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') } catch { return {} }
@@ -336,28 +353,73 @@ export function TuningPage() {
   const [calibrationResult, setCalibrationResult] = useState<TuningMicCalibrationCheckResponse | null>(cfg.calibrationResult ?? null)
   const [calibrationCheckedAt, setCalibrationCheckedAt] = useState<string | null>(cfg.calibrationCheckedAt ?? null)
   const [checkingCalibration, setCheckingCalibration] = useState<boolean>(false)
-  const [videoSortBy, setVideoSortBy] = useState<'title' | 'language' | 'duration' | 'upload_date'>(
-    cfg.videoSortBy ?? 'title'
+  const isVideoSortKey = (value: unknown): value is TuningVideoSortKey => (
+    value === 'title' ||
+    value === 'language' ||
+    value === 'duration' ||
+    value === 'upload_date' ||
+    value === 'genre' ||
+    value === 'view_count'
   )
-  const [videoSortDir, setVideoSortDir] = useState<'asc' | 'desc'>(cfg.videoSortDir ?? 'asc')
+  const legacyVideoSortBy: TuningVideoSortKey = isVideoSortKey(cfg.videoSortBy) ? cfg.videoSortBy : 'title'
+  const initialVideoSortOrder: TuningVideoSortKey[] = (
+    Array.isArray(cfg.videoSortOrder) && cfg.videoSortOrder.length > 0
+      ? (cfg.videoSortOrder.filter(isVideoSortKey) as TuningVideoSortKey[])
+      : [legacyVideoSortBy]
+  )
+  const [videoSortOrder, setVideoSortOrder] = useState<TuningVideoSortKey[]>(
+    initialVideoSortOrder.length > 0 ? initialVideoSortOrder : ['title']
+  )
+  const [videoSortDirMap, setVideoSortDirMap] = useState<Record<TuningVideoSortKey, 'asc' | 'desc'>>(() => ({
+    ...TUNING_VIDEO_SORT_DEFAULT_DIR,
+    ...(cfg.videoSortDirMap ?? {}),
+    ...(legacyVideoSortBy ? { [legacyVideoSortBy]: cfg.videoSortDir ?? TUNING_VIDEO_SORT_DEFAULT_DIR[legacyVideoSortBy] } : {}),
+  }))
   const [nowMs, setNowMs] = useState<number>(() => Date.now())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  function handleVideoSort(col: typeof videoSortBy) {
-    if (videoSortBy === col) setVideoSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setVideoSortBy(col); setVideoSortDir('asc') }
+  function toggleVideoSortPriority(col: TuningVideoSortKey) {
+    setVideoSortOrder(prev => (
+      prev.includes(col)
+        ? prev.filter(k => k !== col)
+        : [...prev, col]
+    ))
   }
 
-  const sortedLibrary = [...library.filter(v => v.subtitles_local)].sort((a, b) => {
-    let va: string | number = ''
-    let vb: string | number = ''
-    if (videoSortBy === 'title') { va = a.title.toLowerCase(); vb = b.title.toLowerCase() }
-    else if (videoSortBy === 'language') { va = a.language; vb = b.language }
-    else if (videoSortBy === 'duration') { va = a.duration_seconds ?? -1; vb = b.duration_seconds ?? -1 }
-    else if (videoSortBy === 'upload_date') { va = a.upload_date ?? a.added_at ?? ''; vb = b.upload_date ?? b.added_at ?? '' }
-    const cmp = va < vb ? -1 : va > vb ? 1 : 0
-    return videoSortDir === 'asc' ? cmp : -cmp
+  function toggleVideoSortDir(col: TuningVideoSortKey) {
+    setVideoSortDirMap(prev => ({ ...prev, [col]: prev[col] === 'asc' ? 'desc' : 'asc' }))
+  }
+
+  const menuLibrary = library.filter(v => v.visible_in_menus !== false)
+  const sortedLibrary = [...menuLibrary.filter(v => v.subtitles_local)].sort((a, b) => {
+    const activeOrder: TuningVideoSortKey[] = videoSortOrder.length > 0 ? videoSortOrder : ['title']
+    for (const key of activeOrder) {
+      let cmp = 0
+      if (key === 'title') cmp = (a.title || '').localeCompare(b.title || '', 'cs')
+      else if (key === 'language') cmp = (a.language || '').localeCompare(b.language || '', 'cs')
+      else if (key === 'duration') {
+        const aDur = a.duration_seconds ?? -1
+        const bDur = b.duration_seconds ?? -1
+        cmp = aDur === bDur ? 0 : (aDur < bDur ? -1 : 1)
+      } else if (key === 'upload_date') {
+        const aDate = a.upload_date ?? a.added_at ?? ''
+        const bDate = b.upload_date ?? b.added_at ?? ''
+        cmp = aDate < bDate ? -1 : aDate > bDate ? 1 : 0
+      } else if (key === 'genre') cmp = (a.genre || '').localeCompare(b.genre || '', 'cs')
+      else if (key === 'view_count') {
+        const aViews = a.view_count ?? -1
+        const bViews = b.view_count ?? -1
+        cmp = aViews === bViews ? 0 : (aViews < bViews ? -1 : 1)
+      }
+      if (cmp !== 0) return videoSortDirMap[key] === 'asc' ? cmp : -cmp
+    }
+    return 0
   })
+
+  useEffect(() => {
+    const visibleIds = new Set(menuLibrary.map(v => v.video_id))
+    setSelectedVideos(prev => prev.filter(id => visibleIds.has(id)))
+  }, [menuLibrary])
 
   const sortedHistoryJobs = [...jobs].sort((a, b) => {
     const prio = (s: string): number => (
@@ -406,7 +468,7 @@ export function TuningPage() {
         Object.entries(paramValues).map(([k, v]) => [k, [...v]])
       ),
       selectedPrompts: [...selectedPrompts],
-      customPrompt, videoSortBy, videoSortDir,
+      customPrompt, videoSortOrder, videoSortDirMap,
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
   }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode,
@@ -416,7 +478,7 @@ export function TuningPage() {
       constraintsProfile, constraintsCpuCores, constraintsRamLimitMb, constraintsPriority,
       loadProfile, loadCpuTargetPct, loadRamTargetPct,
       validateBeamPreflight,
-      paramValues, selectedPrompts, customPrompt, videoSortBy, videoSortDir])
+      paramValues, selectedPrompts, customPrompt, videoSortOrder, videoSortDirMap])
 
   function toggleParamValue(paramName: string, value: unknown) {
     setParamValues(prev => {
@@ -534,7 +596,14 @@ export function TuningPage() {
 
   async function startTuning() {
     if (!selectedModels.length) { setMsg('Vyber alespoň jeden model.'); return }
-    if (!selectedVideos.length) { setMsg('Vyber alespoň jedno video.'); return }
+    if (!selectedVideos.length) {
+      if (inputMode === 'real_mic') {
+        setMsg('Real mic tuning potřebuje alespoň jedno referenční video s titulky (kvůli WER/soft-WER). Pro čistý live přepis bez videa použij Benchmark -> Mikrofon.')
+      } else {
+        setMsg('Vyber alespoň jedno video.')
+      }
+      return
+    }
     if (inputMode === 'real_mic') {
       if (!micChecklistConfirmed) {
         setMsg('Real mic: potvrď checklist protokolu před startem.')
@@ -651,7 +720,7 @@ export function TuningPage() {
   }
 
   function applyQuickV3SmokePreset() {
-    const czVideos = [...library]
+    const czVideos = [...menuLibrary]
       .filter(v => v.subtitles_local && (v.language || '').toLowerCase() === 'cs')
       .sort((a, b) => (a.duration_seconds ?? Number.MAX_SAFE_INTEGER) - (b.duration_seconds ?? Number.MAX_SAFE_INTEGER))
       .slice(0, 2)
@@ -703,10 +772,10 @@ export function TuningPage() {
 
   function applyV3DecisionGridPreset() {
     const selectedCz = selectedVideos.filter(vid => {
-      const item = library.find(v => v.video_id === vid)
+      const item = menuLibrary.find(v => v.video_id === vid)
       return !!item && item.subtitles_local && (item.language || '').toLowerCase() === 'cs'
     })
-    const fallbackCz = [...library]
+    const fallbackCz = [...menuLibrary]
       .filter(v => v.subtitles_local && (v.language || '').toLowerCase() === 'cs')
       .sort((a, b) => (a.duration_seconds ?? Number.MAX_SAFE_INTEGER) - (b.duration_seconds ?? Number.MAX_SAFE_INTEGER))
       .map(v => v.video_id)
@@ -815,13 +884,19 @@ export function TuningPage() {
         <div className="bg-white rounded border border-gray-200 p-4 space-y-1">
           <div className="flex items-center justify-between mb-2">
             <h2 className="font-semibold text-sm text-gray-700">Evaluační video</h2>
-            <div className="flex gap-1 text-xs text-gray-400">
-              {([['title','Název'],['language','Jazyk'],['duration','Délka'],['upload_date','Datum']] as [typeof videoSortBy, string][]).map(([col, lbl]) => (
-                <button key={col} onClick={() => handleVideoSort(col)}
-                  className={`px-1.5 py-0.5 rounded ${videoSortBy === col ? 'bg-gray-200 text-gray-700 font-medium' : 'hover:bg-gray-100'}`}>
-                  {lbl}{videoSortBy === col ? (videoSortDir === 'asc' ? ' ▲' : ' ▼') : ''}
-                </button>
-              ))}
+            <div className="flex gap-1 text-xs">
+              {TUNING_VIDEO_SORT_LABELS.map(({ key, label }) => {
+                const idx = videoSortOrder.indexOf(key)
+                const active = idx >= 0
+                return (
+                  <label key={key} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${active ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-500'}`}>
+                    <input type="checkbox" checked={active} onChange={() => toggleVideoSortPriority(key)} />
+                    <button type="button" onClick={() => toggleVideoSortDir(key)} className="hover:underline">
+                      {label}{active ? ` ${idx + 1}.${videoSortDirMap[key] === 'asc' ? '▲' : '▼'}` : ''}
+                    </button>
+                  </label>
+                )
+              })}
             </div>
           </div>
           <div className="space-y-1 max-h-52 overflow-y-auto">
@@ -885,6 +960,11 @@ export function TuningPage() {
             <p className="text-[11px] text-gray-400">
               Replay = tuning z videí. Real mic = vyžaduje protokol + kalibraci.
             </p>
+            {inputMode === 'real_mic' && (
+              <p className="text-[11px] text-amber-700">
+                Real mic tuning stále potřebuje vybrané referenční video (pro WER/soft-WER vyhodnocení).
+              </p>
+            )}
           </div>
           {inputMode === 'real_mic' && (
             <div className="border border-blue-200 bg-blue-50 rounded p-3 space-y-3">
@@ -2382,6 +2462,33 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
                               <span title="Kvalita latence podle způsobu měření">
                                 Latence kvalita: <strong>{r.latency_quality}</strong>
                               </span>
+                            )}
+                            {r.first_token_ms_p95 != null && (
+                              <span>First token p95: <strong>{r.first_token_ms_p95.toFixed(0)}ms</strong></span>
+                            )}
+                            {r.segment_finalize_ms_p95 != null && (
+                              <span>Finalize p95: <strong>{r.segment_finalize_ms_p95.toFixed(0)}ms</strong></span>
+                            )}
+                            {r.processing_ms_p95 != null && (
+                              <span>Chunk proc p95: <strong>{r.processing_ms_p95.toFixed(0)}ms</strong></span>
+                            )}
+                            {r.capture_jitter_ms_p95 != null && (
+                              <span>Capture jitter p95: <strong>{r.capture_jitter_ms_p95.toFixed(0)}ms</strong></span>
+                            )}
+                            {r.capture_lag_ms_p95 != null && (
+                              <span>Capture lag p95: <strong>{r.capture_lag_ms_p95.toFixed(0)}ms</strong></span>
+                            )}
+                            {r.queue_depth_peak_s != null && (
+                              <span>Queue debt peak: <strong>{(r.queue_depth_peak_s * 1000).toFixed(0)}ms</strong></span>
+                            )}
+                            {r.backpressure_events != null && (
+                              <span>Backpressure: <strong>{r.backpressure_events}</strong></span>
+                            )}
+                            {r.drop_rate != null && (
+                              <span>Drop: <strong>{(r.drop_rate * 100).toFixed(2)}%</strong></span>
+                            )}
+                            {r.reason_code && (
+                              <span>Reason: <strong>{r.reason_code}</strong></span>
                             )}
                             {r.rtf_p95 != null && <span>RTF p95: <strong>{r.rtf_p95.toFixed(3)}</strong></span>}
                             {r.latency_p95_ms != null && <span>Latence p95: <strong>{r.latency_p95_ms.toFixed(0)}ms</strong></span>}

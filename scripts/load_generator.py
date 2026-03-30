@@ -5,7 +5,17 @@ import argparse
 import multiprocessing as mp
 import os
 import signal
+import sys
 import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
 
 try:
     import psutil
@@ -131,4 +141,3 @@ def main() -> int:
 if __name__ == "__main__":
     mp.freeze_support()
     raise SystemExit(main())
-

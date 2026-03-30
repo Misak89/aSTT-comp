@@ -17,6 +17,7 @@ SCENARIOS_ROOT = RUNTIME_ROOT / "scenarios"
 TUNING_ROOT = RUNTIME_ROOT / "tuning"
 MODEL_STORE_ROOT = RUNTIME_ROOT / "model_store"
 AUDIO_CACHE_ROOT = RUNTIME_ROOT / "audio_cache"
+MIC_SESSIONS_ROOT = RUNTIME_ROOT / "mic_sessions"
 
 # Model install/uninstall event logs (docs/models/{model_id}.json)
 MODELS_LOG_ROOT = ROOT / "docs" / "models"
@@ -27,5 +28,5 @@ PORT = 8012
 
 # Ensure dirs exist at import time
 for _d in (LIBRARY_ROOT, SUBTITLES_ROOT, RESULTS_ROOT, RUNS_ROOT, JOBS_ROOT,
-           SCENARIOS_ROOT, MODEL_STORE_ROOT, MODELS_LOG_ROOT, TUNING_ROOT, AUDIO_CACHE_ROOT):
+           SCENARIOS_ROOT, MODEL_STORE_ROOT, MODELS_LOG_ROOT, TUNING_ROOT, AUDIO_CACHE_ROOT, MIC_SESSIONS_ROOT):
     _d.mkdir(parents=True, exist_ok=True)

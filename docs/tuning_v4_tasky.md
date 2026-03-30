@@ -9,6 +9,24 @@ Navazuje na:
 - Bez splneni `v4.0` se nepokracuje do plne implementace.
 - Zadny "pseudo-online" fallback nesmi byt reportovan jako real mic.
 
+## Stav 2026-03-29
+- Hotovo:
+  - `V4-001` Whisper mic spike API
+  - `V4-002` Turbo mic spike API
+  - `V4-010` Capability flags v registry
+  - `V4-011` Odstraneni hard blokace whisper v mic_service
+  - `V4-013` Real mic latence metriky (rozsireno o p95 diagnostiku)
+  - `V4-014` Stabilita a drop metriky (reason code + backpressure eventy)
+  - `V4-021` Kalibracni skript
+  - `V4-022` Gate kalibrace v tuning_service
+- Castecne hotovo:
+  - `V4-012` Event schema sjednoceni (schema je jednotneji, ale neni jeste samostatny `stats` stream event)
+  - `V4-015` RAM/CPU telemetrie (RSS je robustni, CPU/temp profiling je stale k dodelani)
+  - `V4-023` UI checklist pro real mic (gate existuje; UX je potreba dale uhladit)
+  - `V4-024` ETA confidence (ETA je, confidence label zatim ne)
+- Nove doplneni:
+  - `V4-025` HW Flow stranka (`/hwflow`) - provozni guidance + vize pro slaby HW
+
 ## Milnik M0 - Feasibility gate
 
 ### V4-001: Whisper mic spike API
@@ -151,6 +169,18 @@ Navazuje na:
   - Zobrazit `ETA confidence: low|medium|high`.
 - DoD:
   - Pri adaptivnim search je nejistota viditelna.
+
+### V4-025: HW Flow page (provozni guidance)
+- Typ: frontend/docs
+- Soubory:
+  - `frontend/src/pages/HWFlowPage.tsx` (novy)
+  - `frontend/src/App.tsx`
+  - `frontend/src/components/Layout.tsx`
+- Cíl:
+  - Jedno misto srozumitelne vysvetli i ne-SW faktory (mic, akustika, napajeni, OS zatez) a jejich dopad na live STT.
+- DoD:
+  - Stranka dostupna na `/hwflow` (alias `/HWFlow`, `/hw-flow`).
+  - Obsahuje provozni budget metrik + vizi projektu.
 
 ## Milnik M3 - Smart search + release gate
 

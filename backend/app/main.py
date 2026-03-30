@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 # Add packages to Python path
@@ -60,7 +60,17 @@ app.include_router(tuning.router)
 _DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if _DIST.exists():
     app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+    _INDEX = _DIST / "index.html"
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
-        return FileResponse(_DIST / "index.html")
+        # Always serve fresh HTML shell. Hashed JS/CSS assets remain cacheable under /assets.
+        html = _INDEX.read_text(encoding="utf-8")
+        return HTMLResponse(
+            content=html,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )

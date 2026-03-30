@@ -5,6 +5,15 @@ import type {
   TuningDecisionReport,
   TuningMicCalibrationCheckResponse,
   WebAppAutostartStatus,
+  MicManualRecordRequest,
+  MicManualRecordResponse,
+  MicManualRecordListResponse,
+  MicManualRecordDeleteResponse,
+  MicManualRecordBulkDeleteResponse,
+  MicMobileLoopPackageRequest,
+  MicMobileLoopPackageResponse,
+  MicMobileLoopPackageListResponse,
+  MicMobileLoopPackageDeleteResponse,
 } from '../types'
 
 const BASE = '/api'
@@ -43,12 +52,23 @@ async function del(path: string): Promise<void> {
   if (!r.ok && r.status !== 204) throw new Error(`DELETE ${path} → ${r.status}`)
 }
 
+async function delJson<T>(path: string): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, { method: 'DELETE' })
+  if (!r.ok) {
+    const detail = await r.text()
+    throw new Error(`DELETE ${path} → ${r.status}: ${detail}`)
+  }
+  return r.json()
+}
+
 // Library
 export const api = {
   library: {
     list: () => get<LibraryItem[]>('/library/items'),
     upsert: (item: Partial<LibraryItem> & { video_id: string; title: string; url: string }) =>
       post<LibraryItem>('/library/items', item),
+    setVisibility: (video_id: string, visible_in_menus: boolean) =>
+      post<LibraryItem>(`/library/items/${video_id}/visibility`, { visible_in_menus }),
     downloadSubtitles: (video_id: string, url: string) =>
       post('/library/download-subtitles', { video_id, url }),
     latestResults: (video_id: string) =>
@@ -129,5 +149,34 @@ export const api = {
       post<{ session_id: string; model_id: string; created_at: string }>('/mic/sessions', { model_id, model_params }),
     getSession: (id: string) => get<MicSessionState>(`/mic/sessions/${id}`),
     stopSession: (id: string) => post<MicSessionState>(`/mic/sessions/${id}/stop`),
+    listManualRecords: (opts?: { limit?: number; model_id?: string }) => {
+      const q = new URLSearchParams()
+      if (opts?.limit != null) q.set('limit', String(opts.limit))
+      if (opts?.model_id) q.set('model_id', opts.model_id)
+      const suffix = q.toString() ? `?${q.toString()}` : ''
+      return get<MicManualRecordListResponse>(`/mic/manual-records${suffix}`)
+    },
+    saveManualRecord: (req: MicManualRecordRequest) =>
+      post<MicManualRecordResponse>('/mic/manual-records', req),
+    deleteManualRecord: (recordId: string) =>
+      delJson<MicManualRecordDeleteResponse>(`/mic/manual-records/${encodeURIComponent(recordId)}`),
+    clearManualRecords: (opts?: { model_id?: string; mic_test_mode?: 'free_speech' | 'reference_video' | 'unknown' }) => {
+      const q = new URLSearchParams()
+      if (opts?.model_id) q.set('model_id', opts.model_id)
+      if (opts?.mic_test_mode) q.set('mic_test_mode', opts.mic_test_mode)
+      const suffix = q.toString() ? `?${q.toString()}` : ''
+      return delJson<MicManualRecordBulkDeleteResponse>(`/mic/manual-records${suffix}`)
+    },
+    createMobileLoopPackage: (req: MicMobileLoopPackageRequest) =>
+      post<MicMobileLoopPackageResponse>('/mic/mobile-loop-packages', req),
+    listMobileLoopPackages: (opts?: { limit?: number; video_id?: string }) => {
+      const q = new URLSearchParams()
+      if (opts?.limit != null) q.set('limit', String(opts.limit))
+      if (opts?.video_id) q.set('video_id', opts.video_id)
+      const suffix = q.toString() ? `?${q.toString()}` : ''
+      return get<MicMobileLoopPackageListResponse>(`/mic/mobile-loop-packages${suffix}`)
+    },
+    deleteMobileLoopPackage: (packageId: string) =>
+      delJson<MicMobileLoopPackageDeleteResponse>(`/mic/mobile-loop-packages/${encodeURIComponent(packageId)}`),
   },
 }

@@ -8,6 +8,14 @@ import shutil
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
+
 OLD_SUBTITLES = Path(r"C:\Users\adamf\OneDrive\Dokumenty\aSTT-comparison\.runtime\source_library\subtitles")
 NEW_SUBTITLES = Path(__file__).parent.parent / "runtime" / "library" / "subtitles"
 

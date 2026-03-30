@@ -10,6 +10,14 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
+
 BASE_URL = "http://127.0.0.1:8012"
 
 

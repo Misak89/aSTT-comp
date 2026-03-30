@@ -7,14 +7,17 @@
 
 Task breakdown: `docs/tuning_v4_tasky.md`.
 
-## Kriticke blokery (stav dnes)
-1. `whisper_cpp_*` je v mic service explicitne odmitnuty.
-2. `streaming_runner` ma pro whisper buffered fallback, ne nativni live stream.
-3. `whisper_cpp_runner` ma v real mode omezeni na `local_file`.
-4. Registry hlasi `supports_microphone=False` pro whisper modely.
-5. Real-mode whitelist nezahrnuje `whisper_cpp_large_v3_turbo`.
+## Kriticke blokery (stav 2026-03-29)
+Puvodni blokery pro whisper mic path byly z velke casti odstraneny:
+1. `whisper_cpp_*` uz neni v mic service hard blokovany.
+2. Registry expose `supports_microphone=True` pro `whisper_cpp_small` a `whisper_cpp_large_v3_turbo`.
+3. Real mic job umi end-to-end path pres mic session + tuning worker.
 
-Bez odstraneni techto 5 bodu neni "real mic v4" technicky pravdivy.
+Zbyvajici kriticka prace:
+1. Dotahnout plne sjednoceny event model vc. dedikovaneho `stats` eventu.
+2. Dodelat CPU/temp p95 telemetrii pro release gate.
+3. Dokoncit smart search planner + ETA confidence.
+4. Potvrdit finalni doporuceni na vice realnych HW profilech.
 
 ## Scope v4
 - Real mic benchmark/tuning: audio fyzicky z mobilu do mikrofonu PC.

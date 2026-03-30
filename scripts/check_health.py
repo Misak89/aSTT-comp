@@ -1,12 +1,18 @@
 #!/usr/bin/env python
 """Smoke test: ověří zda backend odpovídá na /api/health."""
 from __future__ import annotations
+from pathlib import Path
 import sys
 import urllib.request
 import urllib.error
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packages.common.console_io import configure_console_io
+
+configure_console_io()
 
 URL = "http://127.0.0.1:8012/api/health"
 

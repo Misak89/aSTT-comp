@@ -306,6 +306,8 @@ def stream_mic_audio(
     sample_rate: int = SAMPLE_RATE,
     device: int | str | None = None,
     stop_event=None,  # threading.Event — pokud nastaven, zastaví streaming
+    reconnect_attempts: int = 1,
+    reconnect_delay_s: float = 1.0,
 ) -> Generator[tuple[list[float], int], None, None]:
     """
     Mikrofon → PCM float32 chunky přes sounddevice.
@@ -317,6 +319,8 @@ def stream_mic_audio(
         sample_rate: Sample rate (16000 doporučeno pro STT).
         device: Index nebo název audio zařízení (None = výchozí).
         stop_event: threading.Event — streamování se zastaví když je nastaven.
+        reconnect_attempts: Kolikrát se pokusit obnovit stream po chybě zařízení.
+        reconnect_delay_s: Pauza mezi reconnect pokusy.
     """
     try:
         import sounddevice as sd  # type: ignore[import-not-found]
@@ -328,18 +332,36 @@ def stream_mic_audio(
         ) from exc
 
     chunk_size = max(1, int(sample_rate * chunk_seconds))
-    stream = sd.InputStream(
-        samplerate=sample_rate,
-        channels=1,
-        dtype="float32",
-        blocksize=chunk_size,
-        device=device,
-    )
-
-    with stream:
-        while True:
-            if stop_event is not None and stop_event.is_set():
-                break
-            data, overflowed = stream.read(chunk_size)
-            samples = data[:, 0].tolist()  # mono, jako list[float]
-            yield samples, sample_rate
+    attempts_left = max(0, int(reconnect_attempts))
+    while True:
+        stream = None
+        try:
+            stream = sd.InputStream(
+                samplerate=sample_rate,
+                channels=1,
+                dtype="float32",
+                blocksize=chunk_size,
+                device=device,
+            )
+            with stream:
+                while True:
+                    if stop_event is not None and stop_event.is_set():
+                        return
+                    data, overflowed = stream.read(chunk_size)
+                    samples = data[:, 0].tolist()  # mono, jako list[float]
+                    if overflowed:
+                        # Vyšší vrstva může z tohoto stavu odvodit drop.
+                        pass
+                    yield samples, sample_rate
+        except Exception:
+            if attempts_left <= 0:
+                raise
+            attempts_left -= 1
+            time.sleep(max(0.1, float(reconnect_delay_s)))
+            continue
+        finally:
+            try:
+                if stream is not None:
+                    stream.close()
+            except Exception:
+                pass

@@ -12,9 +12,10 @@ interface Props {
   values: Record<string, unknown>
   onChange: (values: Record<string, unknown>) => void
   compact?: boolean
+  hints?: Record<string, string>
 }
 
-export function ModelParamsForm({ modelId, params, values, onChange, compact = false }: Props) {
+export function ModelParamsForm({ modelId, params, values, onChange, compact = false, hints }: Props) {
   if (!params || params.length === 0) return null
 
   function set(name: string, value: unknown) {
@@ -25,16 +26,24 @@ export function ModelParamsForm({ modelId, params, values, onChange, compact = f
     return p.name in values ? values[p.name] : p.default
   }
 
+  function hintFor(p: ParamSpec): string {
+    const custom = hints?.[p.name]
+    if (custom && custom.trim()) return custom.trim()
+    return (p.description || '').trim()
+  }
+
   return (
     <div className={compact ? 'space-y-1' : 'space-y-3'}>
       {params.map(p => (
-        <div key={p.name} className={compact ? 'flex items-center gap-2 text-sm' : 'flex flex-col gap-1'}>
-          <label className="text-gray-300 whitespace-nowrap min-w-28 text-sm" title={p.description}>
-            {p.label}
-          </label>
-          <ParamInput param={p} value={current(p)} onChange={v => set(p.name, v)} compact={compact} />
-          {!compact && p.description && (
-            <span className="text-xs text-gray-500">{p.description}</span>
+        <div key={p.name} className={compact ? 'space-y-0.5' : 'flex flex-col gap-1'}>
+          <div className={compact ? 'flex items-center gap-2 text-sm flex-wrap' : 'flex items-center gap-2'}>
+            <label className="text-gray-300 whitespace-nowrap min-w-28 text-sm" title={p.description}>
+              {p.label}
+            </label>
+            <ParamInput param={p} value={current(p)} onChange={v => set(p.name, v)} compact={compact} />
+          </div>
+          {hintFor(p) && (
+            <span className="text-xs text-gray-500">{hintFor(p)}</span>
           )}
         </div>
       ))}

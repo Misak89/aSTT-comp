@@ -99,6 +99,14 @@ class TuningTrialResult(BaseModel):
     first_token_ms_p95: Optional[float] = None
     segment_finalize_ms_p50: Optional[float] = None
     segment_finalize_ms_p95: Optional[float] = None
+    processing_ms_p50: Optional[float] = None
+    processing_ms_p95: Optional[float] = None
+    capture_jitter_ms_p50: Optional[float] = None
+    capture_jitter_ms_p95: Optional[float] = None
+    capture_lag_ms_p50: Optional[float] = None
+    capture_lag_ms_p95: Optional[float] = None
+    queue_depth_peak_s: Optional[float] = None
+    backpressure_events: Optional[int] = None
     drop_rate: Optional[float] = None
     session_resets: Optional[int] = None
     reason_code: Optional[str] = None

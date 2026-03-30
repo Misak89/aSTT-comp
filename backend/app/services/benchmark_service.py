@@ -50,6 +50,8 @@ DEFAULT_MODELS = [
     {"id": "whisper_cpp_large_v3_turbo", "label": "whisper.cpp large-v3-turbo"},
     {"id": "sherpa_onnx_small",     "label": "sherpa-onnx small"},
     {"id": "vosk_small_cs_0_4",     "label": "VOSK small cs-0.4"},
+    {"id": "faster_whisper_small_cs_int8", "label": "faster-whisper small (CZ int8)"},
+    {"id": "faster_whisper_medium_cs_int8", "label": "faster-whisper medium (CZ int8)"},
     {"id": "qwen3_asr_0_6b",        "label": "Qwen3-ASR 0.6B"},
     {"id": "qwen3_asr_1_7b",        "label": "Qwen3-ASR 1.7B"},
 ]

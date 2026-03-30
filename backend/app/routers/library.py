@@ -6,6 +6,7 @@ from ..models.library import (
     LatestResult,
     DownloadSubtitlesRequest,
     UpsertLibraryItemRequest,
+    UpdateLibraryVisibilityRequest,
 )
 from ..services import library_service
 
@@ -20,6 +21,14 @@ def list_items():
 @router.post("/items", response_model=LibraryItem, status_code=201)
 def upsert_item(req: UpsertLibraryItemRequest):
     return library_service.upsert_item(req)
+
+
+@router.post("/items/{video_id}/visibility", response_model=LibraryItem)
+def set_visibility(video_id: str, req: UpdateLibraryVisibilityRequest):
+    try:
+        return library_service.set_item_visibility(video_id, req.visible_in_menus)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="video_id not found")
 
 
 @router.post("/download-subtitles")

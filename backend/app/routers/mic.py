@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from typing import Any, Optional
 
 from ..services import mic_service
 
@@ -34,6 +35,109 @@ class CreateSessionResponse(BaseModel):
     session_id: str
     model_id: str
     created_at: str
+
+
+class ManualMicRecordRequest(BaseModel):
+    model_id: str
+    metrics: dict = Field(default_factory=dict)
+    note: Optional[str] = None
+    quality_assessment: Optional[str] = None
+    transcript: Optional[str] = None
+    source: Optional[str] = "manual_user_input"
+
+
+class ManualMicRecordResponse(BaseModel):
+    record_id: str
+    history_path: str
+    latest_model_path: str
+    latest_path: str
+    saved_at: str
+
+
+class ManualMicRecordListItem(BaseModel):
+    record_id: str
+    saved_at: str
+    model_id: str
+    note: str
+    quality_assessment: str
+    source: str
+    transcript: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class ManualMicRecordListResponse(BaseModel):
+    records: list[ManualMicRecordListItem] = Field(default_factory=list)
+
+
+class ManualMicRecordDeleteResponse(BaseModel):
+    record_id: str
+    deleted: bool
+    deleted_count: int
+
+
+class ManualMicRecordBulkDeleteResponse(BaseModel):
+    deleted: int
+    remaining: int
+    model_id: str | None = None
+    mic_test_mode: str | None = None
+
+
+class MobileLoopPackageRequest(BaseModel):
+    video_id: str = Field(min_length=1)
+    clip_from_s: float = Field(ge=0)
+    clip_to_s: float = Field(gt=0)
+    pause_s: float = Field(default=15, ge=0, le=3600)
+    repeat_count: int = Field(default=1, ge=1, le=200)
+    include_sync_round: bool = True
+
+
+class MobileLoopPackageResponse(BaseModel):
+    package_id: str
+    created_at: str
+    video_id: str
+    video_title: str
+    clip_from_s: float
+    clip_to_s: float
+    clip_duration_s: float
+    pause_s: float
+    measured_rounds: int
+    sync_rounds: int
+    total_rounds: int
+    total_duration_s: float
+    wav_url: str
+    download_url: str
+    instructions: str
+    reference_excerpt: str | None = None
+
+
+class MobileLoopPackageListItem(BaseModel):
+    package_id: str
+    created_at: str
+    video_id: str
+    video_title: str
+    clip_from_s: float
+    clip_to_s: float
+    clip_duration_s: float
+    pause_s: float
+    measured_rounds: int
+    sync_rounds: int
+    total_rounds: int
+    total_duration_s: float
+    wav_url: str
+    download_url: str
+    instructions: str = ""
+    reference_excerpt: str | None = None
+    wav_exists: bool = False
+    zip_exists: bool = False
+
+
+class MobileLoopPackageListResponse(BaseModel):
+    packages: list[MobileLoopPackageListItem] = Field(default_factory=list)
+
+
+class MobileLoopPackageDeleteResponse(BaseModel):
+    package_id: str
+    deleted: bool
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +162,113 @@ def create_session(req: CreateSessionRequest):
     )
 
 
+@router.post("/manual-records", response_model=ManualMicRecordResponse, status_code=201)
+def save_manual_record(req: ManualMicRecordRequest):
+    result = mic_service.save_manual_record(
+        model_id=req.model_id,
+        metrics=req.metrics or {},
+        note=req.note,
+        quality_assessment=req.quality_assessment,
+        transcript=req.transcript,
+        source=req.source or "manual_user_input",
+    )
+    return ManualMicRecordResponse(**result)
+
+
+@router.get("/manual-records", response_model=ManualMicRecordListResponse)
+def list_manual_records(
+    limit: int = Query(default=50, ge=1, le=500),
+    model_id: Optional[str] = Query(default=None),
+):
+    records = mic_service.list_manual_records(limit=limit, model_id=model_id)
+    return ManualMicRecordListResponse(records=[ManualMicRecordListItem(**item) for item in records])
+
+
+@router.delete("/manual-records/{record_id}", response_model=ManualMicRecordDeleteResponse)
+def delete_manual_record(record_id: str):
+    try:
+        result = mic_service.delete_manual_record(record_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ManualMicRecordDeleteResponse(**result)
+
+
+@router.delete("/manual-records", response_model=ManualMicRecordBulkDeleteResponse)
+def delete_manual_records(
+    model_id: Optional[str] = Query(default=None),
+    mic_test_mode: Optional[str] = Query(default=None),
+):
+    try:
+        result = mic_service.delete_manual_records(model_id=model_id, mic_test_mode=mic_test_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ManualMicRecordBulkDeleteResponse(**result)
+
+
+@router.post("/mobile-loop-packages", response_model=MobileLoopPackageResponse, status_code=201)
+def create_mobile_loop_package(req: MobileLoopPackageRequest):
+    try:
+        payload = mic_service.generate_mobile_loop_package(
+            video_id=req.video_id,
+            clip_from_s=req.clip_from_s,
+            clip_to_s=req.clip_to_s,
+            pause_s=req.pause_s,
+            repeat_count=req.repeat_count,
+            include_sync_round=req.include_sync_round,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Generování loop balíčku selhalo: {exc}") from exc
+    return MobileLoopPackageResponse(**payload)
+
+
+@router.get("/mobile-loop-packages", response_model=MobileLoopPackageListResponse)
+def list_mobile_loop_packages(
+    limit: int = Query(default=50, ge=1, le=500),
+    video_id: Optional[str] = Query(default=None),
+):
+    rows = mic_service.list_mobile_loop_packages(limit=limit, video_id=video_id)
+    return MobileLoopPackageListResponse(
+        packages=[MobileLoopPackageListItem(**row) for row in rows]
+    )
+
+
+@router.delete("/mobile-loop-packages/{package_id}", response_model=MobileLoopPackageDeleteResponse)
+def delete_mobile_loop_package(package_id: str):
+    try:
+        result = mic_service.delete_mobile_loop_package(package_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MobileLoopPackageDeleteResponse(**result)
+
+
+@router.get("/mobile-loop-packages/{package_id}/download")
+def download_mobile_loop_package(package_id: str):
+    try:
+        files = mic_service.get_mobile_loop_package_files(package_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(
+        path=str(files["zip"]),
+        media_type="application/zip",
+        filename=files["zip"].name,
+    )
+
+
+@router.get("/mobile-loop-packages/{package_id}/wav")
+def download_mobile_loop_wav(package_id: str):
+    try:
+        files = mic_service.get_mobile_loop_package_files(package_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(
+        path=str(files["wav"]),
+        media_type="audio/wav",
+        filename=files["wav"].name,
+    )
+
+
 @router.get("/sessions/{session_id}")
 def get_session(session_id: str):
     """Vrátí aktuální stav session (transcript, metriky, status)."""
@@ -70,18 +281,35 @@ def get_session(session_id: str):
         "status": state.status,
         "transcript": state.transcript,
         "first_word_latency_ms": state.first_word_latency_ms,
+        "first_word_wall_ms": state.first_word_wall_ms,
+        "first_word_audio_ms": state.first_word_audio_ms,
         "first_token_ms_p50": state.first_token_ms_p50,
         "first_token_ms_p95": state.first_token_ms_p95,
         "segment_finalize_ms_p50": state.segment_finalize_ms_p50,
         "segment_finalize_ms_p95": state.segment_finalize_ms_p95,
+        "processing_ms_p50": state.processing_ms_p50,
+        "processing_ms_p95": state.processing_ms_p95,
+        "capture_jitter_ms_p50": state.capture_jitter_ms_p50,
+        "capture_jitter_ms_p95": state.capture_jitter_ms_p95,
+        "capture_lag_ms_p50": state.capture_lag_ms_p50,
+        "capture_lag_ms_p95": state.capture_lag_ms_p95,
         "drop_rate": state.drop_rate,
         "session_resets": state.session_resets,
         "worker_rss_peak_mb": state.worker_rss_peak_mb,
+        "sample_rate": state.target_sample_rate,
+        "input_gain_db": state.input_gain_db,
+        "queue_high_watermark_s": state.queue_high_watermark_s,
+        "queue_low_watermark_s": state.queue_low_watermark_s,
+        "queue_depth_s": state.queue_depth_s,
+        "queue_depth_peak_s": state.queue_depth_peak_s,
+        "backpressure_events": state.backpressure_events,
+        "backpressure_active": state.backpressure_active,
         "chunk_count": state.chunk_count,
         "dropped_chunks": state.dropped_chunks,
         "elapsed_s": state.elapsed_s,
         "rtf": state.rtf,
         "total_audio_s": state.total_audio_s,
+        "sequence_timing": dict(state.sequence_timing or {}),
         "reason_code": state.reason_code,
         "error": state.error,
     }
@@ -115,18 +343,41 @@ async def ws_mic_stream(websocket: WebSocket, session_id: str):
     6. Server finalizuje a pošle {"type": "final", ...}
     """
     await websocket.accept()
+    mic_service.log_transport_event(session_id, "ws_accept")
 
     state = mic_service.get_session(session_id)
     if state is None:
+        mic_service.log_transport_event(session_id, "ws_session_not_found")
         await websocket.send_text(json.dumps({"error": "session not found"}))
         await websocket.close()
         return
 
     try:
         mic_service.start_recording(session_id)
+        mic_service.log_transport_event(session_id, "ws_start_ok")
         await websocket.send_text(json.dumps({"type": "started", "session_id": session_id}))
     except Exception as exc:
-        await websocket.send_text(json.dumps({"error": str(exc)}))
+        reason_code = "start_recording_failed"
+        mic_service.record_session_start_failure(
+            session_id,
+            error=str(exc),
+            reason_code=reason_code,
+        )
+        mic_service.log_transport_event(
+            session_id,
+            "ws_start_failed",
+            {"error": str(exc), "reason_code": reason_code},
+        )
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "error": f"Start session selhal: {exc}",
+                    "reason_code": reason_code,
+                    "session_id": session_id,
+                    "model_id": state.model_id,
+                }
+            )
+        )
         await websocket.close()
         return
 
@@ -136,9 +387,13 @@ async def ws_mic_stream(websocket: WebSocket, session_id: str):
             message = await websocket.receive()
 
             if "bytes" in message and message["bytes"]:
-                samples = mic_service.decode_audio_frame(message["bytes"])
+                samples, capture_ts_ms = mic_service.decode_audio_frame(message["bytes"])
                 if samples:
-                    result = mic_service.process_audio_chunk(session_id, samples)
+                    result = mic_service.process_audio_chunk(
+                        session_id=session_id,
+                        samples=samples,
+                        capture_ts_ms=capture_ts_ms,
+                    )
                     await websocket.send_text(json.dumps(result))
 
             elif "text" in message and message["text"]:
@@ -149,17 +404,27 @@ async def ws_mic_stream(websocket: WebSocket, session_id: str):
 
                 action = payload.get("action", "")
                 if action == "stop":
+                    mic_service.log_transport_event(session_id, "ws_stop_action")
                     break
 
                 # Alternativa: JSON {"samples": [...]}
-                samples = mic_service.decode_audio_frame(message["text"])
+                samples, capture_ts_ms = mic_service.decode_audio_frame(message["text"])
                 if samples:
-                    result = mic_service.process_audio_chunk(session_id, samples)
+                    result = mic_service.process_audio_chunk(
+                        session_id=session_id,
+                        samples=samples,
+                        capture_ts_ms=capture_ts_ms,
+                    )
                     await websocket.send_text(json.dumps(result))
 
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        mic_service.log_transport_event(
+            session_id,
+            "ws_disconnect",
+            {"close_code": getattr(exc, "code", None)},
+        )
     except Exception as exc:
+        mic_service.log_transport_event(session_id, "ws_loop_error", {"error": str(exc)})
         try:
             await websocket.send_text(json.dumps({"error": str(exc)}))
         except Exception:
@@ -168,11 +433,24 @@ async def ws_mic_stream(websocket: WebSocket, session_id: str):
     # Finalizuj
     try:
         final = mic_service.stop_recording(session_id)
-        await websocket.send_text(json.dumps(final))
-    except Exception:
-        pass
+        try:
+            await websocket.send_text(json.dumps(final))
+            mic_service.log_transport_event(
+                session_id,
+                "ws_final_sent",
+                {
+                    "reason_code": final.get("reason_code"),
+                    "elapsed_s": final.get("elapsed_s"),
+                    "drop_rate": final.get("drop_rate"),
+                },
+            )
+        except Exception as exc:
+            mic_service.log_transport_event(session_id, "ws_final_send_failed", {"error": str(exc)})
+    except Exception as exc:
+        mic_service.log_transport_event(session_id, "ws_finalize_failed", {"error": str(exc)})
 
     try:
         await websocket.close()
-    except Exception:
-        pass
+        mic_service.log_transport_event(session_id, "ws_closed")
+    except Exception as exc:
+        mic_service.log_transport_event(session_id, "ws_close_failed", {"error": str(exc)})
