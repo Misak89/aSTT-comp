@@ -199,3 +199,122 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 - [ ] RAM měření per trial
 - [ ] Baseline trial (defaultní parametry) pro srovnání
 - [ ] Tuning v3 spustit s promptem a min. 4 videi
+
+---
+
+## Session 2026-03-29 až 2026-03-30 (feature/tuning-v4)
+
+### Kontext
+- Integrace změn pro v4 větev: real mic workflow, sekvenční testování, offline provoz, provozní start webu.
+- Referenční commit: `afda0e0` (`feat(v4): improve mic sequence workflow, telemetry, and offline tooling`).
+
+### Co bylo implementováno
+
+#### 1) Mic pipeline a sekvenční režim
+- Výrazně rozšířen `backend/app/services/mic_service.py`:
+  - detailnější telemetrie a event logování,
+  - reason kódy pro nestabilní běhy (např. backpressure/drop),
+  - rozšířený timing sekvence.
+- Rozšířeny routery/API pro mic (`backend/app/routers/mic.py`) včetně perzistence manuálních záznamů.
+- Frontend `MicSession` (`frontend/src/components/MicSession.tsx`) doplněn o:
+  - sekvenční orchestrace modelů,
+  - ukládání výsledků,
+  - robustnější stavové hlášky při WS/pipeline chybách.
+
+#### 2) Tuning v4 a rozhodovací/validační vrstva
+- Aktualizace `scripts/tuning_worker.py` pro v4 workflow.
+- Doplňky validačních/report skriptů:
+  - `scripts/tuning_decision_report.py`
+  - `scripts/tuning_hw_matrix_report.py`
+  - `scripts/tuning_soak_validate.py`
+- Přidán smoke skript pro CZ streaming modely:
+  - `scripts/smoke_cz_streaming_models.py`.
+
+#### 3) Modely a readiness
+- Registry modelů rozšířena (`packages/adapters/_registry.py`), doplněna podpora/napojení pro další streaming cesty.
+- Přidán adapter `packages/adapters/faster_whisper_runner.py`.
+- Aktualizována readiness logika (`packages/adapters/model_readiness.py`).
+
+#### 4) UI a provozní ergonomie
+- Nová stránka `/hwflow`:
+  - `frontend/src/pages/HWFlowPage.tsx`
+  - napojení v `App.tsx` a navigaci.
+- Rozšíření UI/API typů pro mic a benchmark:
+  - `frontend/src/api/client.ts`
+  - `frontend/src/types/index.ts`
+  - úpravy `BenchmarkPage`, `LibraryPage`, `TuningPage`.
+
+#### 5) Offline a start webu
+- Přidány/aktualizovány utility pro stabilní start/stop:
+  - `web-up.cmd`, `web-up-build.cmd`, `web-up-bg.cmd`
+  - `web-status.cmd`, `web-down.cmd`, `web-restart.cmd`
+  - `start_web_app_detached.cmd`
+- Aktualizován `README.md` s krátkým návodem stabilního spuštění.
+- Doplněny/aktualizovány skripty pro audit a provoz (`network_audit_report.py`, `check_health.py`, `preflight.py`, ...).
+
+### Dokumentace vytvořená v této session
+- `docs/mic_sequence_rychla_vs_orchestracni_prestavba_2026-03-30.md`
+- `docs/mic_sequence_vibe_coding_short_2026-03-30.md`
+- aktualizace:
+  - `docs/tuning_v4_implementacni_plan.md`
+  - `docs/tuning_v4_tasky.md`
+
+---
+
+## Session 2026-03-30 (Documentation Contract Hardening)
+
+### Kontext
+- Cíl: zavést jednotná, snadno dohledatelná a vynutitelná pravidla dokumentace pro všechny vývojáře.
+
+### Implementováno
+- Přidán závazný kontrakt:
+  - `CONTRIBUTING.md`
+- Přidány centralizované dokumenty:
+  - `docs/ARCHITECTURE.md`
+  - `docs/RUNBOOK.md`
+- Upraven root vstup (`README.md`) tak, aby byly pravidla vidět hned po otevření repa.
+- Přidán PR checklist:
+  - `.github/pull_request_template.md`
+- Přidán CI guard:
+  - `.github/workflows/docs-guard.yml`
+  - `scripts/verify_docs_guard.py`
+
+### Vynucená pravidla (nově)
+- Každá změna kódu vyžaduje update `docs/session_log.md`.
+- Změna architektury/logiky vyžaduje update `docs/ARCHITECTURE.md`.
+- Změna provozu/spouštění vyžaduje update `docs/RUNBOOK.md`.
+- Kontrola běží automaticky v CI přes docs guard workflow.
+- Aktivní mic pokračování je explicitně navázáno v `README.md` + `CONTRIBUTING.md` na:
+  - `docs/mic_sequence_vibe_coding_short_2026-03-30.md`
+  - `docs/mic_sequence_rychla_vs_orchestracni_prestavba_2026-03-30.md`
+  - `docs/tuning_v4_implementacni_plan.md`
+  - `docs/tuning_v4_tasky.md`
+
+### Upresneni "kam se zapisuje plan" (doplneno)
+- Zavedeno centralni misto:
+  - `docs/PLAN_TRACKER.md` (single source of truth pro aktivni plan a stav).
+- Pravidla aktualizace planu jsou explicitne v:
+  - `CONTRIBUTING.md` (sekce F),
+  - `README.md` (Povinne dokumenty + aktivni roadmapa).
+- CI guard (`scripts/verify_docs_guard.py`) nově vyžaduje update `docs/PLAN_TRACKER.md`,
+  pokud se mění plan dokumenty `docs/tuning_*` nebo `docs/mic_sequence_*`.
+
+### Kriticky audit uzavreni dokumentacni smycky (doplneno)
+- Nalezena a opravena mezera v docs guardu:
+  - root `web-*.cmd` / `start_web_app*.cmd` drive nespadaly do `code_changes`, tedy nevyzadovaly `session_log`/`RUNBOOK`.
+  - guard upraven: root cmd/ps1 a dalsi root code/config soubory jsou zahrnuty.
+- Guard rozsiren:
+  - plan tracker update se vyzaduje i pro obecne docs plan/roadmap markdowny (`*plan*.md`, `*roadmap*.md`).
+- Sjednoceny kontrakt:
+  - `AGENTS.md` a `CLAUDE.md` doplneny o povinnost `docs/PLAN_TRACKER.md`.
+- Doplneno pravidlo procesu:
+  - v `CONTRIBUTING.md` je explicitne uvedeno nastavit `docs-guard` jako required check v branch protection.
+
+### Finalizace kvality dokumentacniho kruhu (dodelano)
+- `CONTRIBUTING.md` doplnen o povinnou kvalitu zapisu:
+  - strucna / logicka / jednoznacna / uzavreny kruh.
+- `docs/PLAN_TRACKER.md` preveden na operacni format:
+  - `Last updated`, `Status`, tabulka milniku, jasna aktualizacni posloupnost.
+- `scripts/verify_docs_guard.py` zpresnen:
+  - nehlida jen pritomnost souboru, ale i **substantive added content** v povinnych docs.
+- `README.md` doplnen o explicitni pravidlo, ze plan se aktualizuje pres `docs/PLAN_TRACKER.md`.

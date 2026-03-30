@@ -218,4 +218,4 @@ Titulky jsou staženy ve starém projektu:
 - Qwen na Windows: vždy float32, nikdy bfloat16 (nativní crash)
 - sherpa_onnx: optional, ne blokující dependency
 - Git: commity průběžně, push nikdy bez souhlasu
-- CLAUDE.md + memory: aktualizovat na konci každé session
+- CLAUDE.md + CONTRIBUTING.md + docs/PLAN_TRACKER.md + docs/session_log.md: aktualizovat na konci každé session
