@@ -5,6 +5,7 @@ const NAV = [
   { to: '/benchmark', label: 'Benchmark' },
   { to: '/results',   label: 'Výsledky' },
   { to: '/tuning',    label: 'Tuning' },
+  { to: '/prepis',    label: 'Přepis' },
   { to: '/models',    label: 'Modely' },
   { to: '/hwflow',    label: 'HW Flow' },
 ]
@@ -12,7 +13,7 @@ const NAV = [
 export function Layout() {
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
+      <nav className="sticky top-0 z-50 bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
         <span className="font-bold text-gray-800 mr-4">aSTT-comp</span>
         {NAV.map(({ to, label }) => (
           <NavLink

@@ -127,6 +127,7 @@ def main() -> int:
                 evaluation_mode=evaluation_mode,
                 clip_selection_strategy=clip_selection_strategy,
                 clip_selection_seed=config.get("clip_seed"),
+                segment_start_seconds=config.get("segment_start_seconds"),
                 run_root=str(runs_root),
                 model_store_root=str(model_store_root),
                 subtitles_root=subtitles_root,

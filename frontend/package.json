@@ -9,11 +9,24 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tanstack/react-table": "^8.20.5",
+    "@tiptap/extension-color": "^3.21.0",
+    "@tiptap/extension-font-family": "^3.21.0",
+    "@tiptap/extension-highlight": "^3.21.0",
+    "@tiptap/extension-text-align": "^3.21.0",
+    "@tiptap/extension-text-style": "^3.21.0",
+    "@tiptap/extension-underline": "^3.21.0",
+    "@tiptap/pm": "^3.21.0",
+    "@tiptap/react": "^3.21.0",
+    "@tiptap/starter-kit": "^3.21.0",
+    "@wavesurfer/react": "^1.0.12",
+    "docx": "^9.6.1",
+    "jszip": "^3.10.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
     "recharts": "^2.13.3",
-    "@tanstack/react-table": "^8.20.5"
+    "wavesurfer.js": "^7.12.5"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

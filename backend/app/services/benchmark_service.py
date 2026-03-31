@@ -231,6 +231,7 @@ def run_job(job_id: str) -> None:
             "evaluation_mode": req_data.get("evaluation_mode", "synthetic"),
             "clip_strategy": req_data.get("clip_strategy", "random"),
             "clip_seed": req_data.get("clip_seed"),
+            "segment_start_seconds": req_data.get("segment_start_seconds"),
             "runs_root": str(RUNS_ROOT),
             "subtitles_root": str(SUBTITLES_ROOT),
             "model_store_root": str(MODEL_STORE_ROOT),

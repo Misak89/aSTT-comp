@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from 'react'
 import { api } from '../api/client'
-import type { LibraryItem, LatestResult, YTSearchResult } from '../types'
+import type { LibraryItem, LatestResult, YTSearchResult, LocalFileEntry } from '../types'
 import { WerBadge } from '../components/WerBadge'
+import { listTranscripts, deleteTranscript as deleteLsTranscript, type TranscriptEntry } from '../components/transcribe/useTranscribeStorage'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -39,11 +40,12 @@ function fmtDate(d: string) {
   return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`
 }
 
+const PRIORITY_LANGS = new Set(['cs', 'en', 'sk', 'de', 'pl', 'ru', 'uk'])
+
 function LangBadge({ code }: { code: string }) {
-  const cs = code === 'cs' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'
+  const color = code === 'cs' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'
   return (
-    <span className={`px-1.5 py-0.5 rounded font-mono font-bold text-xs ${cs}`}
-      title={LANG_LABELS[code] ?? code}>
+    <span className={`px-1 py-0.5 rounded font-mono font-bold text-xs ${color}`} title={LANG_LABELS[code] ?? code}>
       {code.toUpperCase()}
     </span>
   )
@@ -97,6 +99,19 @@ const LIB_SORT_COLUMNS: Array<{ key: LibrarySortKey; label: string; align: strin
   { key: 'added_at', label: 'Datum', align: 'text-left' },
   { key: 'wer', label: 'Nejlepší WER', align: 'text-left' },
 ]
+
+const LIB_SETTINGS_KEY = 'astt_library_settings_v1'
+
+function loadLibrarySettings(): { sortOrder?: LibrarySortKey[]; sortDirMap?: Record<LibrarySortKey, 'asc' | 'desc'> } {
+  try { return JSON.parse(localStorage.getItem(LIB_SETTINGS_KEY) ?? '{}') } catch { return {} }
+}
+
+function saveLibrarySettings(s: { sortOrder?: LibrarySortKey[]; sortDirMap?: Record<LibrarySortKey, 'asc' | 'desc'> }) {
+  try {
+    const cur = loadLibrarySettings()
+    localStorage.setItem(LIB_SETTINGS_KEY, JSON.stringify({ ...cur, ...s }))
+  } catch { /* ignore */ }
+}
 
 const LIB_SORT_DEFAULT_DIR: Record<LibrarySortKey, 'asc' | 'desc'> = {
   title: 'asc',
@@ -407,6 +422,240 @@ function SearchResultRow({
   )
 }
 
+function SubtitleLangsCell({ langs }: { langs: string[] }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!langs || langs.length === 0) return <span className="text-gray-400">–</span>
+
+  const priority = langs.filter(l => PRIORITY_LANGS.has(l))
+  const rest = langs.filter(l => !PRIORITY_LANGS.has(l))
+
+  return (
+    <div className="flex flex-wrap gap-0.5 items-center">
+      {priority.map(l => <LangBadge key={l} code={l} />)}
+      {rest.length > 0 && !expanded && (
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); setExpanded(true) }}
+          className="text-[10px] text-gray-400 hover:text-blue-500 hover:underline px-0.5"
+          title={`Ostatní: ${rest.join(', ')}`}
+        >+{rest.length}</button>
+      )}
+      {rest.length > 0 && expanded && (
+        <>
+          {rest.map(l => <LangBadge key={l} code={l} />)}
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); setExpanded(false) }}
+            className="text-[10px] text-gray-400 hover:underline px-0.5"
+          >méně</button>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── LocalImportPanel ─────────────────────────────────────────────────────────
+
+function fmtSize(bytes: number) {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${bytes} B`
+}
+
+function LocalImportPanel({ onImported }: { onImported: () => void }) {
+  const [dirPath, setDirPath] = useState('')
+  const [scanning, setScanning] = useState(false)
+  const [scanError, setScanError] = useState('')
+  const [files, setFiles] = useState<LocalFileEntry[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [titleMap, setTitleMap] = useState<Record<string, string>>({})
+  const [langMap, setLangMap] = useState<Record<string, string>>({})
+  const [importing, setImporting] = useState<Set<string>>(new Set())
+  const [imported, setImported] = useState<Set<string>>(new Set())
+  const [importMsg, setImportMsg] = useState<Record<string, string>>({})
+
+  async function doScan() {
+    const path = dirPath.trim()
+    if (!path) return
+    setScanning(true); setScanError(''); setFiles([]); setSelected(new Set())
+    setTitleMap({}); setLangMap({}); setImported(new Set()); setImportMsg({})
+    try {
+      const result = await api.library.scanDirectory(path)
+      setFiles(result)
+      const titles: Record<string, string> = {}
+      const langs: Record<string, string> = {}
+      for (const f of result) {
+        titles[f.path] = f.filename.replace(/\.[^.]+$/, '')
+        langs[f.path] = 'cs'
+      }
+      setTitleMap(titles)
+      setLangMap(langs)
+    } catch (e: unknown) {
+      setScanError(e instanceof Error ? e.message : String(e))
+    }
+    setScanning(false)
+  }
+
+  function toggleSelect(path: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    if (selected.size === files.length) setSelected(new Set())
+    else setSelected(new Set(files.map(f => f.path)))
+  }
+
+  async function doImport() {
+    const toImport = files.filter(f => selected.has(f.path) && !imported.has(f.path))
+    if (!toImport.length) return
+    for (const f of toImport) {
+      setImporting(prev => new Set([...prev, f.path]))
+      setImportMsg(prev => ({ ...prev, [f.path]: 'Importuji...' }))
+      try {
+        const title = (titleMap[f.path] || f.filename).trim() || f.filename
+        const lang = langMap[f.path] || 'cs'
+        await api.library.importLocalFile(f.path, ensureLanguagePrefix(title, lang), lang)
+        setImported(prev => new Set([...prev, f.path]))
+        setImportMsg(prev => ({ ...prev, [f.path]: '✓ Přidáno' }))
+      } catch (e: unknown) {
+        setImportMsg(prev => ({ ...prev, [f.path]: `Chyba: ${e instanceof Error ? e.message : String(e)}` }))
+      }
+      setImporting(prev => { const n = new Set(prev); n.delete(f.path); return n })
+    }
+    onImported()
+  }
+
+  const selectedNotImported = files.filter(f => selected.has(f.path) && !imported.has(f.path))
+
+  return (
+    <div className="bg-white rounded border border-gray-200 p-4 mb-6">
+      <h2 className="text-sm font-bold text-gray-700 mb-3">Importovat ze složky / hledat audio na disku</h2>
+
+      <div className="flex gap-2 items-end mb-3">
+        <div className="flex flex-col gap-1 flex-1">
+          <label className="text-xs text-gray-500">Cesta ke složce (např. C:\Users\...)</label>
+          <input
+            value={dirPath}
+            onChange={e => setDirPath(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') void doScan() }}
+            placeholder="C:\Users\adamf\Záznamy"
+            className="border rounded px-2 py-1 text-sm font-mono"
+          />
+        </div>
+        <button
+          onClick={() => void doScan()}
+          disabled={scanning || !dirPath.trim()}
+          className="bg-gray-700 text-white px-4 py-1.5 rounded text-sm disabled:opacity-50 whitespace-nowrap"
+        >
+          {scanning ? 'Hledám...' : 'Prohledat'}
+        </button>
+      </div>
+
+      {scanError && <p className="text-red-600 text-xs mb-2">{scanError}</p>}
+
+      {files.length > 0 && (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-gray-500">
+              Nalezeno {files.length} souborů — zaškrtněte pro import
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={toggleAll}
+                className="text-xs text-blue-500 hover:underline"
+              >
+                {selected.size === files.length ? 'Odznačit vše' : 'Vybrat vše'}
+              </button>
+              <button
+                onClick={() => void doImport()}
+                disabled={selectedNotImported.length === 0}
+                className="bg-blue-600 text-white text-xs px-3 py-1 rounded disabled:opacity-50"
+              >
+                Přidat vybrané ({selectedNotImported.length})
+              </button>
+            </div>
+          </div>
+
+          <div className="max-h-72 overflow-y-auto border border-gray-100 rounded">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-500 sticky top-0">
+                <tr>
+                  <th className="px-2 py-1 w-6"></th>
+                  <th className="px-2 py-1 text-left">Soubor</th>
+                  <th className="px-2 py-1 text-left w-20">Délka</th>
+                  <th className="px-2 py-1 text-left w-16">Velikost</th>
+                  <th className="px-2 py-1 text-left w-48">Název v knihovně</th>
+                  <th className="px-2 py-1 text-left w-16">Jazyk</th>
+                  <th className="px-2 py-1 w-16"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {files.map(f => (
+                  <tr key={f.path} className={`border-t border-gray-100 ${selected.has(f.path) ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
+                    <td className="px-2 py-1 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(f.path)}
+                        disabled={imported.has(f.path)}
+                        onChange={() => toggleSelect(f.path)}
+                      />
+                    </td>
+                    <td className="px-2 py-1 font-mono text-gray-700 max-w-[200px] truncate" title={f.path}>
+                      {f.filename}
+                    </td>
+                    <td className="px-2 py-1 text-gray-500">
+                      {f.duration_seconds != null ? fmtDuration(f.duration_seconds) : '–'}
+                    </td>
+                    <td className="px-2 py-1 text-gray-500">{fmtSize(f.size_bytes)}</td>
+                    <td className="px-2 py-1">
+                      <input
+                        value={titleMap[f.path] ?? ''}
+                        onChange={e => setTitleMap(prev => ({ ...prev, [f.path]: e.target.value }))}
+                        disabled={imported.has(f.path)}
+                        className="border rounded px-1 py-0 text-xs w-full disabled:bg-gray-50"
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <select
+                        value={langMap[f.path] ?? 'cs'}
+                        onChange={e => setLangMap(prev => ({ ...prev, [f.path]: e.target.value }))}
+                        disabled={imported.has(f.path)}
+                        className="border rounded px-1 py-0 text-xs w-full disabled:bg-gray-50"
+                      >
+                        {LANGS.map(l => <option key={l} value={l}>{l.toUpperCase()}</option>)}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1 text-center whitespace-nowrap">
+                      {imported.has(f.path)
+                        ? <span className="text-green-600 font-medium">✓</span>
+                        : importing.has(f.path)
+                          ? <span className="text-gray-400">...</span>
+                          : importMsg[f.path]
+                            ? <span className="text-red-500" title={importMsg[f.path]}>!</span>
+                            : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {!scanning && files.length === 0 && dirPath && !scanError && (
+        <p className="text-xs text-gray-400">Žádné audio/video soubory nenalezeny.</p>
+      )}
+    </div>
+  )
+}
+
 // ── LibraryPage ───────────────────────────────────────────────────────────────
 
 export function LibraryPage() {
@@ -420,10 +669,14 @@ export function LibraryPage() {
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
   const [showSearch, setShowSearch] = useState(false)
-  const [sortOrder, setSortOrder] = useState<LibrarySortKey[]>(['added_at'])
+  const [showLocalImport, setShowLocalImport] = useState(false)
+  const [showLsArchive, setShowLsArchive] = useState(false)
+  const [lsArchive, setLsArchive] = useState<TranscriptEntry[]>([])
+  const [sortOrder, setSortOrder] = useState<LibrarySortKey[]>(() => loadLibrarySettings().sortOrder ?? ['added_at'])
   const [sortDirMap, setSortDirMap] = useState<Record<LibrarySortKey, 'asc' | 'desc'>>(
-    () => ({ ...LIB_SORT_DEFAULT_DIR }),
+    () => ({ ...LIB_SORT_DEFAULT_DIR, ...(loadLibrarySettings().sortDirMap ?? {}) }),
   )
+  const [fetchingMeta, setFetchingMeta] = useState(false)
   const [editingVideoId, setEditingVideoId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [savingVideoId, setSavingVideoId] = useState<string | null>(null)
@@ -431,15 +684,19 @@ export function LibraryPage() {
   const [refreshingMetadata, setRefreshingMetadata] = useState(false)
 
   function toggleSortPriority(col: LibrarySortKey) {
-    setSortOrder(prev => (
-      prev.includes(col)
-        ? prev.filter(k => k !== col)
-        : [...prev, col]
-    ))
+    setSortOrder(prev => {
+      const next = prev.includes(col) ? prev.filter(k => k !== col) : [...prev, col]
+      saveLibrarySettings({ sortOrder: next })
+      return next
+    })
   }
 
   function toggleSortDirection(col: LibrarySortKey) {
-    setSortDirMap(prev => ({ ...prev, [col]: prev[col] === 'asc' ? 'desc' : 'asc' }))
+    setSortDirMap(prev => {
+      const next = { ...prev, [col]: prev[col] === 'asc' ? 'desc' as const : 'asc' as const }
+      saveLibrarySettings({ sortDirMap: next })
+      return next
+    })
   }
 
   const sortedItems = [...items].sort((a, b) => {
@@ -505,6 +762,25 @@ export function LibraryPage() {
   function extractVideoId(url: string): string {
     const m = url.match(/[?&]v=([^&]+)/) || url.match(/youtu\.be\/([^?]+)/)
     return m ? m[1] : url.trim()
+  }
+
+  async function handleUrlBlur() {
+    const url = addUrl.trim()
+    if (!url || !url.includes('youtube') && !url.includes('youtu.be')) return
+    if (addTitle) return  // already has title — don't overwrite
+    setFetchingMeta(true)
+    setMsg('Načítám název...')
+    try {
+      const info = await api.library.fetchVideoInfo(url)
+      if (info.title) {
+        const title = ensureLanguagePrefix(info.title, info.language || 'cs')
+        setAddTitle(title)
+        setMsg('')
+      }
+    } catch {
+      setMsg('Nepodařilo se načíst název — vyplňte ručně.')
+    }
+    setFetchingMeta(false)
   }
 
   async function addVideo() {
@@ -707,11 +983,27 @@ export function LibraryPage() {
               : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'}`}>
             {showSearch ? '▲ Skrýt hledání' : '🔍 Hledat na YouTube'}
           </button>
+          <button onClick={() => setShowLocalImport(v => !v)}
+            className={`text-sm px-3 py-1.5 rounded border ${showLocalImport
+              ? 'bg-green-600 text-white border-green-600'
+              : 'bg-white text-green-700 border-green-300 hover:bg-green-50'}`}>
+            {showLocalImport ? '▲ Skrýt import' : '📂 Ze složky'}
+          </button>
+          <button
+            onClick={() => { setLsArchive(listTranscripts()); setShowLsArchive(true) }}
+            className="text-sm px-3 py-1.5 rounded border bg-white text-purple-700 border-purple-300 hover:bg-purple-50"
+            title="Uložené přepisy v LocalStorage prohlížeče"
+          >
+            📝 Přepisy ({listTranscripts().length})
+          </button>
         </div>
       </div>
 
       {/* YouTube search panel */}
       {showSearch && <SearchPanel onAddVideo={load} />}
+
+      {/* Local file import panel */}
+      {showLocalImport && <LocalImportPanel onImported={load} />}
 
       {/* Přidat video ručně */}
       <div className="bg-white rounded border border-gray-200 p-4 mb-6 flex gap-3 items-end flex-wrap">
@@ -721,11 +1013,13 @@ export function LibraryPage() {
             placeholder="Název videa" className="border rounded px-2 py-1 text-sm w-64" />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">YouTube URL</label>
-          <input value={addUrl} onChange={e => setAddUrl(e.target.value)}
+          <label className="text-xs text-gray-500">YouTube URL {fetchingMeta && <span className="text-blue-500">načítám...</span>}</label>
+          <input value={addUrl}
+            onChange={e => setAddUrl(e.target.value)}
+            onBlur={() => { void handleUrlBlur() }}
             placeholder="https://www.youtube.com/watch?v=..." className="border rounded px-2 py-1 text-sm w-80" />
         </div>
-        <button onClick={addVideo} disabled={loading || !addUrl || !addTitle}
+        <button onClick={addVideo} disabled={loading || fetchingMeta || !addUrl || !addTitle}
           className="bg-blue-600 text-white px-4 py-1.5 rounded text-sm disabled:opacity-50">
           Přidat ručně
         </button>
@@ -743,7 +1037,7 @@ export function LibraryPage() {
                 const active = idx >= 0
                 const dir = sortDirMap[key]
                 return (
-                  <th key={key} className={`px-4 py-2 ${align} select-none`}>
+                  <th key={key} className={`px-2 py-2 ${align} select-none`}>
                     <label className="inline-flex items-center gap-1">
                       <input
                         type="checkbox"
@@ -764,7 +1058,7 @@ export function LibraryPage() {
                   </th>
                 )
               })}
-              <th className="px-4 py-2"></th>
+              <th className="px-2 py-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -784,7 +1078,7 @@ export function LibraryPage() {
                       title={item.visible_in_menus !== false ? 'Zobrazuje se v ostatních výběrových menu' : 'Skryto v ostatních výběrových menu'}
                     />
                   </td>
-                  <td className="px-4 py-2 font-medium text-gray-800 max-w-xs" title={item.title}>
+                  <td className="px-2 py-2 font-medium text-gray-800 max-w-xs" title={item.title}>
                     {editingVideoId === item.video_id ? (
                       <div className="flex items-center gap-2">
                         <input
@@ -830,24 +1124,22 @@ export function LibraryPage() {
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-2 py-2">
                     <LangBadge code={item.language} />
                   </td>
-                  <td className="px-4 py-2 text-gray-500">
+                  <td className="px-2 py-2 text-gray-500">
                     {item.duration_seconds ? fmtDuration(item.duration_seconds) : '–'}
                   </td>
-                  <td className="px-4 py-2 text-gray-500">
+                  <td className="px-2 py-2 text-gray-500">
                     {item.genre ? <span title={item.genre}>{item.genre}</span> : '–'}
                   </td>
-                  <td className="px-4 py-2 text-gray-500">
+                  <td className="px-2 py-2 text-gray-500">
                     {typeof item.view_count === 'number' ? fmtViews(item.view_count) : '–'}
                   </td>
-                  <td className="px-4 py-2 text-gray-500">
-                    {item.subtitle_languages?.length
-                      ? <span title={item.subtitle_languages.join(', ')}>{item.subtitle_languages.join(', ')}</span>
-                      : '–'}
+                  <td className="px-2 py-2 text-gray-500">
+                    <SubtitleLangsCell langs={item.subtitle_languages ?? []} />
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-2 py-2">
                     {item.subtitles_local
                       ? (
                         <button
@@ -868,24 +1160,24 @@ export function LibraryPage() {
                           className="text-blue-600 underline text-xs">Stáhnout</button>
                       )}
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-2 py-2">
                     {item.audio_cached
                       ? <span className="text-green-600 text-xs font-medium" title="Plné audio staženo v cache">✓ WAV</span>
                       : <span className="text-gray-300 text-xs" title="Audio se stahuje na pozadí…">⏳</span>}
                   </td>
-                  <td className="px-4 py-2 text-gray-500 text-xs">
+                  <td className="px-2 py-2 text-gray-500 text-xs">
                     {item.upload_date
                       ? <span title={`Vydáno: ${item.upload_date}${item.added_at ? `\nPřidáno: ${item.added_at.slice(0, 10)}` : ''}`}>{item.upload_date}</span>
                       : item.added_at
                         ? <span className="text-gray-300" title="Datum vydání se načítá...">přidáno {item.added_at.slice(0, 10)}</span>
                         : '–'}
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-2 py-2">
                     {results[item.video_id]?.[0]
                       ? <WerBadge value={results[item.video_id][0].wer} />
                       : <span className="text-gray-400 text-xs">–</span>}
                   </td>
-                  <td className="px-4 py-2 text-gray-400 text-xs">
+                  <td className="px-2 py-2 text-gray-400 text-xs">
                     {expanded === item.video_id ? '▲' : '▼'}
                   </td>
                 </tr>
@@ -958,6 +1250,56 @@ export function LibraryPage() {
           </tbody>
         </table>
       </div>
+
+      {/* LocalStorage přepisy — archiv modal */}
+      {showLsArchive && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setShowLsArchive(false) }}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3 border-b">
+              <h2 className="font-semibold text-gray-800">Uložené přepisy — LocalStorage ({lsArchive.length})</h2>
+              <button onClick={() => setShowLsArchive(false)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3">
+              {lsArchive.length === 0 && (
+                <div className="text-gray-400 text-sm p-6 text-center">Žádné uložené přepisy</div>
+              )}
+              <div className="space-y-2">
+                {lsArchive.map(t => (
+                  <div key={t.transcript_id} className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-gray-800 truncate">{t.title}</div>
+                      <div className="text-xs text-gray-500 flex flex-wrap gap-3 mt-0.5">
+                        <span>🕐 {new Date(t.updated_at).toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                        {t.source_label && <span>📹 {t.source_label}</span>}
+                        {t.model_id && <span>🤖 {t.model_id}</span>}
+                        {t.range_from && t.range_to && <span>⏱ {t.range_from}–{t.range_to}</span>}
+                      </div>
+                      {t.plain_text && (
+                        <div className="text-xs text-gray-400 mt-1 truncate">{t.plain_text.slice(0, 150)}</div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Smazat "${t.title}"?`)) {
+                          deleteLsTranscript(t.transcript_id)
+                          setLsArchive(prev => prev.filter(e => e.transcript_id !== t.transcript_id))
+                        }
+                      }}
+                      className="px-2.5 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200 flex-shrink-0"
+                    >
+                      Smazat
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t text-xs text-gray-400">
+              Přepisy jsou uloženy v LocalStorage prohlížeče. Pro otevření/editaci použijte stránku Přepis.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

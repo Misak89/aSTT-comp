@@ -6,8 +6,9 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# Runtime (modely, audio, výsledky)
-runtime/
+# Runtime (modely, audio, výsledky) — ignoruj obsah, ale zachovej skeleton adresářů
+runtime/**
+!runtime/**/.gitkeep
 
 # Node
 /node_modules/

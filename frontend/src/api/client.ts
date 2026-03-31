@@ -14,6 +14,8 @@ import type {
   MicMobileLoopPackageResponse,
   MicMobileLoopPackageListResponse,
   MicMobileLoopPackageDeleteResponse,
+  MicSequenceReport,
+  LocalFileEntry,
 } from '../types'
 
 const BASE = '/api'
@@ -78,6 +80,14 @@ export const api = {
       min_views?: number; uploaded_after?: string; audio_langs?: string[];
       subtitle_langs?: string[]; subtitle_type?: string; content_type?: string; categories?: string[];
     }) => post<YTSearchResult[]>('/library/search', params),
+    fetchVideoInfo: (url: string) =>
+      get<{ title: string; language: string; duration_seconds: number | null; uploader: string }>(
+        `/library/video-info?url=${encodeURIComponent(url)}`
+      ),
+    scanDirectory: (path: string) =>
+      post<LocalFileEntry[]>('/library/scan-directory', { path }),
+    importLocalFile: (path: string, title: string, language: string) =>
+      post<LibraryItem>('/library/import-local-file', { path, title, language }),
   },
   benchmark: {
     options: () => get<BenchmarkOptions>('/benchmark/options'),
@@ -143,6 +153,19 @@ export const api = {
     cancelJob: (id: string) => post<TuningJobStatus>(`/tuning/jobs/${id}/cancel`),
     openJobDir: (id: string) => post<{ path: string }>(`/tuning/jobs/${id}/open-dir`),
   },
+  transcribe: {
+    upload: (file: File) => {
+      const fd = new FormData(); fd.append('file', file)
+      return fetch('/api/transcribe/upload', { method: 'POST', body: fd }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json() })
+    },
+    listTranscripts: () => get<{ transcript_id: string; title: string; created_at: string; updated_at: string; source_label?: string; model_id?: string; range_from?: string; range_to?: string; plain_text_preview?: string }[]>('/transcribe/transcripts'),
+    getTranscript: (id: string) => get<{ transcript_id: string; title: string; html: string; created_at: string; updated_at: string; source_label?: string; model_id?: string }>(`/transcribe/transcripts/${id}`),
+    saveTranscript: (req: { title: string; html: string; plain_text: string; transcript_id?: string; source_label?: string; model_id?: string; range_from?: string; range_to?: string }) =>
+      post<{ transcript_id: string; updated_at: string }>('/transcribe/transcripts', req),
+    deleteTranscript: (id: string) => del(`/transcribe/transcripts/${id}`),
+    getSettings: () => get<Record<string, unknown>>('/transcribe/settings'),
+    saveSettings: (settings: Record<string, unknown>) => post<{ ok: boolean }>('/transcribe/settings', settings),
+  },
   mic: {
     devices: () => get<AudioDevice[]>('/mic/devices'),
     createSession: (model_id: string, model_params?: Record<string, unknown>) =>
@@ -178,5 +201,7 @@ export const api = {
     },
     deleteMobileLoopPackage: (packageId: string) =>
       delJson<MicMobileLoopPackageDeleteResponse>(`/mic/mobile-loop-packages/${encodeURIComponent(packageId)}`),
+    getSequenceReport: (token: string) =>
+      get<MicSequenceReport>(`/mic/sequences/${encodeURIComponent(token)}`),
   },
 }

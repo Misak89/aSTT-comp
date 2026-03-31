@@ -85,6 +85,7 @@ export interface BenchmarkJobRequest {
   evaluation_mode?: 'real' | 'synthetic' | 'streaming'
   clip_strategy?: 'random' | 'uniform'
   clip_seed?: number
+  segment_start_seconds?: number
   label?: string
   scenario_id?: string
   model_params?: Record<string, Record<string, unknown>>
@@ -238,6 +239,67 @@ export interface MicMobileLoopPackageListResponse {
 export interface MicMobileLoopPackageDeleteResponse {
   package_id: string
   deleted: boolean
+}
+
+export type MicTrialStatus = 'ok' | 'borderline' | 'too_slow_for_slot' | 'fail'
+
+export interface MicSequenceTrial {
+  seq_index: number | null
+  seq_total: number | null
+  session_id: string
+  model_id: string
+  phase?: string | null
+  status?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  stopped_at: string | null
+  updated_at?: string | null
+  trial_status: MicTrialStatus
+  rtf: number | null
+  elapsed_s: number | null
+  total_audio_s: number | null
+  drop_rate: number | null
+  first_word_latency_ms: number | null
+  first_word_wall_ms: number | null
+  first_word_audio_ms: number | null
+  segment_finalize_ms_p50: number | null
+  segment_finalize_ms_p95: number | null
+  queue_depth_peak_s: number | null
+  backpressure_events: number | null
+  worker_rss_peak_mb: number | null
+  reason_code: string | null
+  error: string | null
+}
+
+export interface MicSequenceSummary {
+  counts?: {
+    ok?: number
+    borderline?: number
+    too_slow_for_slot?: number
+    fail?: number
+  }
+  running?: number
+  finalized?: number
+  reasons?: Record<string, number>
+  avg_rtf?: number | null
+  avg_drop_rate?: number | null
+}
+
+export interface MicSequenceReport {
+  sequence_token: string
+  updated_at: string
+  sequence_total: number | null
+  trials_count: number
+  summary?: MicSequenceSummary
+  trials: MicSequenceTrial[]
+}
+
+export interface LocalFileEntry {
+  path: string
+  filename: string
+  size_bytes: number
+  duration_seconds: number | null
+  ext: string
 }
 
 export interface BenchmarkJobStatus {
