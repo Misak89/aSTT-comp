@@ -68,8 +68,9 @@ interface TranscriptSegment {
 }
 
 interface Props {
-  onAudioReady: (audioUrl: string, sourcePath: string) => void
-  onTranscriptUpdate: (transcript: string) => void
+  onAudioReady: (audioUrl: string, sourcePath?: string) => void
+  onTranscriptUpdate: (transcript: string, audioSecs?: number) => void
+  onJobStop?: () => void
   audioDuration?: number
   onModelChange?: (modelId: string) => void
   onSourceLabelChange?: (label: string) => void
@@ -93,7 +94,7 @@ function parseTime(s: string): number | null {
   return null
 }
 
-export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDuration, onModelChange, onSourceLabelChange }: Props) {
+export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop, audioDuration, onModelChange, onSourceLabelChange }: Props) {
   // Načti uložená nastavení
   const _saved = loadSettings()
 
@@ -135,8 +136,23 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
 
   // --- Diagnostika ---
   const [showDiag, setShowDiag] = useState(true)
+  const [elapsedSec, setElapsedSec] = useState(0)
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Sekundový čítač elapsed pro zobrazení při stagnaci progressu
+  useEffect(() => {
+    if (running && job?.started_at) {
+      elapsedRef.current = setInterval(() => {
+        setElapsedSec(Math.floor((Date.now() - new Date(job.started_at!).getTime()) / 1000))
+      }, 1000)
+    } else {
+      if (elapsedRef.current) clearInterval(elapsedRef.current)
+      setElapsedSec(0)
+    }
+    return () => { if (elapsedRef.current) clearInterval(elapsedRef.current) }
+  }, [running, job?.started_at])
 
   useEffect(() => {
     api.library.list().then(items => {
@@ -177,11 +193,14 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
       isNew: i === newSegments.length - 1,
     })))
 
-    onTranscriptUpdate(newText)
+    // Parsuj audio čas pro auto-timestamp
+    const audioMatch = live?.message?.match(/(\d+(?:\.\d+)?)s\s+zprac/)
+    const audioSecs = audioMatch ? parseFloat(audioMatch[1]) : undefined
+    onTranscriptUpdate(newText, audioSecs)
 
     // Auto-scroll
     setTimeout(() => segmentsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
-  }, [live?.transcript, lastTranscript, onTranscriptUpdate])
+  }, [live?.transcript, live?.message, lastTranscript, onTranscriptUpdate])
 
   const handleUpload = useCallback(async (file: File) => {
     setUploading(true)
@@ -214,6 +233,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
         if (['completed', 'failed', 'cancelled'].includes(jobStatus.status)) {
           clearInterval(pollRef.current!)
           setRunning(false)
+          onJobStop?.()
           // Po dokončení načti finální metriky z run výsledku
           if (jobStatus.status === 'completed' && jobStatus.run_id) {
             api.runs.get(jobStatus.run_id).then(run => {
@@ -239,7 +259,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
         }
       } catch {}
     }, 1200)
-  }, [])
+  }, [onJobStop])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
@@ -289,7 +309,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
         model_ids: [selectedModel],
         setting_ids: ['balanced'],
         evaluation_mode: 'streaming',
-        sample_seconds: rangeMode === 'segment' ? range.durationS : undefined,
+        sample_seconds: rangeMode === 'segment' ? range.durationS : 99999,
         segment_start_seconds: rangeMode === 'segment' && range.startS > 0 ? range.startS : undefined,
         model_params: Object.keys(modelParams).length > 0 ? { [selectedModel]: modelParams } : undefined,
         label: `Přepis: ${selectedModelDesc?.label || selectedModel}${rangeMode === 'segment' ? ` (${rangeFrom}-${rangeTo})` : ''}`,
@@ -306,7 +326,8 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
     if (!job) return
     await api.benchmark.cancelJob(job.job_id).catch(() => {})
     setRunning(false)
-  }, [job])
+    onJobStop?.()
+  }, [job, onJobStop])
 
   const statusColor = (s?: string) => {
     if (s === 'completed') return 'text-green-400'
@@ -480,10 +501,18 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
             <span className="text-gray-400">{job.progress_percent}%</span>
           </div>
           <div className="h-1.5 bg-gray-700 rounded overflow-hidden">
-            <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${job.progress_percent}%` }} />
+            {running && job.progress_percent != null && job.progress_percent < 20 && elapsedSec > 10
+              ? <div className="h-full bg-blue-500 animate-pulse" style={{ width: '15%' }} />
+              : <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${job.progress_percent}%` }} />
+            }
           </div>
           {job.progress_message && (
             <div className="text-xs text-gray-500 mt-0.5 truncate">{job.progress_message}</div>
+          )}
+          {running && elapsedSec > 10 && (job.progress_percent ?? 0) < 20 && (
+            <div className="text-xs text-yellow-500 mt-0.5 animate-pulse">
+              ⏳ Zpracovávám audio… {Math.floor(elapsedSec / 60) > 0 ? `${Math.floor(elapsedSec / 60)}min ` : ''}{elapsedSec % 60}s
+            </div>
           )}
         </div>
       )}
@@ -501,7 +530,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, audioDura
               {/* ETA */}
               {eta && running && (
                 <div className="bg-blue-900/30 rounded px-2 py-1 text-blue-300 flex justify-between">
-                  <span>Odhad dokončení:</span>
+                  <span>Odhad dokončení: <span className="text-blue-500 text-xs">(přepočítáván každé 3 min.)</span></span>
                   <span className="font-bold">{eta}</span>
                 </div>
               )}

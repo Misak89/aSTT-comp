@@ -82,7 +82,9 @@ def list_items() -> list[LibraryItem]:
             upload_date=r.get("upload_date"),
             view_count=r.get("view_count"),
             metadata_fetched_at=r.get("metadata_fetched_at"),
-            audio_cached=(AUDIO_CACHE_ROOT / f"{video_id}.wav").exists(),
+            audio_cached=(_wav := AUDIO_CACHE_ROOT / f"{video_id}.wav").exists(),
+            audio_size_bytes=_wav.stat().st_size if _wav.exists() else None,
+            audio_duration_seconds=r.get("audio_duration_seconds"),
         ))
     return result
 
@@ -177,6 +179,27 @@ def _fetch_video_metadata(video_id: str, url: str) -> dict:
         metadata["genre"] = str(categories[0]).strip()
 
     return metadata
+
+
+def fetch_video_info(url: str) -> dict:
+    """Načte základní info o YouTube videu (title, language, duration) pro preview před přidáním."""
+    ensure_online_allowed(
+        component="backend.app.services.library_service",
+        action="fetch_video_info",
+        reason="yt-dlp čte název a základní metadata videa",
+        target=url,
+        details={},
+    )
+    import yt_dlp as _yt
+    with _yt.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+    lang = _normalize_language(info.get("language")) or "cs"
+    return {
+        "title": info.get("title") or "",
+        "language": lang,
+        "duration_seconds": round(float(info["duration"]), 1) if isinstance(info.get("duration"), (int, float)) else None,
+        "uploader": info.get("uploader") or info.get("channel") or "",
+    }
 
 
 def _fetch_and_save_upload_date(video_id: str, url: str) -> None:
@@ -702,6 +725,109 @@ def search_youtube(
     # Seřaď podle view_count desc
     results.sort(key=lambda r: r.get("view_count", 0), reverse=True)
     return results[:max_results]
+
+
+_AUDIO_EXTS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".opus", ".aac"}
+_VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts", ".m2ts"}
+_LOCAL_EXTS = _AUDIO_EXTS | _VIDEO_EXTS
+
+
+def _probe_duration(path: Path) -> Optional[float]:
+    """Pokusí se zjistit délku souboru. Vrátí None pokud nelze."""
+    if path.suffix.lower() == ".wav":
+        try:
+            import wave as _wave
+            with _wave.open(str(path), "rb") as wf:
+                return round(wf.getnframes() / max(1, wf.getframerate()), 1)
+        except Exception:
+            pass
+    # Pro ostatní formáty zkus ffprobe
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
+        )
+        val = result.stdout.strip()
+        if val and val not in ("N/A", ""):
+            return round(float(val), 1)
+    except Exception:
+        pass
+    return None
+
+
+def scan_directory(dir_path: str, recursive: bool = False) -> list[dict]:
+    """Prohledá adresář a vrátí seznam audio/video souborů."""
+    root = Path(dir_path)
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Adresář neexistuje nebo není složka: {dir_path}")
+    pattern = "**/*" if recursive else "*"
+    entries = []
+    for p in sorted(root.glob(pattern)):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in _LOCAL_EXTS:
+            continue
+        entries.append({
+            "path": str(p),
+            "filename": p.name,
+            "size_bytes": p.stat().st_size,
+            "duration_seconds": _probe_duration(p),
+            "ext": p.suffix.lower().lstrip("."),
+        })
+    return entries
+
+
+def import_local_file(file_path: str, title: str, language: str = "cs") -> LibraryItem:
+    """Importuje lokální audio/video soubor do knihovny."""
+    import hashlib
+    p = Path(file_path)
+    if not p.exists() or not p.is_file():
+        raise ValueError(f"Soubor neexistuje: {file_path}")
+    # Stabilní video_id z absolutní cesty
+    h = hashlib.sha1(str(p.resolve()).encode("utf-8")).hexdigest()[:8]
+    video_id = f"local_{h}"
+    url = p.resolve().as_uri()  # file:///...
+    duration_seconds = _probe_duration(p)
+
+    req = UpsertLibraryItemRequest(
+        video_id=video_id,
+        title=title,
+        url=url,
+        duration_seconds=duration_seconds,
+        language=language,
+        visible_in_menus=True,
+    )
+    # Lokální soubory — metadata přes yt-dlp nedělají smysl, vložíme přímo.
+    with _ITEMS_LOCK:
+        raw = _load_raw()
+        existing_map = {r["video_id"]: r for r in raw}
+        prev = existing_map.get(video_id, {})
+        merged: dict = {
+            "video_id": video_id,
+            "title": title,
+            "url": url,
+            "duration_seconds": duration_seconds if duration_seconds is not None else prev.get("duration_seconds"),
+            "language": language,
+            "genre": prev.get("genre"),
+            "visible_in_menus": True,
+            "upload_date": prev.get("upload_date"),
+            "view_count": prev.get("view_count"),
+            "subtitle_manual": prev.get("subtitle_manual", []),
+            "subtitle_auto": prev.get("subtitle_auto", []),
+            "subtitle_languages": prev.get("subtitle_languages", []),
+            "metadata_fetched_at": prev.get("metadata_fetched_at"),
+            "added_at": prev.get("added_at") or datetime.now(timezone.utc).isoformat(),
+        }
+        existing_map[video_id] = merged
+        _save_raw(list(existing_map.values()))
+
+    items = list_items()
+    for item in items:
+        if item.video_id == video_id:
+            return item
+    raise RuntimeError("Import se nezdařil")
 
 
 def _list_subtitle_files(video_id: str) -> list[SubtitleFile]:

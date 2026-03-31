@@ -229,6 +229,11 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
     sample_seconds = config.get("sample_seconds", 120)
     model_params_cfg = config.get("model_params") or {}
 
+    # Zjisti cestu k audio_cache — použije se pro fallback na lokální WAV
+    from pathlib import Path as _Path
+    _repo_root = _Path(__file__).parent.parent
+    _audio_cache_root = _repo_root / "runtime" / "audio_cache"
+
     # Settings s parametry — každé má vlastní chunk_seconds, threads, beam_size atd.
     settings = config.get("settings") or [{"id": "balanced", "label": "Balanced (30s)", "chunk_seconds": 30, "threads": 4}]
 
@@ -277,6 +282,27 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                 def _run_progress_cb(msg: str, _pct: int | None = None, _p=pct_start):
                     progress_cb(msg, _pct if _pct is not None else _p)
 
+                # Lokální WAV: buď zdroj je přímo .wav soubor,
+                # nebo máme cached audio pro toto video_id
+                _cached_wav = _audio_cache_root / f"{source.video_id}.wav" if source.video_id else None
+                is_local_wav = (
+                    (source.origin_type == "local_file" and source.value and source.value.lower().endswith(".wav"))
+                    or (_cached_wav is not None and _cached_wav.exists())
+                )
+                if is_local_wav and _cached_wav and _cached_wav.exists() and not (
+                    source.origin_type == "local_file" and source.value and source.value.lower().endswith(".wav")
+                ):
+                    # Nahraď URL lokálním WAV
+                    from packages.ingest.source_resolver import SourceEntry as _SE
+                    source = _SE(
+                        source_id=source.source_id,
+                        label=source.label,
+                        origin_type="local_file",
+                        value=str(_cached_wav),
+                        exists=True,
+                        canonical_url=source.canonical_url,
+                        video_id=source.video_id,
+                    )
                 cfg = StreamingRunConfig(
                     model_id=model_id,
                     model_params=params,
@@ -286,12 +312,13 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                     chunk_seconds=chunk_seconds,
                     progress_callback=_run_progress_cb,
                     transcript_callback=transcript_cb,
+                    source_wav_path=source.value if is_local_wav else None,
                 )
 
                 try:
                     result = run_streaming_benchmark(
                         source=source,
-                        audio_generator=stream_youtube_audio(
+                        audio_generator=None if is_local_wav else stream_youtube_audio(
                             source.canonical_url or source.value,
                             chunk_seconds=0.1,
                             max_seconds=float(sample_seconds),

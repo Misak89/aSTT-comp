@@ -6,7 +6,7 @@ import { ResultsPage } from './pages/ResultsPage'
 import { ModelsPage } from './pages/ModelsPage'
 import { TuningPage } from './pages/TuningPage'
 import { HWFlowPage } from './pages/HWFlowPage'
-import { TranscribePage } from './pages/TranscribePage'
+import { DashboardPage } from './pages/DashboardPage'
 
 export default function App() {
   return (
@@ -19,10 +19,12 @@ export default function App() {
           <Route path="results" element={<ResultsPage />} />
           <Route path="tuning" element={<TuningPage />} />
           <Route path="models" element={<ModelsPage />} />
-          <Route path="prepis" element={<TranscribePage />} />
+          {/* TranscribePage is always mounted in Layout — route renders empty placeholder */}
+          <Route path="prepis" element={<></>} />
           <Route path="hwflow" element={<HWFlowPage />} />
           <Route path="hw-flow" element={<HWFlowPage />} />
           <Route path="HWFlow" element={<HWFlowPage />} />
+          <Route path="dashboard" element={<DashboardPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

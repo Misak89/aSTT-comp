@@ -28,6 +28,8 @@ class LibraryItem(BaseModel):
     view_count: Optional[int] = None
     metadata_fetched_at: Optional[str] = None  # datum kdy jsme metadata naposledy načetli
     audio_cached: bool = False  # True pokud je full WAV v runtime/audio_cache/
+    audio_size_bytes: Optional[int] = None   # velikost WAV souboru v bajtech
+    audio_duration_seconds: Optional[float] = None  # délka WAV v sekundách
 
 
 class LatestResult(BaseModel):
@@ -57,3 +59,21 @@ class UpsertLibraryItemRequest(BaseModel):
 
 class UpdateLibraryVisibilityRequest(BaseModel):
     visible_in_menus: bool
+
+
+class ScanDirectoryRequest(BaseModel):
+    path: str
+
+
+class LocalFileEntry(BaseModel):
+    path: str
+    filename: str
+    size_bytes: int
+    duration_seconds: Optional[float] = None
+    ext: str
+
+
+class ImportLocalFileRequest(BaseModel):
+    path: str
+    title: str
+    language: str = "cs"

@@ -18,6 +18,8 @@ import type {
   LibraryItem,
   MicMobileLoopPackageResponse,
   MicMobileLoopPackageListItem,
+  MicSequenceReport,
+  MicTrialStatus,
 } from '../types'
 import { api } from '../api/client'
 import { ModelParamsForm } from './ModelParamsForm'
@@ -40,6 +42,7 @@ type MicMetrics = {
   rtf?: number
   elapsed_s?: number
   processing_ms_p95?: number
+  segment_finalize_ms_p50?: number
   segment_finalize_ms_p95?: number
   capture_jitter_ms_p95?: number
   capture_lag_ms_p95?: number
@@ -66,7 +69,15 @@ type SavedWebMicResult = {
   rtf?: number
   drop_rate?: number
   reason_code?: string | null
+  first_word_wall_ms?: number | null
+  p50_fin_ms?: number | null
+  p95_fin_ms?: number | null
+  q_peak_s?: number | null
+  rss_peak_mb?: number | null
+  trial_status?: 'ok' | 'borderline' | 'too_slow_for_slot' | 'fail' | null
   mobile_loop_package_id?: string | null
+  sequence_token?: string | null
+  sequence_index?: number | null
 }
 
 type AutoModelSequenceMeta = {
@@ -78,6 +89,8 @@ type AutoModelSequenceMeta = {
 type ActiveSessionLoopConfig = {
   enabled: boolean
   speechS: number | null
+  captureSpeechS: number | null
+  earlyStopS: number | null
   pauseS: number | null
   syncFirstRound: boolean | null
   measuredRounds: number | null
@@ -87,6 +100,21 @@ type ActiveSessionLoopConfig = {
 
 type HistoryModeFilter = 'all' | 'free_speech' | 'reference_video'
 type HistorySortKey = 'saved_at' | 'model_id' | 'mic_test_mode' | 'reference_label' | 'rtf' | 'drop_rate'
+
+function computeTrialStatus(
+  drop: number | undefined,
+  rtf: number | undefined,
+  fwMs: number | undefined | null,
+  qPeakS: number | undefined | null,
+  error?: string | null,
+): 'ok' | 'borderline' | 'too_slow_for_slot' | 'fail' {
+  const d = drop ?? 0
+  const q = qPeakS ?? 0
+  if (d > 0.35 || (fwMs != null && fwMs > 10000) || q > 3.0 || Boolean(error?.trim())) return 'fail'
+  if ((fwMs != null && fwMs > 10000) || q > 3.0) return 'too_slow_for_slot'
+  if (d > 0.10 || (rtf ?? 0) > 0.8 || (fwMs != null && fwMs > 5000)) return 'borderline'
+  return 'ok'
+}
 
 const WS_BASE = `ws://${window.location.host}`
 const SAMPLE_RATE = 16000
@@ -242,6 +270,7 @@ type MicUiPersistedState = {
   historySortOrder: HistorySortKey[]
   showAllHistory: boolean
   mobileLoopEnabled: boolean
+  mobileLoopEarlyStopSeconds: number
   mobileLoopPauseSeconds: number
   mobileLoopSyncFirstRound: boolean
   mobileLoopRepeatCount: number
@@ -437,6 +466,9 @@ export function MicSession({ availableModels, library }: Props) {
   const [mobileLoopEnabled, setMobileLoopEnabled] = useState(
     typeof persistedUi.mobileLoopEnabled === 'boolean' ? persistedUi.mobileLoopEnabled : true,
   )
+  const [mobileLoopEarlyStopSeconds, setMobileLoopEarlyStopSeconds] = useState(
+    asFiniteNumberOr(persistedUi.mobileLoopEarlyStopSeconds, 0),
+  )
   const [mobileLoopPauseSeconds, setMobileLoopPauseSeconds] = useState(asFiniteNumberOr(persistedUi.mobileLoopPauseSeconds, 15))
   const [mobileLoopSyncFirstRound, setMobileLoopSyncFirstRound] = useState(
     typeof persistedUi.mobileLoopSyncFirstRound === 'boolean' ? persistedUi.mobileLoopSyncFirstRound : true,
@@ -456,6 +488,8 @@ export function MicSession({ availableModels, library }: Props) {
   const [expandedMobileLoopPackageIds, setExpandedMobileLoopPackageIds] = useState<string[]>([])
   const [recordingStartedAtPerfMs, setRecordingStartedAtPerfMs] = useState<number | null>(null)
   const [recordingElapsedS, setRecordingElapsedS] = useState(0)
+  const [seqReport, setSeqReport] = useState<MicSequenceReport | null>(null)
+  const [seqReportToken, setSeqReportToken] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const saveGuardRef = useRef<Set<string>>(new Set())
@@ -472,6 +506,8 @@ export function MicSession({ availableModels, library }: Props) {
   const activeSessionLoopConfigRef = useRef<ActiveSessionLoopConfig>({
     enabled: false,
     speechS: null,
+    captureSpeechS: null,
+    earlyStopS: null,
     pauseS: null,
     syncFirstRound: null,
     measuredRounds: null,
@@ -481,6 +517,7 @@ export function MicSession({ availableModels, library }: Props) {
   const autoModelSequenceTokenRef = useRef<string | null>(null)
   const autoModelAdvanceLockRef = useRef(false)
   const autoModelAdvanceTimerRef = useRef<number | null>(null)
+  const autoModelRetryCountRef = useRef(0)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
@@ -511,15 +548,18 @@ export function MicSession({ availableModels, library }: Props) {
   const clipToS = Math.max(clipFromS + 1, Number.isFinite(referenceClipToS) ? referenceClipToS : clipFromS + 33)
   const clipDurationS = Math.max(1, clipToS - clipFromS)
   const loopSpeechS = clipDurationS
+  const loopEarlyStopMaxS = Math.max(0, loopSpeechS - 1)
+  const loopEarlyStopS = Math.max(0, Math.min(loopEarlyStopMaxS, Number.isFinite(mobileLoopEarlyStopSeconds) ? mobileLoopEarlyStopSeconds : 0))
+  const loopCaptureSpeechS = Math.max(1, loopSpeechS - loopEarlyStopS)
   const loopPauseS = Math.max(0, Math.min(3600, Math.floor(mobileLoopPauseSeconds) || 15))
   const loopRepeatCount = Math.max(1, Math.min(200, Math.floor(mobileLoopRepeatCount) || 1))
   const loopSyncRounds = mobileLoopSyncFirstRound ? 1 : 0
   const loopCycleS = Math.max(1, loopSpeechS + loopPauseS)
   const loopTotalRounds = loopSyncRounds + loopRepeatCount
   const loopPlanS = loopCycleS * loopTotalRounds
-  const autoModelLeadStartSeconds = 1.5
+  const autoModelLeadStartSeconds = 2.5
   const autoModelPreparationSeconds = 10
-  const autoModelHardTrialSeconds = Math.min(65, loopSpeechS + 5)
+  const autoModelHardTrialSeconds = Math.min(65, loopCaptureSpeechS + 5)
   const autoModelLatencyGuardSeconds = 10
   const autoModelAdaptiveMaxCutSeconds = Math.max(1, loopPauseS - 2)
   const autoModelSlotSeconds = loopCycleS
@@ -596,34 +636,55 @@ export function MicSession({ availableModels, library }: Props) {
   const loadSavedHistory = useCallback(async () => {
     try {
       const { records } = await api.mic.listManualRecords({ limit: 200 })
-      const mapped: SavedWebMicResult[] = records.map((r) => {
-        const metrics = (r.metrics ?? {}) as Record<string, unknown>
-        const rawMode = typeof metrics.mic_test_mode === 'string' ? metrics.mic_test_mode : ''
-        const mode: SavedWebMicResult['mic_test_mode'] =
-          rawMode === 'free_speech' || rawMode === 'reference_video' ? rawMode : 'unknown'
-        return {
-          record_id: r.record_id,
-          saved_at: r.saved_at,
-          model_id: r.model_id,
-          reference_label: typeof metrics.reference_label === 'string' && metrics.reference_label.trim()
-            ? metrics.reference_label
-            : '—',
-          mic_test_mode: mode,
-          transcript: r.transcript || '',
-          note: r.note || '',
-          quality_assessment: r.quality_assessment || '',
-          source: r.source || '',
-          rtf: asFiniteNumber(metrics.rtf),
-          drop_rate: asFiniteNumber(metrics.drop_rate),
-          reason_code: typeof metrics.reason_code === 'string' ? metrics.reason_code : null,
-          mobile_loop_package_id: typeof metrics.mobile_loop_package_id === 'string'
-            ? metrics.mobile_loop_package_id
-            : null,
+      const mapped: SavedWebMicResult[] = records.flatMap((r) => {
+        try {
+          const metrics = (r.metrics ?? {}) as Record<string, unknown>
+          const rawMode = typeof metrics.mic_test_mode === 'string' ? metrics.mic_test_mode : ''
+          const mode: SavedWebMicResult['mic_test_mode'] =
+            rawMode === 'free_speech' || rawMode === 'reference_video' ? rawMode : 'unknown'
+          return [{
+            record_id: r.record_id,
+            saved_at: r.saved_at,
+            model_id: r.model_id,
+            reference_label: typeof metrics.reference_label === 'string' && metrics.reference_label.trim()
+              ? metrics.reference_label
+              : '—',
+            mic_test_mode: mode,
+            transcript: r.transcript || '',
+            note: r.note || '',
+            quality_assessment: r.quality_assessment || '',
+            source: r.source || '',
+            rtf: asFiniteNumber(metrics.rtf),
+            drop_rate: asFiniteNumber(metrics.drop_rate),
+            reason_code: typeof metrics.reason_code === 'string' ? metrics.reason_code : null,
+            first_word_wall_ms: asFiniteNumber(metrics.first_word_wall_ms) ?? null,
+            p50_fin_ms: asFiniteNumber(metrics.segment_finalize_ms_p50) ?? null,
+            p95_fin_ms: asFiniteNumber(metrics.segment_finalize_ms_p95) ?? null,
+            q_peak_s: asFiniteNumber(metrics.queue_depth_peak_s) ?? null,
+            rss_peak_mb: asFiniteNumber(metrics.worker_rss_peak_mb) ?? null,
+            trial_status: computeTrialStatus(
+              asFiniteNumber(metrics.drop_rate),
+              asFiniteNumber(metrics.rtf),
+              asFiniteNumber(metrics.first_word_wall_ms) ?? null,
+              asFiniteNumber(metrics.queue_depth_peak_s) ?? null,
+              typeof metrics.error === 'string' ? metrics.error : null,
+            ),
+            mobile_loop_package_id: typeof metrics.mobile_loop_package_id === 'string'
+              ? metrics.mobile_loop_package_id
+              : null,
+            sequence_token: typeof metrics.auto_model_sequence_token === 'string' && metrics.auto_model_sequence_token.trim()
+              ? metrics.auto_model_sequence_token.trim()
+              : null,
+            sequence_index: asFiniteNumber(metrics.auto_model_sequence_index) ?? null,
+          }]
+        } catch (e) {
+          console.error('[loadSavedHistory] chyba při mapování záznamu', r.record_id, e)
+          return []
         }
       })
       setSavedResults(mapped)
-    } catch {
-      // historie je doplňková, nesmí shodit MIC UI
+    } catch (e) {
+      console.error('[loadSavedHistory] chyba při načítání historie', e)
     }
   }, [])
 
@@ -683,6 +744,7 @@ export function MicSession({ availableModels, library }: Props) {
       historySortOrder: normalizeHistorySortOrder(historySortOrder),
       showAllHistory,
       mobileLoopEnabled,
+      mobileLoopEarlyStopSeconds,
       mobileLoopPauseSeconds,
       mobileLoopSyncFirstRound,
       mobileLoopRepeatCount,
@@ -709,6 +771,7 @@ export function MicSession({ availableModels, library }: Props) {
     historySortOrder,
     showAllHistory,
     mobileLoopEnabled,
+    mobileLoopEarlyStopSeconds,
     mobileLoopPauseSeconds,
     mobileLoopSyncFirstRound,
     mobileLoopRepeatCount,
@@ -742,6 +805,26 @@ export function MicSession({ availableModels, library }: Props) {
   useEffect(() => {
     void loadMobileLoopHistory()
   }, [loadMobileLoopHistory])
+
+  useEffect(() => {
+    if (!seqReportToken) return
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const report = await api.mic.getSequenceReport(seqReportToken)
+        if (!cancelled) setSeqReport(report)
+      } catch {
+        // report může krátce neexistovat (první trial ještě nezapsán)
+      }
+    }
+    void refresh()
+    const intervalMs = autoModelSequenceActive || status === 'recording' || status === 'stopping' ? 1200 : 3000
+    const timer = window.setInterval(() => { void refresh() }, intervalMs)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [seqReportToken, autoModelSequenceActive, status])
 
   useEffect(() => {
     setMobileLoopPackage(null)
@@ -982,6 +1065,8 @@ export function MicSession({ availableModels, library }: Props) {
       reference_text: referenceText,
       mobile_loop_enabled: loopCfg.enabled,
       mobile_loop_speech_s: loopCfg.speechS,
+      mobile_loop_capture_speech_s: loopCfg.captureSpeechS,
+      mobile_loop_early_stop_s: loopCfg.earlyStopS,
       mobile_loop_pause_s: loopCfg.pauseS,
       mobile_loop_sync_first_round: loopCfg.syncFirstRound,
       mobile_loop_measured_rounds: loopCfg.measuredRounds,
@@ -996,6 +1081,7 @@ export function MicSession({ availableModels, library }: Props) {
       rtf: finalMsg.rtf,
       elapsed_s: finalMsg.elapsed_s,
       processing_ms_p95: finalMsg.processing_ms_p95,
+      segment_finalize_ms_p50: finalMsg.segment_finalize_ms_p50,
       segment_finalize_ms_p95: finalMsg.segment_finalize_ms_p95,
       capture_jitter_ms_p95: finalMsg.capture_jitter_ms_p95,
       capture_lag_ms_p95: finalMsg.capture_lag_ms_p95,
@@ -1012,7 +1098,7 @@ export function MicSession({ availableModels, library }: Props) {
       ) ? finalMsg.sequence_timing : undefined,
     }
     const note = loopCfg.enabled
-      ? `web_mic | mode=${testMode} | ref=${referenceLabel} | loop=${loopCfg.speechS ?? '-'}s+${loopCfg.pauseS ?? '-'}s | sync1=${loopCfg.syncFirstRound ? 'on' : 'off'} | rounds=${loopCfg.measuredRounds ?? '-'} | pkg=${loopCfg.packageId ?? '-'}`
+      ? `web_mic | mode=${testMode} | ref=${referenceLabel} | loop=${loopCfg.speechS ?? '-'}-${loopCfg.earlyStopS ?? 0}+${loopCfg.pauseS ?? '-'}s | sync1=${loopCfg.syncFirstRound ? 'on' : 'off'} | rounds=${loopCfg.measuredRounds ?? '-'} | pkg=${loopCfg.packageId ?? '-'}`
       : `web_mic | mode=${testMode} | ref=${referenceLabel}`
     const noteWithSequence = autoSequenceMeta
       ? `${note} | seq=${autoSequenceMeta.sequence_index + 1}/${autoSequenceMeta.sequence_total}`
@@ -1040,6 +1126,10 @@ export function MicSession({ availableModels, library }: Props) {
           const savedCount = autoModelSavedSlotsRef.current.size
           setAutoModelSavedCount(savedCount)
           setSaveMsg(`Uloženo ${savedCount}/${autoSequenceMeta.sequence_total} (${saved.record_id}).`)
+          // Fetch sequence report po každém uloženém trialu
+          const seqToken = autoSequenceMeta.sequence_token
+          setSeqReportToken(seqToken)
+          api.mic.getSequenceReport(seqToken).then(setSeqReport).catch(() => {})
         }
       } else {
         setSaveMsg(`Výsledek uložen (${saved.record_id}).`)
@@ -1096,6 +1186,8 @@ export function MicSession({ availableModels, library }: Props) {
       if (mobileLoopEnabled) {
         sessionParams.mobile_loop_enabled = true
         sessionParams.mobile_loop_speech_s = loopSpeechS
+        sessionParams.mobile_loop_capture_speech_s = loopCaptureSpeechS
+        sessionParams.mobile_loop_early_stop_s = loopEarlyStopS
         sessionParams.mobile_loop_pause_s = loopPauseS
         sessionParams.mobile_loop_sync_first_round = activeLoopSyncFirstRound
         sessionParams.mobile_loop_measured_rounds = activeLoopMeasuredRounds
@@ -1109,6 +1201,8 @@ export function MicSession({ availableModels, library }: Props) {
       activeSessionLoopConfigRef.current = {
         enabled: mobileLoopEnabled,
         speechS: mobileLoopEnabled ? loopSpeechS : null,
+        captureSpeechS: mobileLoopEnabled ? loopCaptureSpeechS : null,
+        earlyStopS: mobileLoopEnabled ? loopEarlyStopS : null,
         pauseS: mobileLoopEnabled ? loopPauseS : null,
         syncFirstRound: activeLoopSyncFirstRound,
         measuredRounds: activeLoopMeasuredRounds,
@@ -1121,9 +1215,10 @@ export function MicSession({ availableModels, library }: Props) {
         sessionParams.reference_text = selectedReferenceText.text
       }
       if (testMode === 'reference_video' && referenceVideoId) {
+        const referenceSampleSeconds = mobileLoopEnabled ? loopCaptureSpeechS : clipDurationS
         sessionParams.reference_video_id = referenceVideoId
         sessionParams.reference_clip_start_s = Math.max(0, Math.floor(clipFromS))
-        sessionParams.reference_sample_seconds = Math.max(1, Math.floor(clipDurationS))
+        sessionParams.reference_sample_seconds = Math.max(1, Math.floor(referenceSampleSeconds))
       }
       // 1. Vytvoř backend session
       const { session_id } = await api.mic.createSession(activeModelId, sessionParams)
@@ -1138,7 +1233,7 @@ export function MicSession({ availableModels, library }: Props) {
         : `Video ${referenceVideoId || '-'}`
       const referenceText = testMode === 'free_speech'
         ? (selectedReferenceText?.text ?? '')
-        : `video_id=${referenceVideoId}; from=${clipFromS}; to=${clipToS}; len=${clipDurationS}`
+        : `video_id=${referenceVideoId}; from=${clipFromS}; to=${clipToS}; len_src=${clipDurationS}; len_capture=${loopCaptureSpeechS}`
       const estimateTrialElapsedS = () => {
         const started = trialStartedAtPerfMsRef.current
         if (started == null) return 0
@@ -1184,7 +1279,24 @@ export function MicSession({ availableModels, library }: Props) {
           if (sequenceTiming) parts.push('sequence_timing=logged')
           const reasonCode = session.reason_code || 'ws_transport_error'
           const reasonError = session.error || prefix
-          persistFailureResult(reasonCode, reasonError, prefix, { sequence_timing: sequenceTiming })
+          persistFailureResult(reasonCode, reasonError, prefix, {
+            sequence_timing: sequenceTiming,
+            // metriky ze session — jediný zdroj pravdy
+            rtf: session.rtf,
+            elapsed_s: session.elapsed_s,
+            total_audio_s: session.total_audio_s,
+            drop_rate: session.drop_rate,
+            first_word_latency_ms: session.first_word_latency_ms,
+            first_word_wall_ms: session.first_word_wall_ms,
+            first_word_audio_ms: session.first_word_audio_ms,
+            segment_finalize_ms_p50: session.segment_finalize_ms_p50,
+            segment_finalize_ms_p95: session.segment_finalize_ms_p95,
+            queue_depth_peak_s: session.queue_depth_peak_s,
+            backpressure_events: session.backpressure_events,
+            worker_rss_peak_mb: session.worker_rss_peak_mb,
+            chunk_count: session.chunk_count,
+            dropped_chunks: session.dropped_chunks,
+          })
           const detail = parts.length > 0 ? ` | ${parts.join(' | ')}` : ''
           setError(`${prefix} [model=${activeModelId}, session=${session_id}]${detail}`)
         } catch (e) {
@@ -1431,6 +1543,8 @@ export function MicSession({ availableModels, library }: Props) {
     clipDurationS,
     mobileLoopEnabled,
     loopSpeechS,
+    loopCaptureSpeechS,
+    loopEarlyStopS,
     loopPauseS,
     mobileLoopSyncFirstRound,
     loopRepeatCount,
@@ -1473,6 +1587,9 @@ export function MicSession({ availableModels, library }: Props) {
       setAutoModelSequenceIndex(0)
       setAutoModelSavedCount(0)
       autoModelSavedSlotsRef.current.clear()
+      autoModelRetryCountRef.current = 0
+      setSeqReport(null)
+      setSeqReportToken(token)
       setAutoModelSequenceActive(true)
 
       const firstModelId = queue[0]
@@ -1512,6 +1629,8 @@ export function MicSession({ availableModels, library }: Props) {
     activeSessionLoopConfigRef.current = {
       enabled: false,
       speechS: null,
+      captureSpeechS: null,
+      earlyStopS: null,
       pauseS: null,
       syncFirstRound: null,
       measuredRounds: null,
@@ -1593,21 +1712,22 @@ export function MicSession({ availableModels, library }: Props) {
       const hardLimitPerf = trialHardLimitAtPerfMsRef.current ?? Number.POSITIVE_INFINITY
       const reserveMs = autoModelPreparationSeconds * 1000
       const adaptiveCutMs = trialAdaptiveEarlyStopMsRef.current
-      const effectiveCutMs = Math.max(reserveMs, adaptiveCutMs)
+      const userEarlyCutMs = Math.max(0, loopEarlyStopS) * 1000
+      const effectiveCutMs = Math.max(reserveMs, adaptiveCutMs, userEarlyCutMs)
       const slotStopPerf = deadlinePerf - effectiveCutMs
       const effectiveStopPerf = Math.min(
         hardLimitPerf,
         Math.max((trialStartedAtPerfMsRef.current ?? deadlinePerf) + 1000, slotStopPerf),
       )
       if (performance.now() < effectiveStopPerf) return
-      const stopNote = adaptiveCutMs > reserveMs
+      const stopNote = adaptiveCutMs > Math.max(reserveMs, userEarlyCutMs)
         ? `, zkráceno o ${(adaptiveCutMs / 1000).toFixed(1)}s (latence > ${autoModelLatencyGuardSeconds}s)`
-        : `, rezerva ${(reserveMs / 1000).toFixed(1)}s`
+        : `, rezerva ${(reserveMs / 1000).toFixed(1)}s + user-cut ${(userEarlyCutMs / 1000).toFixed(1)}s`
       requestTrialStop(`Auto sekvence: konec slotu ${formatDurationHms(loopCycleS)}${stopNote}.`)
     }, 200)
 
     return () => window.clearInterval(timer)
-  }, [autoModelSequenceActive, status, loopCycleS, autoModelLatencyGuardSeconds, autoModelPreparationSeconds, requestTrialStop])
+  }, [autoModelSequenceActive, status, loopCycleS, loopEarlyStopS, autoModelLatencyGuardSeconds, autoModelPreparationSeconds, requestTrialStop])
 
   useEffect(() => {
     if (!autoModelSequenceActive) return
@@ -1687,6 +1807,29 @@ export function MicSession({ availableModels, library }: Props) {
     const token = autoModelSequenceTokenRef.current
     if (!token) return
 
+    // Retry při start_recording_failed (max 1×)
+    const isStartFailed = status === 'error' && typeof error === 'string' && error.includes('start_recording_failed')
+    if (isStartFailed && autoModelRetryCountRef.current < 1) {
+      autoModelRetryCountRef.current += 1
+      const retryModelId = autoModelSequenceIds[autoModelSequenceIndex]
+      const retryModel = availableModels.find((m) => m.model_id === retryModelId)
+      setSaveMsg(`Retry (${autoModelRetryCountRef.current}/1): ${retryModelId}`)
+      autoModelAdvanceLockRef.current = true
+      autoModelAdvanceTimerRef.current = window.setTimeout(() => {
+        autoModelAdvanceTimerRef.current = null
+        if (autoModelSequenceTokenRef.current !== token) { autoModelAdvanceLockRef.current = false; return }
+        setModelId(retryModelId)
+        setParams(buildMicParamsWithSaved(retryModel, paramsByModel[retryModelId]))
+        void startSession(retryModelId, {
+          sequence_token: token,
+          sequence_index: autoModelSequenceIndex,
+          sequence_total: autoModelSequenceIds.length,
+        }).finally(() => { autoModelAdvanceLockRef.current = false })
+      }, 3000)
+      return
+    }
+    autoModelRetryCountRef.current = 0
+
     const nextIndex = autoModelSequenceIndex + 1
     if (nextIndex >= autoModelSequenceIds.length) {
       stopAutoModelSequence(`Auto sekvence dokončena (${autoModelSequenceIds.length}/${autoModelSequenceIds.length}).`)
@@ -1734,6 +1877,7 @@ export function MicSession({ availableModels, library }: Props) {
     paramsByModel,
     startSession,
     stopAutoModelSequence,
+    error,
   ])
 
   // Cleanup při unmount
@@ -1900,6 +2044,7 @@ export function MicSession({ availableModels, library }: Props) {
             <div className="text-[11px] text-gray-400">
               Pořadí běhu: podle pořadí naklikání modelů. Vybráno: {autoModelSelectedOrdered.length}.
               Kola: {loopRepeatCount}. Slot: {formatDurationHms(autoModelSlotSeconds)} (řeč {Math.round(loopSpeechS)}s + pauza {loopPauseS}s),
+              sběr řeči: ~{Math.round(loopCaptureSpeechS)}s (konec dříve o {loopEarlyStopS.toFixed(1)}s),
               další start ~{autoModelLeadStartSeconds.toFixed(1)}s před slotem, max doběh {autoModelGraceSeconds}s.
               Pokud je vybraných modelů méně než kol, jedou dokola.
               Stop má pevnou přípravu {autoModelPreparationSeconds}s + hard cap {autoModelHardTrialSeconds.toFixed(0)}s/trial.
@@ -2046,6 +2191,7 @@ export function MicSession({ availableModels, library }: Props) {
             </div>
             <p className="text-xs text-gray-400">
               Pusť z mobilu vybrané video od {clipFromS.toFixed(1)}s do {clipToS.toFixed(1)}s.
+              {' '}Sběr lze ukončit dříve o {loopEarlyStopS.toFixed(1)}s.
               {selectedReferenceVideo ? ` (${videoLabel(selectedReferenceVideo.title, selectedReferenceVideo.video_id)})` : ''}
             </p>
             <div className="rounded border border-gray-700 bg-gray-900/70 p-2 space-y-2">
@@ -2062,10 +2208,23 @@ export function MicSession({ availableModels, library }: Props) {
                   Zapnuto
                 </label>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
                 <div className="rounded border border-gray-700 bg-gray-900 px-2 py-1.5">
                   <div className="text-[11px] text-gray-400">Pasáž (od-do)</div>
                   <div className="text-xs text-gray-200">{clipFromS.toFixed(1)}s → {clipToS.toFixed(1)}s</div>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-gray-400 mb-1">Konec dříve (s)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={Math.max(0, Math.floor(loopEarlyStopMaxS))}
+                    step={0.5}
+                    value={mobileLoopEarlyStopSeconds}
+                    onChange={e => setMobileLoopEarlyStopSeconds(Math.max(0, Math.min(loopEarlyStopMaxS, Number(e.target.value) || 0)))}
+                    disabled={!mobileLoopEnabled || uiLocked}
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-60"
+                  />
                 </div>
                 <div>
                   <label className="block text-[11px] text-gray-400 mb-1">Pauza (s)</label>
@@ -2141,7 +2300,8 @@ export function MicSession({ availableModels, library }: Props) {
               {mobileLoopEnabled && (
                 <div className="text-[11px] text-gray-400">
                   Plán: {mobileLoopSyncFirstRound ? '1 sync kolo + ' : ''}{loopRepeatCount} měřené kolo(a),
-                  režim {loopSpeechS.toFixed(1)}s řeč + {loopPauseS}s pauza, celkem {formatDurationHms(loopPlanS)}.
+                  režim {loopSpeechS.toFixed(1)}-{loopEarlyStopS.toFixed(1)}+{loopPauseS}s
+                  {' '}=&gt; sběr {loopCaptureSpeechS.toFixed(1)}s + pauza {loopPauseS}s, slot {loopCycleS.toFixed(1)}s, celkem {formatDurationHms(loopPlanS)}.
                 </div>
               )}
               {mobileLoopPackageError && (
@@ -2464,6 +2624,82 @@ export function MicSession({ availableModels, library }: Props) {
         </div>
       )}
 
+      {/* Sekvenční report */}
+      {seqReport && seqReport.trials.length > 0 && (
+        <div className="bg-gray-900 border border-gray-700 rounded p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs text-gray-400 font-semibold">
+              Sekvenční report — {seqReport.trials_count}/{seqReport.sequence_total ?? '?'} trialů
+            </div>
+            <a
+              href={`/api/mic/sequences/${encodeURIComponent(seqReportToken ?? '')}/export.csv`}
+              download
+              className="text-xs text-blue-400 hover:text-blue-300 underline"
+            >
+              Stáhnout CSV
+            </a>
+          </div>
+          {seqReport.summary && (
+            <div className="mb-2 text-[11px] text-gray-400">
+              OK {seqReport.summary.counts?.ok ?? 0}
+              {' | '}borderline {seqReport.summary.counts?.borderline ?? 0}
+              {' | '}slow {seqReport.summary.counts?.too_slow_for_slot ?? 0}
+              {' | '}fail {seqReport.summary.counts?.fail ?? 0}
+              {' | '}running {seqReport.summary.running ?? 0}
+              {typeof seqReport.summary.avg_rtf === 'number' ? ` | avg RTF ${seqReport.summary.avg_rtf.toFixed(3)}` : ''}
+              {typeof seqReport.summary.avg_drop_rate === 'number' ? ` | avg drop ${(seqReport.summary.avg_drop_rate * 100).toFixed(1)}%` : ''}
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-gray-300 border-collapse">
+              <thead>
+                <tr className="text-gray-500 border-b border-gray-700">
+                  <th className="text-left pr-2 py-1">#</th>
+                  <th className="text-left pr-2 py-1">Model</th>
+                  <th className="text-left pr-2 py-1">Status</th>
+                  <th className="text-left pr-2 py-1">Fáze</th>
+                  <th className="text-right pr-2 py-1">RTF</th>
+                  <th className="text-right pr-2 py-1">Drop%</th>
+                  <th className="text-right pr-2 py-1">1.slovo ms</th>
+                  <th className="text-right pr-2 py-1">P50 fin ms</th>
+                  <th className="text-right pr-2 py-1">P95 fin ms</th>
+                  <th className="text-right pr-2 py-1">Q-peak s</th>
+                  <th className="text-right py-1">RAM MB</th>
+                  <th className="text-left py-1 pl-2">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {seqReport.trials.map((t) => {
+                  const statusColor: Record<MicTrialStatus, string> = {
+                    ok: 'text-green-400',
+                    borderline: 'text-yellow-400',
+                    too_slow_for_slot: 'text-orange-400',
+                    fail: 'text-red-400',
+                  }
+                  const cls = statusColor[t.trial_status] ?? 'text-gray-400'
+                  return (
+                    <tr key={t.session_id} className="border-b border-gray-800 hover:bg-gray-800/40">
+                      <td className="pr-2 py-0.5">{t.seq_index ?? '—'}</td>
+                      <td className="pr-2 py-0.5 max-w-[140px] truncate" title={t.model_id}>{t.model_id}</td>
+                      <td className={`pr-2 py-0.5 font-semibold ${cls}`}>{t.trial_status}</td>
+                      <td className="pr-2 py-0.5 text-gray-400">{t.phase ?? t.status ?? '—'}</td>
+                      <td className="text-right pr-2 py-0.5">{t.rtf != null ? t.rtf.toFixed(3) : '—'}</td>
+                      <td className="text-right pr-2 py-0.5">{t.drop_rate != null ? (t.drop_rate * 100).toFixed(1) : '—'}</td>
+                      <td className="text-right pr-2 py-0.5">{t.first_word_wall_ms != null ? Math.round(t.first_word_wall_ms) : '—'}</td>
+                      <td className="text-right pr-2 py-0.5">{t.segment_finalize_ms_p50 != null ? Math.round(t.segment_finalize_ms_p50) : '—'}</td>
+                      <td className="text-right pr-2 py-0.5">{t.segment_finalize_ms_p95 != null ? Math.round(t.segment_finalize_ms_p95) : '—'}</td>
+                      <td className="text-right pr-2 py-0.5">{t.queue_depth_peak_s != null ? t.queue_depth_peak_s.toFixed(2) : '—'}</td>
+                      <td className="text-right py-0.5">{t.worker_rss_peak_mb != null ? Math.round(t.worker_rss_peak_mb) : '—'}</td>
+                      <td className="py-0.5 pl-2 text-gray-400">{t.reason_code || '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="bg-gray-900 rounded p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <div className="text-xs text-gray-500">Historie uložených pokusů (perzistentní)</div>
@@ -2472,6 +2708,7 @@ export function MicSession({ availableModels, library }: Props) {
             <button
               type="button"
               onClick={() => { setHistoryModeFilter('all'); setShowAllHistory(false) }}
+              title="Zobrazit všechny záznamy (volný řeč i referenční)"
               className={`px-2 py-1 rounded border ${historyModeFilter === 'all' ? 'border-blue-500 text-blue-200 bg-blue-900/30' : 'border-gray-700 text-gray-300 hover:text-white'}`}
             >
               vše
@@ -2479,6 +2716,7 @@ export function MicSession({ availableModels, library }: Props) {
             <button
               type="button"
               onClick={() => { setHistoryModeFilter('free_speech'); setShowAllHistory(false) }}
+              title="Filtrovat pouze záznamy z režimu volného řeči"
               className={`px-2 py-1 rounded border ${historyModeFilter === 'free_speech' ? 'border-blue-500 text-blue-200 bg-blue-900/30' : 'border-gray-700 text-gray-300 hover:text-white'}`}
             >
               volný
@@ -2486,6 +2724,7 @@ export function MicSession({ availableModels, library }: Props) {
             <button
               type="button"
               onClick={() => { setHistoryModeFilter('reference_video'); setShowAllHistory(false) }}
+              title="Filtrovat pouze záznamy z referenčního video režimu"
               className={`px-2 py-1 rounded border ${historyModeFilter === 'reference_video' ? 'border-blue-500 text-blue-200 bg-blue-900/30' : 'border-gray-700 text-gray-300 hover:text-white'}`}
             >
               referenční
@@ -2547,18 +2786,34 @@ export function MicSession({ availableModels, library }: Props) {
                   <th className="text-left py-1 pr-3">Balíček</th>
                   <th className="text-right py-1 pr-3">RTF</th>
                   <th className="text-right py-1 pr-3">Drop</th>
+                  <th className="text-left py-1 pr-3">Status</th>
+                  <th className="text-right py-1 pr-3">1.slovo ms</th>
+                  <th className="text-right py-1 pr-3">P50 ms</th>
+                  <th className="text-right py-1 pr-3">P95 ms</th>
+                  <th className="text-right py-1 pr-3">Q-peak s</th>
+                  <th className="text-right py-1 pr-3">RAM MB</th>
+                  <th className="text-left py-1 pr-3">Reason</th>
                   <th className="text-left py-1">Přepis</th>
                   <th className="text-left py-1 pl-2">Akce</th>
                 </tr>
               </thead>
               <tbody>
-                {historyVisibleRows.map((r) => {
+                {historyVisibleRows.map((r, idx) => {
                   const hasTranscript = !!r.transcript?.trim()
                   const isExpanded = expandedHistoryRecordIds.includes(r.record_id)
                   const canExpand = hasTranscript && r.transcript.trim().length > 180
+                  const prev = idx > 0 ? historyVisibleRows[idx - 1] : null
+                  const separatorBefore = Boolean(
+                    prev
+                    && (prev.sequence_token || r.sequence_token)
+                    && prev.sequence_token !== r.sequence_token,
+                  )
                   return (
                     <Fragment key={r.record_id}>
-                      <tr key={r.record_id} className="border-b border-gray-800/80 align-top">
+                      <tr
+                        key={r.record_id}
+                        className={`${separatorBefore ? 'border-t-2 border-red-600' : ''} border-b border-gray-800/80 align-top`}
+                      >
                         <td className="py-1 pr-3 text-gray-400 whitespace-nowrap">{new Date(r.saved_at).toLocaleString()}</td>
                         <td className="py-1 pr-3 whitespace-nowrap">{r.model_id}</td>
                         <td className="py-1 pr-3 whitespace-nowrap">
@@ -2569,11 +2824,20 @@ export function MicSession({ availableModels, library }: Props) {
                           {r.mobile_loop_package_id || '—'}
                         </td>
                         <td className="py-1 pr-3 text-right">{r.rtf != null ? r.rtf.toFixed(3) : '—'}</td>
-                        <td className="py-1 pr-3 text-right">{r.drop_rate != null ? `${(r.drop_rate * 100).toFixed(2)}%` : '—'}</td>
-                        <td className="py-1 text-gray-200">
+                        <td className="py-1 pr-3 text-right">{r.drop_rate != null ? `${(r.drop_rate * 100).toFixed(1)}%` : '—'}</td>
+                        <td className={`py-1 pr-3 font-semibold ${r.trial_status === 'ok' ? 'text-green-400' : r.trial_status === 'borderline' ? 'text-yellow-400' : r.trial_status === 'too_slow_for_slot' ? 'text-orange-400' : r.trial_status === 'fail' ? 'text-red-400' : 'text-gray-500'}`}>
+                          {r.trial_status ?? '—'}
+                        </td>
+                        <td className="py-1 pr-3 text-right">{r.first_word_wall_ms != null ? Math.round(r.first_word_wall_ms) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{r.p50_fin_ms != null ? Math.round(r.p50_fin_ms) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{r.p95_fin_ms != null ? Math.round(r.p95_fin_ms) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{r.q_peak_s != null ? r.q_peak_s.toFixed(2) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{r.rss_peak_mb != null ? Math.round(r.rss_peak_mb) : '—'}</td>
+                        <td className="py-1 pr-3 text-gray-400 text-[11px]">{r.reason_code || '—'}</td>
+                        <td className="py-1 text-gray-200 max-w-xs">
                           {hasTranscript ? (
                             <div className="space-y-1">
-                              <div>{isExpanded ? r.transcript.trim() : clipText(r.transcript, 180)}</div>
+                              <div>{isExpanded ? r.transcript.trim() : clipText(r.transcript, 120)}</div>
                               {canExpand && (
                                 <button
                                   type="button"
@@ -2599,7 +2863,7 @@ export function MicSession({ availableModels, library }: Props) {
                       </tr>
                       {isExpanded && hasTranscript && (
                         <tr className="border-b border-gray-800/80">
-                          <td colSpan={9} className="py-2 pl-2 pr-1">
+                          <td colSpan={16} className="py-2 pl-2 pr-1">
                             <div className="rounded border border-gray-700 bg-gray-950/70 p-2 whitespace-pre-wrap text-[12px] text-gray-100">
                               {r.transcript.trim()}
                             </div>
@@ -2628,4 +2892,3 @@ export function MicSession({ availableModels, library }: Props) {
     </div>
   )
 }
-

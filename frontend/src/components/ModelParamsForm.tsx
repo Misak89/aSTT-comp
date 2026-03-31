@@ -37,14 +37,18 @@ export function ModelParamsForm({ modelId, params, values, onChange, compact = f
       {params.map(p => (
         <div key={p.name} className={compact ? 'space-y-0.5' : 'flex flex-col gap-1'}>
           <div className={compact ? 'flex items-center gap-2 text-sm flex-wrap' : 'flex items-center gap-2'}>
-            <label className="text-gray-300 whitespace-nowrap min-w-28 text-sm" title={p.description}>
-              {p.label}
-            </label>
+            <div className="relative group/label shrink-0 min-w-28">
+              <span className="text-gray-300 whitespace-nowrap text-sm cursor-help underline decoration-dotted decoration-gray-500">
+                {p.label}
+              </span>
+              {(hintFor(p) || p.description) && (
+                <div className="pointer-events-none absolute left-0 top-5 z-30 hidden group-hover/label:block w-72 bg-gray-900 text-white text-xs rounded px-2.5 py-2 shadow-xl leading-relaxed">
+                  {hintFor(p) || p.description}
+                </div>
+              )}
+            </div>
             <ParamInput param={p} value={current(p)} onChange={v => set(p.name, v)} compact={compact} />
           </div>
-          {hintFor(p) && (
-            <span className="text-xs text-gray-500">{hintFor(p)}</span>
-          )}
         </div>
       ))}
     </div>

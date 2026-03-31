@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from ..models.library import (
@@ -7,6 +7,9 @@ from ..models.library import (
     DownloadSubtitlesRequest,
     UpsertLibraryItemRequest,
     UpdateLibraryVisibilityRequest,
+    ScanDirectoryRequest,
+    ImportLocalFileRequest,
+    LocalFileEntry,
 )
 from ..services import library_service
 
@@ -50,6 +53,33 @@ def get_subtitle_file(video_id: str, filename: str):
 @router.get("/latest-results/{video_id}", response_model=list[LatestResult])
 def latest_results(video_id: str):
     return library_service.get_latest_results(video_id)
+
+
+@router.get("/video-info")
+def get_video_info(url: str = Query(...)):
+    """Vrátí název a základní metadata YouTube videa pro preview před přidáním."""
+    try:
+        return library_service.fetch_video_info(url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/scan-directory", response_model=list[LocalFileEntry])
+def scan_directory(req: ScanDirectoryRequest):
+    """Prohledá lokální adresář a vrátí seznam audio/video souborů."""
+    try:
+        return library_service.scan_directory(req.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/import-local-file", response_model=LibraryItem, status_code=201)
+def import_local_file(req: ImportLocalFileRequest):
+    """Importuje lokální soubor do knihovny (bez yt-dlp)."""
+    try:
+        return library_service.import_local_file(req.path, req.title, req.language)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/search")

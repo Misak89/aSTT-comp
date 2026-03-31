@@ -90,7 +90,9 @@ def _compute_timeout_seconds(*, sample_seconds: int, model_path: str | Path | No
     """Spočítá timeout pro whisper-cli/server s možností řízení přes env."""
     factor = max(1.0, _env_float("ASTT_WHISPER_TIMEOUT_FACTOR", 3.0))
     floor_s = max(30, _env_int("ASTT_WHISPER_TIMEOUT_MIN_S", 120))
-    ceil_s = max(floor_s, _env_int("ASTT_WHISPER_TIMEOUT_MAX_S", 900))
+    # Výchozí strop 14400s (4h) — dost i pro přepis celých nahrávek přes UI (sample_seconds=99999).
+    # Lze přepsat env proměnnou ASTT_WHISPER_TIMEOUT_MAX_S (např. 900 pro benchmark s krátkými klipy).
+    ceil_s = max(floor_s, _env_int("ASTT_WHISPER_TIMEOUT_MAX_S", 14400))
 
     timeout_s = int(max(floor_s, max(1, int(sample_seconds)) * factor))
 

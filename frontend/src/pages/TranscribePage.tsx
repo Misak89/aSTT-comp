@@ -34,6 +34,9 @@ export function TranscribePage() {
   const editorHtmlRef = useRef('')
   const editorTextRef = useRef('')
   const transcriptStartTimeRef = useRef('')
+  const lastTsBoundaryRef = useRef(-1)   // poslední vložená minutová hranice (v sekundách)
+  const accumulatedBodyRef = useRef('')  // body HTML bez hlavičky (akumulovaný přepis s ts)
+
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -105,20 +108,35 @@ export function TranscribePage() {
     setAudioUrl(url)
   }, [])
 
-  const handleTranscriptUpdate = useCallback((text: string) => {
-    // Capture start time on first segment of a new session
-    if (!editorHtmlRef.current || editorHtmlRef.current === '<p></p>') {
+  const handleTranscriptUpdate = useCallback((text: string, audioSecs?: number) => {
+    if (!transcriptStartTimeRef.current) {
       transcriptStartTimeRef.current = new Date().toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })
+      lastTsBoundaryRef.current = -1
+      accumulatedBodyRef.current = ''
     }
+
+    // Timestamp marker každých 60s — přidáme do accumulatedBody, nezávisle na textu
+    if (audioSecs != null && audioSecs > 0) {
+      const boundary = Math.floor(audioSecs / 60) * 60
+      if (boundary > lastTsBoundaryRef.current && boundary > 0) {
+        const m = Math.floor(boundary / 60)
+        const s = boundary % 60
+        const ts = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+        accumulatedBodyRef.current += `<p><span style="color:#dc2626;font-size:0.85em">[${ts}]</span></p>`
+        lastTsBoundaryRef.current = boundary
+      }
+    }
+
+    // Streaming runner posílá kumulativní text — zobrazíme celý aktuální text
+    const contentHtml = text.split('\n').filter(l => l.trim()).map(l => `<p>${l}</p>`).join('')
+
+    // Hlavička
     const settings = loadSettings()
     const rangeInfo = settings.range_mode === 'segment' && settings.range_from
       ? ` | Rozsah: ${settings.range_from}–${settings.range_to || '?'}`
       : ''
-    const label = currentSourceLabel || 'Přepis'
-    const model = currentModelId || '–'
-    const startTime = transcriptStartTimeRef.current
-    const headerHtml = `<p><strong>${label}</strong></p><p><em>Model: ${model} | ${startTime}${rangeInfo}</em></p><hr/>`
-    const contentHtml = text.split('\n').filter(l => l.trim()).map(l => `<p>${l}</p>`).join('')
+    const headerHtml = `<p><strong>${currentSourceLabel || 'Přepis'}</strong></p><p><em>Model: ${currentModelId || '–'} | ${transcriptStartTimeRef.current}${rangeInfo}</em></p><hr/>`
+
     const html = headerHtml + contentHtml
     setTranscriptContent(html)
     editorHtmlRef.current = html
@@ -198,6 +216,11 @@ export function TranscribePage() {
         <TranscribeJobPanel
           onAudioReady={handleAudioReady}
           onTranscriptUpdate={handleTranscriptUpdate}
+          onJobStop={() => {
+            if (editorHtmlRef.current && editorHtmlRef.current !== '<p></p>') {
+              doSave(editorHtmlRef.current, editorTextRef.current)
+            }
+          }}
           audioDuration={audioDuration}
           onModelChange={id => { setCurrentModelId(id); saveSettings({ model: id }) }}
           onSourceLabelChange={label => setCurrentSourceLabel(label)}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor, RunDetail } from '../types'
 import { videoLabel } from '../utils'
@@ -174,11 +175,27 @@ export function BenchmarkPage() {
           </button>
           <button
             onClick={() => { setTab('mic'); setMsg('') }}
-            className={`px-3 py-1 rounded ${tab === 'mic' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`px-3 py-1 rounded inline-flex items-center gap-1.5 ${tab === 'mic' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
+            <span className="relative inline-flex">
+              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="2" width="6" height="11" rx="3"/>
+                <path d="M5 10a7 7 0 0 0 14 0"/>
+                <line x1="12" y1="19" x2="12" y2="22"/>
+                <line x1="9" y1="22" x2="15" y2="22"/>
+              </svg>
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-red-500"/>
+            </span>
             Mikrofon
           </button>
         </div>
+        <Link
+          to="/hwflow"
+          title="Dokumentace: timing sekvence, HW nároky, provozní pravidla"
+          className="ml-2 px-3 py-1 rounded border border-gray-300 text-xs text-gray-500 hover:text-gray-800 hover:border-gray-400"
+        >
+          ? Help
+        </Link>
       </div>
 
       {tab === 'mic' && (

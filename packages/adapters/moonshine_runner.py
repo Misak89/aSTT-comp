@@ -314,6 +314,10 @@ def _load_moonshine_transcriber(config: MoonshineRunConfig):
             )
             from moonshine_voice import get_model_for_language  # type: ignore[import-not-found]
             auto_path = get_model_for_language(config.language)
+            # get_model_for_language může vrátit enum místo str — normalizujeme
+            if hasattr(auto_path, "value"):
+                auto_path = auto_path.value
+            auto_path = str(auto_path)
             transcriber = Transcriber(model_path=auto_path, model_arch=config.model_arch)
         except Exception as exc:
             raise RuntimeError(

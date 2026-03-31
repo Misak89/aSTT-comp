@@ -269,6 +269,28 @@ def download_mobile_loop_wav(package_id: str):
     )
 
 
+@router.get("/sequences/{token}")
+def get_sequence_report(token: str):
+    """Vrátí agregovaný report sekvence (všechny trialy, klasifikace, metriky)."""
+    report = mic_service.get_sequence_report(token)
+    if report is None:
+        raise HTTPException(status_code=404, detail="sequence report not found")
+    return report
+
+
+@router.get("/sequences/{token}/export.csv")
+def export_sequence_report_csv(token: str):
+    """Vrátí sequence report jako CSV soubor ke stažení."""
+    csv_path = mic_service.get_sequence_report_csv_path(token)
+    if csv_path is None:
+        raise HTTPException(status_code=404, detail="sequence CSV not found")
+    return FileResponse(
+        path=str(csv_path),
+        media_type="text/csv",
+        filename=f"sequence_{token[:8]}.csv",
+    )
+
+
 @router.get("/sessions/{session_id}")
 def get_session(session_id: str):
     """Vrátí aktuální stav session (transcript, metriky, status)."""

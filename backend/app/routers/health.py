@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 
 router = APIRouter()
 
+_STARTED_AT = datetime.now(timezone.utc).isoformat()
+
 
 @router.get("/api/health")
 def health():
@@ -17,4 +19,4 @@ def health():
         }
     except Exception:
         pass
-    return {"status": "ok", "utc": datetime.now(timezone.utc).isoformat(), **ram}
+    return {"status": "ok", "utc": datetime.now(timezone.utc).isoformat(), "started_at": _STARTED_AT, **ram}

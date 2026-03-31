@@ -5,6 +5,9 @@
  * - horizontal: levý a pravý panel vedle sebe, táhnutelný oddělovač
  * - vertical: horní a dolní panel nad sebou, táhnutelný oddělovač
  * - tabs: záložky (levý/pravý obsah v jednom okně)
+ *
+ * Důležité: všechny tři módy jsou vždy přítomny v DOM (jen skryté),
+ * aby nedocházelo k odmontování komponent a ztrátě stavu při přepnutí.
  */
 import { useRef, useState, useCallback, type ReactNode } from 'react'
 
@@ -32,26 +35,31 @@ export function TranscribePanelLayout({
   const [mode, setMode] = useState<LayoutMode>(defaultMode)
   const [split, setSplit] = useState(defaultSplit)
   const [activeTab, setActiveTab] = useState<'left' | 'right'>('left')
-  const containerRef = useRef<HTMLDivElement>(null)
+  const hContainerRef = useRef<HTMLDivElement>(null)
+  const vContainerRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
+  const dragMode = useRef<LayoutMode>('horizontal')
 
-  const onMouseDown = useCallback(() => {
+  const onMouseDown = useCallback((m: LayoutMode) => {
     dragging.current = true
-    document.body.style.cursor = mode === 'horizontal' ? 'col-resize' : 'row-resize'
+    dragMode.current = m
+    document.body.style.cursor = m === 'horizontal' ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
-  }, [mode])
+  }, [])
 
-  const onMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragging.current || !containerRef.current) return
-    const rect = containerRef.current.getBoundingClientRect()
+  const onMouseMove = useCallback((e: React.MouseEvent, m: LayoutMode) => {
+    if (!dragging.current || dragMode.current !== m) return
+    const container = m === 'horizontal' ? hContainerRef.current : vContainerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
     let pct: number
-    if (mode === 'horizontal') {
+    if (m === 'horizontal') {
       pct = ((e.clientX - rect.left) / rect.width) * 100
     } else {
       pct = ((e.clientY - rect.top) / rect.height) * 100
     }
     setSplit(Math.max(15, Math.min(85, pct)))
-  }, [mode])
+  }, [])
 
   const onMouseUp = useCallback(() => {
     if (dragging.current) {
@@ -83,68 +91,59 @@ export function TranscribePanelLayout({
         <span className="text-xs text-gray-400 ml-2">Táhni oddělovač pro změnu velikosti</span>
       </div>
 
-      {/* Tabs */}
-      {mode === 'tabs' && (
-        <div className="flex flex-col h-full">
-          <div className="flex border-b border-gray-200">
-            <button
-              onClick={() => setActiveTab('left')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'left' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-            >
-              {leftLabel}
-            </button>
-            <button
-              onClick={() => setActiveTab('right')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'right' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-            >
-              {rightLabel}
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            {activeTab === 'left' ? leftContent : rightContent}
-          </div>
-        </div>
-      )}
+      {/* Tabs header — viditelný jen v tabs módu */}
+      <div className={mode === 'tabs' ? 'flex border-b border-gray-200' : 'hidden'}>
+        <button
+          onClick={() => setActiveTab('left')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'left' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          {leftLabel}
+        </button>
+        <button
+          onClick={() => setActiveTab('right')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'right' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          {rightLabel}
+        </button>
+      </div>
 
-      {/* Horizontal split */}
-      {mode === 'horizontal' && (
+      {/* Obsah — všechny tři módy vždy přítomny v DOM, jen skryté */}
+      <div className="flex-1 overflow-hidden relative">
+
+        {/* Horizontal split */}
         <div
-          ref={containerRef}
-          className="flex flex-1 overflow-hidden"
-          onMouseMove={onMouseMove}
+          ref={hContainerRef}
+          className={`absolute inset-0 flex ${mode === 'horizontal' ? '' : 'invisible pointer-events-none'}`}
+          onMouseMove={e => onMouseMove(e, 'horizontal')}
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseUp}
         >
-          <div style={{ width: `${split}%` }} className="overflow-hidden flex flex-col">
+          <div style={{ width: `${split}%` }} className="overflow-hidden flex flex-col min-w-0">
             {leftContent}
           </div>
-          {/* Drag handle */}
           <div
-            onMouseDown={onMouseDown}
+            onMouseDown={() => onMouseDown('horizontal')}
             className="w-1.5 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors active:bg-blue-500"
             title="Táhni pro změnu šířky"
           />
-          <div style={{ width: `${100 - split}%` }} className="overflow-hidden flex flex-col">
+          <div style={{ width: `${100 - split}%` }} className="overflow-hidden flex flex-col min-w-0">
             {rightContent}
           </div>
         </div>
-      )}
 
-      {/* Vertical split */}
-      {mode === 'vertical' && (
+        {/* Vertical split */}
         <div
-          ref={containerRef}
-          className="flex flex-col flex-1 overflow-hidden"
-          onMouseMove={onMouseMove}
+          ref={vContainerRef}
+          className={`absolute inset-0 flex flex-col ${mode === 'vertical' ? '' : 'invisible pointer-events-none'}`}
+          onMouseMove={e => onMouseMove(e, 'vertical')}
           onMouseUp={onMouseUp}
           onMouseLeave={onMouseUp}
         >
           <div style={{ height: `${split}%` }} className="overflow-hidden flex flex-col">
             {leftContent}
           </div>
-          {/* Drag handle */}
           <div
-            onMouseDown={onMouseDown}
+            onMouseDown={() => onMouseDown('vertical')}
             className="h-1.5 bg-gray-200 hover:bg-blue-400 cursor-row-resize flex-shrink-0 transition-colors active:bg-blue-500"
             title="Táhni pro změnu výšky"
           />
@@ -152,7 +151,18 @@ export function TranscribePanelLayout({
             {rightContent}
           </div>
         </div>
-      )}
+
+        {/* Tabs content */}
+        <div className={`absolute inset-0 ${mode === 'tabs' ? '' : 'invisible pointer-events-none'}`}>
+          <div className={`h-full overflow-hidden flex flex-col ${activeTab === 'left' ? '' : 'invisible pointer-events-none'}`}>
+            {leftContent}
+          </div>
+          <div className={`absolute inset-0 overflow-hidden flex flex-col ${activeTab === 'right' ? '' : 'invisible pointer-events-none'}`}>
+            {rightContent}
+          </div>
+        </div>
+
+      </div>
     </div>
   )
 }

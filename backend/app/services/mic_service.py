@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..config import AUDIO_CACHE_ROOT, MIC_SESSIONS_ROOT, MODEL_STORE_ROOT, RUNTIME_ROOT, SUBTITLES_ROOT
+from ..config import AUDIO_CACHE_ROOT, MIC_SEQUENCES_ROOT, MIC_SESSIONS_ROOT, MODEL_STORE_ROOT, RUNTIME_ROOT, SUBTITLES_ROOT
 
 try:
     import psutil
@@ -102,6 +102,7 @@ class MicSessionState:
     _last_capture_ts_ms: float | None = field(default=None, repr=False)
     _last_arrival_perf: float | None = field(default=None, repr=False)
     _last_text_change_perf: float | None = field(default=None, repr=False)
+    _last_sequence_report_persist_perf: float = field(default=0.0, repr=False)
     _pid: int | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -343,6 +344,330 @@ def _update_sequence_timing_on_stop(state: MicSessionState) -> dict[str, Any]:
     return timing
 
 
+# ---------------------------------------------------------------------------
+# Trial classification & sequence report persistence
+# ---------------------------------------------------------------------------
+
+_FAIL_DROP_RATE = 0.35
+_FAIL_FIRST_WORD_MS = 10_000.0
+_FAIL_QUEUE_PEAK_S = 3.0
+_BORDERLINE_DROP_RATE = 0.10
+_BORDERLINE_RTF = 0.8
+_BORDERLINE_FIRST_WORD_MS = 5_000.0
+
+
+def classify_trial(state: MicSessionState) -> str:
+    """Klasifikuje výsledek trialu: ok | borderline | too_slow_for_slot | fail."""
+    drop = float(state.drop_rate or 0.0)
+    rtf = float(state.rtf or 0.0)
+    fw_ms = state.first_word_wall_ms
+    q_peak = float(state.queue_depth_peak_s or 0.0)
+    reason = state.reason_code or ""
+    error = state.error or ""
+
+    if (
+        drop > _FAIL_DROP_RATE
+        or (fw_ms is not None and fw_ms > _FAIL_FIRST_WORD_MS)
+        or q_peak > _FAIL_QUEUE_PEAK_S
+        or bool(error.strip())
+        or reason in {"start_recording_failed", "backpressure_drop"} and drop > _FAIL_DROP_RATE
+    ):
+        return "fail"
+
+    if (
+        (fw_ms is not None and fw_ms > _FAIL_FIRST_WORD_MS)
+        or q_peak > _FAIL_QUEUE_PEAK_S
+    ):
+        return "too_slow_for_slot"
+
+    if (
+        drop > _BORDERLINE_DROP_RATE
+        or rtf > _BORDERLINE_RTF
+        or (fw_ms is not None and fw_ms > _BORDERLINE_FIRST_WORD_MS)
+    ):
+        return "borderline"
+
+    return "ok"
+
+
+def _sequence_identity(state: MicSessionState) -> tuple[str, int | None, int | None]:
+    timing = state.sequence_timing or {}
+    token = str(timing.get("sequence_token") or "").strip()
+    seq_index = _safe_int(timing.get("sequence_index"))
+    seq_total = _safe_int(timing.get("sequence_total"))
+
+    if token:
+        return token, seq_index, seq_total
+
+    meta = _parse_auto_sequence_meta(state.model_params or {})
+    token = str(meta.get("token") or "").strip()
+    if seq_index is None:
+        seq_index = meta.get("index")
+    if seq_total is None:
+        seq_total = meta.get("total")
+    return token, seq_index, seq_total
+
+
+def _build_sequence_trial_entry(
+    state: MicSessionState,
+    *,
+    phase: str,
+    payload: dict[str, Any] | None,
+    seq_index: int | None,
+    seq_total: int | None,
+) -> dict[str, Any]:
+    p = payload or {}
+    return {
+        "seq_index": seq_index,
+        "seq_total": seq_total,
+        "session_id": state.session_id,
+        "model_id": state.model_id,
+        "phase": str(phase),
+        "status": state.status,
+        "created_at": state.created_at,
+        "started_at": state.started_at,
+        "stopped_at": state.stopped_at,
+        "updated_at": _iso_now(),
+        "trial_status": classify_trial(state),
+        "rtf": p.get("rtf", state.rtf),
+        "elapsed_s": p.get("elapsed_s", state.elapsed_s),
+        "total_audio_s": p.get("total_audio_s", state.total_audio_s),
+        "drop_rate": p.get("drop_rate", state.drop_rate),
+        "first_word_latency_ms": p.get("first_word_latency_ms", state.first_word_latency_ms),
+        "first_word_wall_ms": p.get("first_word_wall_ms", state.first_word_wall_ms),
+        "first_word_audio_ms": p.get("first_word_audio_ms", state.first_word_audio_ms),
+        "segment_finalize_ms_p50": p.get("segment_finalize_ms_p50", state.segment_finalize_ms_p50),
+        "segment_finalize_ms_p95": p.get("segment_finalize_ms_p95", state.segment_finalize_ms_p95),
+        "queue_depth_peak_s": p.get("queue_depth_peak_s", state.queue_depth_peak_s),
+        "backpressure_events": p.get("backpressure_events", state.backpressure_events),
+        "worker_rss_peak_mb": p.get("worker_rss_peak_mb", state.worker_rss_peak_mb),
+        "reason_code": p.get("reason_code", state.reason_code),
+        "error": p.get("error", state.error),
+    }
+
+
+def _build_sequence_summary(trials: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {"ok": 0, "borderline": 0, "too_slow_for_slot": 0, "fail": 0}
+    running = 0
+    finalized = 0
+    reasons: dict[str, int] = {}
+    rtf_values: list[float] = []
+    drop_values: list[float] = []
+
+    for trial in trials:
+        status = str(trial.get("trial_status") or "")
+        if status in counts:
+            counts[status] += 1
+        if str(trial.get("status") or "") == "recording":
+            running += 1
+        if trial.get("stopped_at"):
+            finalized += 1
+        reason_code = str(trial.get("reason_code") or "").strip()
+        if reason_code:
+            reasons[reason_code] = reasons.get(reason_code, 0) + 1
+
+        rtf = _safe_float(trial.get("rtf"))
+        if isinstance(rtf, float):
+            rtf_values.append(rtf)
+        drop = _safe_float(trial.get("drop_rate"))
+        if isinstance(drop, float):
+            drop_values.append(drop)
+
+    avg_rtf = round(sum(rtf_values) / len(rtf_values), 4) if rtf_values else None
+    avg_drop = round(sum(drop_values) / len(drop_values), 4) if drop_values else None
+    return {
+        "counts": counts,
+        "running": running,
+        "finalized": finalized,
+        "reasons": reasons,
+        "avg_rtf": avg_rtf,
+        "avg_drop_rate": avg_drop,
+    }
+
+
+def _persist_sequence_report(
+    state: MicSessionState,
+    payload: dict[str, Any] | None = None,
+    *,
+    phase: str = "final",
+) -> None:
+    """Uloží / aktualizuje report.json + report.csv pro sekvenci průběžně i finálně."""
+    token, seq_index, seq_total = _sequence_identity(state)
+    if not token:
+        return
+
+    seq_dir = MIC_SEQUENCES_ROOT / token
+    try:
+        seq_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    report_path = seq_dir / "report.json"
+    csv_path = seq_dir / "report.csv"
+
+    report: dict[str, Any] = {}
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            report = {}
+
+    trials_raw = report.get("trials")
+    trials: list[dict[str, Any]] = list(trials_raw) if isinstance(trials_raw, list) else []
+    trial_entry = _build_sequence_trial_entry(
+        state,
+        phase=phase,
+        payload=payload,
+        seq_index=seq_index,
+        seq_total=seq_total,
+    )
+
+    replaced = False
+    if seq_index is not None:
+        for i, trial in enumerate(trials):
+            if trial.get("seq_index") == seq_index and trial.get("model_id") == state.model_id:
+                trials[i] = trial_entry
+                replaced = True
+                break
+    if not replaced:
+        for i, trial in enumerate(trials):
+            if trial.get("session_id") == state.session_id:
+                trials[i] = trial_entry
+                replaced = True
+                break
+    if not replaced:
+        trials.append(trial_entry)
+
+    trials_sorted = sorted(
+        trials,
+        key=lambda t: (
+            t.get("seq_index") if isinstance(t.get("seq_index"), int) else 10**9,
+            str(t.get("model_id") or ""),
+            str(t.get("session_id") or ""),
+        ),
+    )
+
+    sequence_total = seq_total
+    if sequence_total is None:
+        sequence_total = _safe_int(report.get("sequence_total"))
+    if sequence_total is None:
+        for trial in trials_sorted:
+            maybe_total = _safe_int(trial.get("seq_total"))
+            if isinstance(maybe_total, int):
+                sequence_total = maybe_total
+                break
+
+    report = {
+        "sequence_token": token,
+        "updated_at": _iso_now(),
+        "sequence_total": sequence_total,
+        "trials_count": len(trials_sorted),
+        "summary": _build_sequence_summary(trials_sorted),
+        "trials": trials_sorted,
+    }
+
+    try:
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return
+
+    csv_cols = [
+        "seq_index",
+        "seq_total",
+        "model_id",
+        "phase",
+        "status",
+        "trial_status",
+        "rtf",
+        "drop_rate",
+        "first_word_wall_ms",
+        "segment_finalize_ms_p50",
+        "segment_finalize_ms_p95",
+        "queue_depth_peak_s",
+        "backpressure_events",
+        "worker_rss_peak_mb",
+        "elapsed_s",
+        "total_audio_s",
+        "reason_code",
+        "error",
+        "session_id",
+        "created_at",
+        "started_at",
+        "stopped_at",
+        "updated_at",
+    ]
+    try:
+        lines = [",".join(csv_cols)]
+        for trial in trials_sorted:
+            lines.append(",".join(str(trial.get(col, "")) for col in csv_cols))
+        csv_path.write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _maybe_persist_sequence_progress(
+    state: MicSessionState,
+    *,
+    phase: str = "partial",
+    force: bool = False,
+) -> None:
+    token, _, _ = _sequence_identity(state)
+    if not token:
+        return
+
+    now_perf = time.perf_counter()
+    with state._lock:
+        if not force and state._last_sequence_report_persist_perf > 0:
+            if (now_perf - state._last_sequence_report_persist_perf) < 1.0:
+                return
+        state._last_sequence_report_persist_perf = now_perf
+
+        elapsed_s = state.elapsed_s
+        if state.status == "recording" and state._started_perf > 0:
+            elapsed_s = max(0.0, now_perf - state._started_perf)
+        total_audio_s = state.total_audio_s
+        if state.target_sample_rate > 0:
+            total_audio_s = state._total_samples / max(1, state.target_sample_rate)
+        rtf = state.rtf
+        if total_audio_s > 0:
+            rtf = elapsed_s / max(0.1, total_audio_s)
+        payload = {
+            "rtf": round(float(rtf), 4) if isinstance(rtf, (int, float)) else None,
+            "elapsed_s": round(float(elapsed_s), 3) if isinstance(elapsed_s, (int, float)) else None,
+            "total_audio_s": round(float(total_audio_s), 2) if isinstance(total_audio_s, (int, float)) else None,
+            "drop_rate": round(float(state.drop_rate), 4) if isinstance(state.drop_rate, (int, float)) else None,
+            "first_word_latency_ms": state.first_word_latency_ms,
+            "first_word_wall_ms": state.first_word_wall_ms,
+            "first_word_audio_ms": state.first_word_audio_ms,
+            "segment_finalize_ms_p50": state.segment_finalize_ms_p50,
+            "segment_finalize_ms_p95": state.segment_finalize_ms_p95,
+            "queue_depth_peak_s": state.queue_depth_peak_s,
+            "backpressure_events": state.backpressure_events,
+            "worker_rss_peak_mb": state.worker_rss_peak_mb,
+            "reason_code": state.reason_code,
+            "error": state.error,
+        }
+
+    _persist_sequence_report(state, payload, phase=phase)
+
+
+def get_sequence_report(token: str) -> dict[str, Any] | None:
+    """Vrátí sequence report dict, nebo None pokud neexistuje."""
+    path = MIC_SEQUENCES_ROOT / token / "report.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def get_sequence_report_csv_path(token: str) -> Path | None:
+    """Vrátí cestu k report.csv, nebo None."""
+    path = MIC_SEQUENCES_ROOT / token / "report.csv"
+    return path if path.exists() else None
+
+
 def _append_mic_event(
     event: str,
     *,
@@ -484,6 +809,7 @@ def create_session(model_id: str, model_params: dict | None = None) -> str:
             "mobile_loop_cycle_s": seq_meta["cycle_s"],
         },
     )
+    _maybe_persist_sequence_progress(state, phase="created", force=True)
     return session_id
 
 
@@ -1261,6 +1587,7 @@ def start_recording(session_id: str) -> None:
             "sequence_timing": sequence_timing,
         },
     )
+    _maybe_persist_sequence_progress(state, phase="started", force=True)
 
 
 def record_session_start_failure(
@@ -1287,6 +1614,7 @@ def record_session_start_failure(
         state=state,
         extra={"failure_reason_code": str(reason_code), "failure_error": str(error)},
     )
+    _maybe_persist_sequence_progress(state, phase="start_failed", force=True)
 
 
 def process_audio_chunk(
@@ -1310,6 +1638,7 @@ def process_audio_chunk(
             state.dropped_chunks += 1
             state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
             state.reason_code = "empty_chunk"
+        _maybe_persist_sequence_progress(state, phase="partial")
         return {"error": "empty chunk", "reason_code": "empty_chunk"}
 
     in_sr = max(1, int(sample_rate))
@@ -1320,12 +1649,14 @@ def process_audio_chunk(
             state.dropped_chunks += 1
             state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
             state.reason_code = "empty_chunk"
+        _maybe_persist_sequence_progress(state, phase="partial")
         return {"error": "empty chunk", "reason_code": "empty_chunk"}
 
     chunk_audio_s = len(prepared_samples) / max(1, prepared_sr)
     now_perf = time.perf_counter()
     now_wall_ms = time.time() * 1000.0
 
+    backpressure_payload: dict[str, Any] | None = None
     with state._lock:
         if state._last_arrival_perf is not None:
             interarrival_ms = (now_perf - state._last_arrival_perf) * 1000.0
@@ -1352,7 +1683,7 @@ def process_audio_chunk(
                 state.backpressure_active = False
             state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
             state.reason_code = "backpressure_drop"
-            return {
+            backpressure_payload = {
                 "type": "partial",
                 "text": state.transcript,
                 "text_delta": "",
@@ -1368,6 +1699,9 @@ def process_audio_chunk(
                 "backpressure_events": state.backpressure_events,
                 "dropped_by_backpressure": True,
             }
+    if backpressure_payload is not None:
+        _maybe_persist_sequence_progress(state, phase="partial")
+        return backpressure_payload
 
     adapter_key = _adapter_key(state.model_id)
     chunk_fn = _get_chunk_fn(adapter_key)
@@ -1395,6 +1729,7 @@ def process_audio_chunk(
                 "failure_error": str(exc),
             },
         )
+        _maybe_persist_sequence_progress(state, phase="chunk_error", force=True)
         return {"error": str(exc), "reason_code": state.reason_code}
 
     processing_ms = max(0.0, (time.perf_counter() - chunk_started) * 1000.0)
@@ -1437,6 +1772,8 @@ def process_audio_chunk(
             state.first_word_audio_ms = float(first_audio) if isinstance(first_audio, (int, float)) else None
         state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
         state.reason_code = None
+
+    _maybe_persist_sequence_progress(state, phase="partial")
 
     return {
         "type": "partial",
@@ -1527,7 +1864,9 @@ def stop_recording(session_id: str) -> dict[str, Any]:
                 state.worker_rss_peak_mb = max(float(state.worker_rss_peak_mb), float(rss_now))
         state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
         state.queue_depth_s = max(0.0, state.queue_depth_s)
-        if state.reason_code is None and not state.transcript.strip():
+        if state.reason_code is None and state.drop_rate > 0.05:
+            state.reason_code = "backpressure_drop"
+        elif state.reason_code is None and not state.transcript.strip():
             state.reason_code = "no_tokens"
     sequence_timing = _update_sequence_timing_on_stop(state)
 
@@ -1567,6 +1906,7 @@ def stop_recording(session_id: str) -> dict[str, Any]:
         "error": state.error,
     }
     _persist_session_snapshot(state, phase="final", extra={"final": final_payload})
+    _persist_sequence_report(state, final_payload, phase="final")
     _append_mic_event(
         "finalized",
         state=state,

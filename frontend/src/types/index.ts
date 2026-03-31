@@ -50,6 +50,8 @@ export interface LibraryItem {
   view_count: number | null
   metadata_fetched_at: string | null
   audio_cached: boolean
+  audio_size_bytes: number | null
+  audio_duration_seconds: number | null
   latest_results?: LatestResult[]
 }
 

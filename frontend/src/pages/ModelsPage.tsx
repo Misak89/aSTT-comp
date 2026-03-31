@@ -132,26 +132,25 @@ export function ModelsPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-1">
-            <p className="text-slate-300 font-semibold">Backend (FastAPI)</p>
-            <p className="text-slate-500 text-xs">Port 8012 · uvicorn · --reload = auto-restart při změně souboru</p>
+            <p className="text-slate-300 font-semibold">Jedním skriptem (doporučeno)</p>
+            <p className="text-slate-500 text-xs">Spusť z kořene projektu (složka kde je git clone):</p>
             <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
-{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
-.venv\\Scripts\\python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8012 --reload`}
+{`# Windows
+web-up.cmd           (bez rebuild frontendu)
+web-up-build.cmd     (s rebuild frontendu)
+
+# Mac / Linux
+./web-up.sh
+./web-up-build.sh`}
             </pre>
-            <p className="text-slate-300 font-semibold pt-1">Jedním skriptem (doporučeno)</p>
-            <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
-{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
-start_web_app.cmd`}
-            </pre>
-            <p className="text-slate-500 text-xs">Restart: Ctrl+C v terminálu → spusť znovu. Nebo ulož jakýkoliv .py soubor (--reload).</p>
+            <p className="text-slate-500 text-xs">Restart: Ctrl+C → spusť znovu. Nebo ulož jakýkoliv .py soubor (--reload).</p>
           </div>
 
           <div className="space-y-1">
             <p className="text-slate-300 font-semibold">Frontend build (Vite → dist/)</p>
             <p className="text-slate-500 text-xs">Po každé změně .tsx/.ts souboru je potřeba rebuild!</p>
             <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
-{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
-npm run build`}
+{`npm --prefix frontend run build`}
             </pre>
             <p className="text-slate-500 text-xs">Výstup jde do <span className="font-mono text-slate-400">frontend/dist/</span> — backend ji servuje staticky.</p>
           </div>
@@ -160,8 +159,7 @@ npm run build`}
             <p className="text-slate-300 font-semibold">Frontend dev server (live reload)</p>
             <p className="text-slate-500 text-xs">Alternativa k buildu — změny se projeví okamžitě na portu 5173</p>
             <pre className="bg-slate-800 rounded px-3 py-2 text-green-300 text-xs overflow-x-auto whitespace-pre-wrap select-all">
-{`cd C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp
-npm run dev`}
+{`npm --prefix frontend run dev`}
             </pre>
             <p className="text-slate-500 text-xs">Otevři <span className="font-mono text-slate-400">http://localhost:5173</span> (API proxuje na backend :8012).</p>
           </div>
@@ -169,7 +167,7 @@ npm run dev`}
 
         <div className="rounded border border-slate-700 bg-slate-800/60 p-3 space-y-2">
           <div className="flex items-center gap-3 flex-wrap">
-            <p className="text-slate-200 font-semibold">Auto-start web app po startu Windows</p>
+            <p className="text-slate-200 font-semibold">Auto-start web app po startu Windows <span className="text-amber-400 font-normal text-xs">(pouze Windows)</span></p>
             {autostart && (
               <span className={`text-xs px-2 py-0.5 rounded border ${autostart.enabled ? 'text-green-300 border-green-500/40 bg-green-900/20' : 'text-amber-300 border-amber-500/40 bg-amber-900/20'}`}>
                 {autostart.enabled ? 'Zapnuto' : 'Vypnuto'}
@@ -469,11 +467,103 @@ python scripts/copy_subtitles.py     # kopíruj VTT`}
           />
         </div>
 
-        <div className="border-t border-gray-200 pt-3 space-y-1">
-          <p className="font-medium text-gray-600">Jak nainstalovat model:</p>
-          <p>1. Zkopíruj soubory do <span className="font-mono">runtime/model_store/{'{model_id}'}/ </span></p>
-          <p>2. Klikni <strong>Zaznamenat install</strong> — uloží datum, velikost a verzi do logu.</p>
-          <p>3. Pro whisper.cpp: <span className="font-mono">whisper-cli.exe</span> musí být v <span className="font-mono">runtime/model_store/whisper_cpp_runtime/</span></p>
+        <div className="border-t border-gray-200 pt-4 space-y-4">
+          <p className="font-semibold text-gray-800 text-sm">Jak stáhnout a nainstalovat model:</p>
+
+          {/* whisper.cpp */}
+          <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 space-y-2">
+            <p className="font-bold text-gray-800 text-sm">whisper.cpp — base / small / large-v3 / large-v3-turbo</p>
+            <p className="text-gray-600 text-sm">Offline inference přes binary. Potřebuješ .ggml soubor modelu + whisper-cli binary.</p>
+            <div className="space-y-1 text-sm">
+              <p><strong>Krok 1 — stáhnout model (.ggml):</strong></p>
+              <ul className="ml-4 space-y-1 text-gray-700">
+                <li>• <strong>base</strong> (~74 MB): <a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" className="text-blue-600 hover:underline font-mono text-sm" target="_blank" rel="noreferrer">ggml-base.bin</a></li>
+                <li>• <strong>small</strong> (~244 MB, doporučeno pro CZ): <a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" className="text-blue-600 hover:underline font-mono text-sm" target="_blank" rel="noreferrer">ggml-small.bin</a></li>
+                <li>• <strong>large-v3</strong> (~1550 MB): <a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin" className="text-blue-600 hover:underline font-mono text-sm" target="_blank" rel="noreferrer">ggml-large-v3.bin</a></li>
+                <li>• <strong>large-v3-turbo</strong> (~547 MB): <a href="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" className="text-blue-600 hover:underline font-mono text-sm" target="_blank" rel="noreferrer">ggml-large-v3-turbo-q5_0.bin</a></li>
+                <li className="text-gray-500 text-sm">Všechny soubory: <a href="https://huggingface.co/ggerganov/whisper.cpp" className="text-blue-500 hover:underline" target="_blank" rel="noreferrer">huggingface.co/ggerganov/whisper.cpp</a></li>
+              </ul>
+              <p className="mt-2"><strong>Krok 2 — umístit soubor:</strong> zkopíruj .ggml do <span className="font-mono bg-gray-100 px-1 rounded text-sm">runtime/model_store/whisper_cpp_{'{model_id}'}/</span></p>
+              <p><strong>Krok 3 — whisper-cli binary:</strong> stáhnout z <a href="https://github.com/ggml-org/whisper.cpp/releases" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">github.com/ggml-org/whisper.cpp/releases</a> a umístit <span className="font-mono bg-gray-100 px-1 rounded text-sm">whisper-cli.exe</span> (Win) nebo <span className="font-mono bg-gray-100 px-1 rounded text-sm">whisper-cli</span> (Mac/Linux) do <span className="font-mono bg-gray-100 px-1 rounded text-sm">runtime/model_store/whisper_cpp_runtime/</span></p>
+              <p><strong>Krok 4:</strong> klikni <strong>Zaznamenat install</strong> u příslušného modelu výše.</p>
+            </div>
+          </div>
+
+          {/* faster-whisper */}
+          <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 space-y-2">
+            <p className="font-bold text-gray-800 text-sm">faster-whisper small / medium (CZ int8)</p>
+            <p className="text-gray-600 text-sm">CTranslate2 streaming inference. Modely se stahují automaticky z HuggingFace při prvním spuštění.</p>
+            <div className="space-y-1 text-sm">
+              <p><strong>Krok 1 — nainstalovat Python balíček:</strong></p>
+              <pre className="bg-gray-100 rounded px-3 py-2 text-green-800 text-xs select-all overflow-x-auto">
+{`.venv/bin/pip install faster-whisper     # Mac / Linux
+.venv\\Scripts\\pip install faster-whisper  # Windows`}
+              </pre>
+              <p className="mt-1"><strong>Krok 2 — model soubory</strong> (volitelně, pro offline použití):</p>
+              <ul className="ml-4 space-y-1 text-gray-700 text-sm">
+                <li>• <strong>small CZ int8</strong>: <a href="https://huggingface.co/Systran/faster-whisper-small" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">huggingface.co/Systran/faster-whisper-small</a> → zkopírovat do <span className="font-mono bg-gray-100 px-1 rounded text-sm">runtime/model_store/faster_whisper_small_cs_int8/</span></li>
+                <li>• <strong>medium CZ int8</strong>: <a href="https://huggingface.co/Systran/faster-whisper-medium" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">huggingface.co/Systran/faster-whisper-medium</a> → zkopírovat do <span className="font-mono bg-gray-100 px-1 rounded text-sm">runtime/model_store/faster_whisper_medium_cs_int8/</span></li>
+              </ul>
+              <p><strong>Krok 3:</strong> klikni <strong>Zaznamenat install</strong> u příslušného modelu výše.</p>
+            </div>
+          </div>
+
+          {/* vosk */}
+          <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 space-y-2">
+            <p className="font-bold text-gray-800 text-sm">VOSK small cs-0.4 — dedikovaný CZ model, nízké nároky (&lt;200 MB RAM)</p>
+            <p className="text-gray-600 text-sm">Offline Kaldi streaming model. Nejnižší HW nároky ze všech modelů.</p>
+            <div className="space-y-1 text-sm">
+              <p><strong>Krok 1 — stáhnout model:</strong> <a href="https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4.zip" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">vosk-model-small-cs-0.4.zip</a> (~44 MB) z <a href="https://alphacephei.com/vosk/models" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">alphacephei.com/vosk/models</a></p>
+              <p><strong>Krok 2 — rozbalit</strong> do <span className="font-mono bg-gray-100 px-1 rounded text-sm">runtime/model_store/vosk_small_cs_0_4/</span> (obsah složky, ne složka samotná)</p>
+              <p><strong>Krok 3:</strong> klikni <strong>Zaznamenat install</strong> u modelu výše.</p>
+            </div>
+          </div>
+
+          {/* sherpa-onnx */}
+          <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 space-y-2">
+            <p className="font-bold text-gray-800 text-sm">sherpa-onnx small (EN) / Parakeet CZ int8</p>
+            <p className="text-gray-600 text-sm">Streaming ONNX inference. <span className="text-amber-700">Parakeet CZ je dočasně vypnuto (Windows crash na metadata).</span></p>
+            <div className="space-y-1 text-sm">
+              <p><strong>Krok 1 — stáhnout bundle:</strong> <a href="https://github.com/k2-fsa/sherpa-onnx/releases" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">github.com/k2-fsa/sherpa-onnx/releases</a> - hledej "streaming" modely (.tar.bz2)</p>
+              <p><strong>Krok 2 — rozbalit</strong> do <span className="font-mono bg-gray-100 px-1 rounded text-sm">runtime/model_store/sherpa_onnx_small/</span></p>
+              <p><strong>Krok 3:</strong> klikni <strong>Zaznamenat install</strong> u modelu výše.</p>
+            </div>
+          </div>
+
+          {/* Qwen3-ASR */}
+          <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 space-y-2">
+            <p className="font-bold text-gray-800 text-sm">Qwen3-ASR 0.6B / 1.7B — LLM-based ASR</p>
+            <p className="text-gray-600 text-sm">HuggingFace transformers. Vysoká přesnost, vysoké HW nároky (RAM 4-8 GB). <span className="text-red-600 font-medium">Na Windows VŽDY float32 - nikdy bfloat16 (crash).</span></p>
+            <div className="space-y-1 text-sm">
+              <p><strong>Krok 1 — nainstalovat závislosti:</strong></p>
+              <pre className="bg-gray-100 rounded px-3 py-2 text-green-800 text-xs select-all overflow-x-auto">
+{`.venv/bin/pip install transformers torch     # Mac / Linux
+.venv\\Scripts\\pip install transformers torch  # Windows`}
+              </pre>
+              <p className="mt-1"><strong>Krok 2 — model soubory</strong> (auto-download z HuggingFace při prvním spuštění):</p>
+              <ul className="ml-4 space-y-1 text-gray-700 text-sm">
+                <li>• <strong>0.6B</strong>: <a href="https://huggingface.co/Qwen/Qwen3-ASR-0.6B" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">huggingface.co/Qwen/Qwen3-ASR-0.6B</a></li>
+                <li>• <strong>1.7B</strong>: <a href="https://huggingface.co/Qwen/Qwen3-ASR-1.7B" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">huggingface.co/Qwen/Qwen3-ASR-1.7B</a></li>
+              </ul>
+              <p><strong>Krok 3:</strong> klikni <strong>Zaznamenat install</strong> u příslušného modelu výše.</p>
+            </div>
+          </div>
+
+          {/* Moonshine */}
+          <div className="rounded border border-gray-200 bg-gray-50 px-4 py-3 space-y-2">
+            <p className="font-bold text-gray-800 text-sm">Moonshine Medium (EN) — moderní streaming ASR, 245M params</p>
+            <p className="text-gray-600 text-sm">Auto-download přes pip. Zatím pouze angličtina. WER 6.65% na EN LibriSpeech.</p>
+            <div className="space-y-1 text-sm">
+              <p><strong>Krok 1 — nainstalovat Python balíček:</strong></p>
+              <pre className="bg-gray-100 rounded px-3 py-2 text-green-800 text-xs select-all overflow-x-auto">
+{`.venv/bin/pip install moonshine-voice     # Mac / Linux
+.venv\\Scripts\\pip install moonshine-voice  # Windows`}
+              </pre>
+              <p className="mt-1">Model se stáhne automaticky z HuggingFace při prvním spuštění.</p>
+              <p>Zdroj: <a href="https://github.com/usefulsensors/moonshine" className="text-blue-600 hover:underline" target="_blank" rel="noreferrer">github.com/usefulsensors/moonshine</a></p>
+              <p><strong>Krok 2:</strong> klikni <strong>Zaznamenat install</strong> u modelu výše.</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>

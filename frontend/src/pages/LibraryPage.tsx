@@ -1162,7 +1162,15 @@ export function LibraryPage() {
                   </td>
                   <td className="px-2 py-2">
                     {item.audio_cached
-                      ? <span className="text-green-600 text-xs font-medium" title="Plné audio staženo v cache">✓ WAV</span>
+                      ? (
+                        <span className="text-green-600 text-xs font-medium" title={[
+                          'Plné audio staženo v cache',
+                          item.audio_size_bytes != null ? `${(item.audio_size_bytes / 1024 / 1024).toFixed(0)} MB` : null,
+                          item.audio_duration_seconds != null ? `${Math.round(item.audio_duration_seconds)}s` : null,
+                        ].filter(Boolean).join(' · ')}>
+                          ✓ WAV{item.audio_size_bytes != null ? ` ${(item.audio_size_bytes / 1024 / 1024).toFixed(0)} MB` : ''}
+                        </span>
+                      )
                       : <span className="text-gray-300 text-xs" title="Audio se stahuje na pozadí…">⏳</span>}
                   </td>
                   <td className="px-2 py-2 text-gray-500 text-xs">

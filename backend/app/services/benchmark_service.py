@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..config import JOBS_ROOT, RUNS_ROOT, SUBTITLES_ROOT, SCENARIOS_ROOT, MODEL_STORE_ROOT
+from ..config import JOBS_ROOT, RUNS_ROOT, SUBTITLES_ROOT, SCENARIOS_ROOT, MODEL_STORE_ROOT, AUDIO_CACHE_ROOT
 from ..models.benchmark import BenchmarkJobRequest, BenchmarkJobStatus, LiveJobProgress
 from . import library_service
 
@@ -306,12 +306,9 @@ def run_job(job_id: str) -> None:
         transcript_parts = []
         for r in matrix_payload.get("results", []):
             for sm in r.get("source_metrics", []):
-                t = sm.get("transcript_text", "")
-                if t:
+                t = sm.get("transcript") or sm.get("transcript_text") or ""
+                if t and t not in transcript_parts:
                     transcript_parts.append(t)
-            t = r.get("transcript_text", "")
-            if t and t not in transcript_parts:
-                transcript_parts.append(t)
         job_transcript = "\n\n---\n\n".join(transcript_parts)
 
         _update_job(job_id,
@@ -340,10 +337,22 @@ _job_hw_procs: dict = {}  # job_id -> psutil.Process (or None)
 
 
 def _resolve_sources(req_data: dict) -> list[str]:
+    """Vrací seznam zdrojů (URL nebo lokální cesty) pro worker.
+    Pro library videa preferuje cached WAV — vyhne se živému stahování z YouTube."""
     video_ids = req_data.get("video_ids") or []
     if video_ids:
-        items = {item.video_id: item.url for item in library_service.list_items()}
-        return [items[vid] for vid in video_ids if vid in items]
+        items = {item.video_id: item for item in library_service.list_items()}
+        result = []
+        for vid in video_ids:
+            item = items.get(vid)
+            if not item:
+                continue
+            cached = AUDIO_CACHE_ROOT / f"{vid}.wav"
+            if cached.exists():
+                result.append(str(cached))
+            else:
+                result.append(item.url)
+        return result
     return req_data.get("sources") or []
 
 
