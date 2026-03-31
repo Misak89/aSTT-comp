@@ -1,144 +1,88 @@
 # aSTT-comp
 
-Nastroj pro mereni a porovnani STT (Speech-to-Text) modelu pro online prepis cestiny v realnem case.
+Nástroj pro měření a porovnání STT (Speech-to-Text) modelů pro online přepis češtiny v reálném čase.  
+Testuje skutečnou použitelnost pro živý rozhovor — audio jde do modelu v real-time chuncích, ne dávkově.
 
 ---
 
-## Instalace (prvni spusteni)
+## Instalace
 
-### 1. Nainstaluj prerekvizity
+### Prerekvizity
 
-| Co | Kde stáhnout | Poznamka |
+| Co | Kde stáhnout | Poznámka |
 | --- | --- | --- |
-| **Git** | [git-scm.com/downloads](https://git-scm.com/downloads) | Nutny pro `git clone` |
-| **Python 3.13** | [python.org/downloads](https://www.python.org/downloads/) | Windows: zaklikni "Add Python to PATH" |
-| **Node.js 18+** | [nodejs.org/en/download](https://nodejs.org/en/download) | Stahni LTS verzi |
-| **ffmpeg** | [ffmpeg.org/download.html](https://ffmpeg.org/download.html) | Windows: rozbal, pridej `bin/` slozku do PATH |
+| **Git** | [git-scm.com](https://git-scm.com/downloads) | |
+| **Python 3.13** | [python.org](https://www.python.org/downloads/) | Windows: zaškrtni „Add Python to PATH" |
+| **Node.js 18+** | [nodejs.org](https://nodejs.org/en/download) | LTS verze |
+| **ffmpeg** | [ffmpeg.org](https://ffmpeg.org/download.html) | Musí být v PATH |
 
-> **ffmpeg a PATH na Windows:** Rozbal ffmpeg, napriklad do `C:\ffmpeg\`. Pak v System Properties → Environment Variables → PATH pridej `C:\ffmpeg\bin`. Restart terminalu.
+> **ffmpeg na Windows:** Rozbal do `C:\ffmpeg\`, přidej `C:\ffmpeg\bin` do systémové PATH. Restart terminálu.
 
-### 2. Stáhnout projekt
+---
 
-Otevri **Command Prompt** (Windows) nebo **Terminal** (Mac/Linux) a spust:
+### Windows
 
 ```bat
-git clone https://github.com/TVOJE-JMENO/aSTT-comp.git
+git clone https://github.com/Misak89/aSTT-comp.git
 cd aSTT-comp
-```
 
-> Nahrad `TVOJE-JMENO` skutecnym GitHub URL po prvnim pushu.
-
-### 3. Vytvorit Python prostredi
-
-**Windows** (Command Prompt):
-
-```bat
 py -3.13 -m venv .venv
 .venv\Scripts\pip install -r backend/requirements.txt
-```
 
-> Instalace zavislosti trva 3-10 minut (stahuje ML knihovny ~1 GB). Pockat.
-
-**Mac / Linux** (Terminal):
-
-```bash
-python3.13 -m venv .venv
-.venv/bin/pip install -r backend/requirements.txt
-```
-
-### 4. Sestavit frontend
-
-```bat
 npm --prefix frontend install
 npm --prefix frontend run build
-```
 
-> Prvni `npm install` trva 1-2 minuty.
-
-### 5. Spustit aplikaci
-
-**Windows:**
-
-```bat
 web-up.cmd
 ```
 
-**Mac / Linux:**
+Otevři prohlížeč: **[http://127.0.0.1:8012](http://127.0.0.1:8012)**
 
-```bash
-chmod +x web-up.sh
-./web-up.sh
-```
-
-> **Dulezite:** Terminal okno musi zustat otevrene - v nem bezi backend. Nezavirat!
-
-### 6. Otevrit v prohlizeci
-
-```txt
-http://127.0.0.1:8012/benchmark
-```
-
-### 7. Nainstalovat STT model
-
-Bez modelu aplikace neprepisuje. Jdi na:
-
-```txt
-http://127.0.0.1:8012/models
-```
-
-Tam najdes instrukce ke stazeni pro kazdy model (vosk, whisper.cpp, faster-whisper, Qwen, moonshine).
-**Doporuceny prvni model pro CZ:** `whisper.cpp small` nebo `vosk small cs-0.4` (nejnizsi HW naroky).
+> Okno terminálu nechej otevřené — v něm běží backend.
 
 ---
 
-## Rychle spusteni (po instalaci)
+### Mac / Linux
 
-**Windows:** `web-up.cmd` / `web-status.cmd` / `web-down.cmd`
+```bash
+git clone https://github.com/Misak89/aSTT-comp.git
+cd aSTT-comp
 
-**Mac / Linux:** `./web-up.sh` / `./web-status.sh` / `./web-down.sh`
+python3.13 -m venv .venv
+.venv/bin/pip install -r backend/requirements.txt
+
+npm --prefix frontend install
+npm --prefix frontend run build
+
+chmod +x web-up.sh && ./web-up.sh
+```
+
+Otevři prohlížeč: **[http://127.0.0.1:8012](http://127.0.0.1:8012)**
+
+---
+
+### STT modely
+
+Modely se instalují přímo z webového rozhraní — žádné ruční stahování při instalaci není potřeba.
+
+Po spuštění přejdi na **[http://127.0.0.1:8012/models](http://127.0.0.1:8012/models)** a nainstaluj vybraný model dle instrukcí na stránce.
+
+Doporučený první model pro CZ: `whisper.cpp small` nebo `vosk small cs`.
+
+---
+
+## Rychlé příkazy (po instalaci)
+
+| Windows | Mac / Linux | Funkce |
+| --- | --- | --- |
+| `web-up.cmd` | `./web-up.sh` | Spustit |
+| `web-down.cmd` | `./web-down.sh` | Zastavit |
+| `web-status.cmd` | `./web-status.sh` | Stav backendu |
+| `web-up-build.cmd` | `./web-up-build.sh` | Rebuild frontendu + spustit |
 
 ## Aktualizace
 
-```bat
+```bash
 git pull
 npm --prefix frontend run build
-web-up.cmd
+# pak web-up
 ```
-
----
-
-## Povinne dokumenty (cti v tomto poradi)
-
-1. [CONTRIBUTING.md](./CONTRIBUTING.md) - zavazna pravidla prace v repu
-2. [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) - architektura a logika
-3. [docs/RUNBOOK.md](./docs/RUNBOOK.md) - provozni navody a incidenty
-4. [docs/PLAN_TRACKER.md](./docs/PLAN_TRACKER.md) - kam se zapisuje aktivni plan a jeho stav
-5. [docs/session_log.md](./docs/session_log.md) - historie implementacnich session
-
-## Aktivni pokracovani (roadmapa)
-- [docs/mic_sequence_vibe_coding_short_2026-03-30.md](./docs/mic_sequence_vibe_coding_short_2026-03-30.md)
-- [docs/mic_sequence_rychla_vs_orchestracni_prestavba_2026-03-30.md](./docs/mic_sequence_rychla_vs_orchestracni_prestavba_2026-03-30.md)
-- [docs/tuning_v4_implementacni_plan.md](./docs/tuning_v4_implementacni_plan.md)
-- [docs/tuning_v4_tasky.md](./docs/tuning_v4_tasky.md)
-
-## Zavazna pravidla dokumentace
-- Kazda zmena kodu musi mit zapis v `docs/session_log.md`.
-- Zmena architektury (`backend/app/services`, `backend/app/routers`, `packages/*`) musi mit update `docs/ARCHITECTURE.md`.
-- Zmena provozu/startu (`web-*.cmd`, `start_web_app*.cmd`, health/preflight skripty) musi mit update `docs/RUNBOOK.md`.
-- Plan/roadmapa se aktualizuje pres `docs/PLAN_TRACKER.md` (single source of truth).
-- Push se dela pouze po explicitnim souhlasu maintainera.
-
-Kontrola je v CI (`.github/workflows/docs-guard.yml`) a v PR checklistu (`.github/pull_request_template.md`).
-
-## Stabilni spousteni webu
-- `web-up.cmd`: doporuceny stabilni start v aktualnim okne (backend bezi, okno nezavirat).
-- `web-up-build.cmd`: stejny stabilni start, ale predem vynuti frontend build.
-- `web-up-bg.cmd`: volitelny start do noveho okna `aSTT-web`.
-- `web-status.cmd`: zobrazi health a proces na portu 8012.
-- `web-down.cmd`: ukonci proces, ktery posloucha na portu 8012.
-- `web-restart.cmd`: stop + start v jednom kroku.
-
-## Logika
-- Hlavni produkcni vstup jsou root `web-*.cmd` soubory.
-- Backend bezi na `127.0.0.1:8012`, frontend se servira z backendu.
-- Pokud je potreba plny rebuild frontendu, pouzij `web-up-build.cmd`.
