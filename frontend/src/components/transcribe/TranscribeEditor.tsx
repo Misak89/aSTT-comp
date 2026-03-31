@@ -233,10 +233,10 @@ export function TranscribeEditor({ initialContent = '', currentAudioTime = 0, on
     },
   })
 
-  // Sync initial content if it changes (e.g. transcript arrives)
+  // Sync content when it changes externally (live transcription updates or archive open)
   useEffect(() => {
     if (!editor || !initialContent) return
-    if (editor.isEmpty && initialContent) {
+    if (editor.getHTML() !== initialContent) {
       editor.commands.setContent(initialContent)
     }
   }, [editor, initialContent])
