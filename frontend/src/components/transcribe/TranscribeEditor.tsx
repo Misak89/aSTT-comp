@@ -190,14 +190,11 @@ async function buildEpub(html: string, title = 'Přepis'): Promise<Blob> {
 function buildFilename(sourceLabel: string, videoId: string, ext: string): string {
   const now = new Date()
   const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
-  const clean = (sourceLabel || 'prepis')
-    .replace(/[<>:"/\\|?*]/g, '')
-    .trim()
-    .slice(0, 20)
-    .trim()
-    .replace(/\s+/g, '_')
+  const label = (sourceLabel && sourceLabel !== videoId) ? sourceLabel : ''
+  const clean = label.replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 20).trim().replace(/\s+/g, '_')
   const ytPart = videoId ? `_${videoId}` : ''
-  return `${ts}_${clean}${ytPart}.${ext}`
+  const base = clean ? `${ts}_${clean}${ytPart}` : `${ts}${ytPart}`
+  return `${base}.${ext}`
 }
 
 function exportPdf(html: string, title: string) {

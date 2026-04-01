@@ -329,7 +329,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
       audioUrl = `/api/transcribe/library-audio/${selectedVideoId}`
       onAudioReady(audioUrl, '')
       const vid = library.find(v => v.video_id === selectedVideoId)
-      onSourceLabelChange?.(vid?.title ?? selectedVideoId)
+      onSourceLabelChange?.(vid?.title || '')
       onVideoIdChange?.(selectedVideoId)
     } else {
       if (!uploadedSource) { setMsg('Nahrajte soubor'); setRunning(false); return }

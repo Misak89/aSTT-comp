@@ -22,9 +22,11 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 function buildTranscriptTitle(sourceLabel: string, videoId: string): string {
   const now = new Date()
   const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
-  const clean = (sourceLabel || 'prepis').replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 20).trim().replace(/\s+/g, '_')
+  // Pokud sourceLabel === videoId (fallback ve VideoPanel), nepoužívej ho jako název
+  const label = (sourceLabel && sourceLabel !== videoId) ? sourceLabel : ''
+  const clean = label.replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 20).trim().replace(/\s+/g, '_')
   const ytPart = videoId ? `_${videoId}` : ''
-  return `${ts}_${clean}${ytPart}`
+  return clean ? `${ts}_${clean}${ytPart}` : `${ts}${ytPart}`
 }
 
 export function TranscribePage() {
