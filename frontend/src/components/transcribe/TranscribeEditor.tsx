@@ -417,35 +417,34 @@ export function TranscribeEditor({ initialContent = '', currentAudioTime = 0, on
           ✕⏱ Smazat ts
         </button>
 
-        <div className="w-full border-t border-gray-200 mt-1" />
+        <div className="w-px bg-gray-300 mx-1" />
 
-        {/* Archiv + Export — dvě řady */}
-        <div className="flex items-center gap-1 w-full flex-wrap">
-          <span className="text-xs text-gray-500 w-12 flex-shrink-0">Archiv:</span>
+        {/* Archiv + Export — inline vpravo */}
+        <div className="ml-auto flex items-center gap-1 flex-wrap">
+          <span className="text-xs text-gray-500">Archiv:</span>
           {onSave && (
             <button
               onClick={() => editor && onSave(editor.getHTML(), editor.getText())}
               className="px-2 py-0.5 text-xs rounded border bg-green-600 border-green-500 text-white hover:bg-green-500"
               title="Uložit přepis do archivu (HTML + TXT)"
             >
-              {saveStatus === 'saving' ? '⏳ Ukládám' : saveStatus === 'saved' ? '✓ Uloženo' : saveStatus === 'error' ? '✗ Chyba' : '💾 Uložit'}
+              {saveStatus === 'saving' ? '⏳' : saveStatus === 'saved' ? '✓ Uloženo' : saveStatus === 'error' ? '✗' : '💾 Uložit'}
             </button>
           )}
-          <span className="text-xs text-gray-400 ml-1">HTML + TXT</span>
-        </div>
-        <div className="flex items-center gap-1 w-full flex-wrap">
-          <span className="text-xs text-gray-500 w-12 flex-shrink-0">Export:</span>
+          <div className="w-px bg-gray-300 mx-1 h-4" />
+          <span className="text-xs text-gray-500">Export:</span>
           {(['html', 'txt', 'pdf', 'md', 'docx', 'epub'] as const).map(f => (
             <button key={f} onClick={() => exportAs(f)}
               className="px-2 py-0.5 text-xs rounded border bg-gray-700 border-gray-600 text-gray-200 hover:bg-gray-600 uppercase">
               {f}
             </button>
           ))}
+          <div className="w-px bg-gray-300 mx-1 h-4" />
           <button
             onClick={() => fetch('/api/open-dir/transcripts', { method: 'POST' }).catch(() => {})}
-            className="ml-2 px-2 py-0.5 text-xs rounded border bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200"
+            className="px-2 py-0.5 text-xs rounded border bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200"
             title="Otevřít složku runtime/transcripts/">
-            📂 Otevřít složku
+            📂
           </button>
         </div>
       </div>
