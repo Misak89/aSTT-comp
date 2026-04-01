@@ -441,6 +441,12 @@ export function TranscribeEditor({ initialContent = '', currentAudioTime = 0, on
               {f}
             </button>
           ))}
+          <button
+            onClick={() => fetch('/api/open-dir/transcripts', { method: 'POST' }).catch(() => {})}
+            className="ml-2 px-2 py-0.5 text-xs rounded border bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200"
+            title="Otevřít složku runtime/transcripts/">
+            📂 Otevřít složku
+          </button>
         </div>
       </div>
 

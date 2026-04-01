@@ -19,6 +19,14 @@ const AUTOSAVE_INTERVAL_MS = 30_000
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
+function buildTranscriptTitle(sourceLabel: string, videoId: string): string {
+  const now = new Date()
+  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+  const clean = (sourceLabel || 'prepis').replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 20).trim().replace(/\s+/g, '_')
+  const ytPart = videoId ? `_${videoId}` : ''
+  return `${ts}_${clean}${ytPart}`
+}
+
 export function TranscribePage() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [currentAudioTime, setCurrentAudioTime] = useState(0)
@@ -29,6 +37,7 @@ export function TranscribePage() {
   const [currentSourceLabel, setCurrentSourceLabel] = useState('')
   const [currentModelId, setCurrentModelId] = useState('')
   const [currentVideoId, setCurrentVideoId] = useState('')
+  const [transcriptTitle, setTranscriptTitle] = useState('')
   const [showArchive, setShowArchive] = useState(false)
   const [archiveList, setArchiveList] = useState<TranscriptEntry[]>([])
   const playerRef = useRef<TranscribeAudioPlayerHandle>(null)
@@ -69,9 +78,10 @@ export function TranscribePage() {
     setSaveStatus('saving')
     if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current)
     try {
+      const saveTitle = transcriptTitle || buildTranscriptTitle(currentSourceLabel, currentVideoId) || currentSourceLabel || 'Přepis'
       const entry = saveTranscript({
         transcript_id: currentTranscriptId ?? undefined,
-        title: currentSourceLabel || 'Přepis',
+        title: saveTitle,
         html,
         plain_text: plainText,
         source_label: currentSourceLabel || undefined,
@@ -84,7 +94,7 @@ export function TranscribePage() {
       setSaveStatus('error')
       saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 5000)
     }
-  }, [currentTranscriptId, currentSourceLabel, currentModelId])
+  }, [currentTranscriptId, currentSourceLabel, currentModelId, currentVideoId, transcriptTitle])
 
   useEffect(() => {
     if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current)
@@ -113,6 +123,8 @@ export function TranscribePage() {
     if (!transcriptStartTimeRef.current) {
       transcriptStartTimeRef.current = new Date().toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })
       lastTsBoundaryRef.current = -1
+      const title = buildTranscriptTitle(currentSourceLabel, currentVideoId)
+      setTranscriptTitle(title)
     }
 
     // Načti nastavení jednou
@@ -145,7 +157,7 @@ export function TranscribePage() {
     setTranscriptContent(html)
     editorHtmlRef.current = html
     editorTextRef.current = text
-  }, [currentSourceLabel, currentModelId])
+  }, [currentSourceLabel, currentModelId, currentVideoId])
 
   const handleTimestampClick = useCallback((seconds: number) => {
     playerRef.current?.seekTo(seconds)
@@ -272,7 +284,7 @@ export function TranscribePage() {
         {saveStatus === 'saved' && <span className="text-green-600 text-xs">✓ Uloženo</span>}
         {saveStatus === 'saving' && <span className="text-blue-500 text-xs">⏳ Ukládám...</span>}
         {saveStatus === 'error' && <span className="text-red-500 text-xs">✗ Chyba uložení</span>}
-        {currentSourceLabel && <span className="text-gray-400 text-xs truncate max-w-48">{currentSourceLabel}</span>}
+        {(transcriptTitle || currentSourceLabel) && <span className="text-gray-400 text-xs truncate max-w-xs font-mono">{transcriptTitle || currentSourceLabel}</span>}
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-gray-400">Auto-save 30s</span>
           <button onClick={() => { refreshArchive(); setShowArchive(true) }}

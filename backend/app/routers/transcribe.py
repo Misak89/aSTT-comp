@@ -2,6 +2,7 @@
 Transcribe router — upload audio, serve audio, správa přepisů (archiv) a nastavení.
 """
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,8 +114,19 @@ def save_transcript(req: SaveTranscriptRequest):
 
     tid = req.transcript_id or str(uuid.uuid4())
     entry = next((e for e in index if e["transcript_id"] == tid), None)
+
+    # Filename base: sanitizovaný title pro čitelné soubory na disku
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', req.title or tid).strip().replace(' ', '_')[:60]
+    filename_base = safe if safe else tid
+
     if entry:
-        # Update existujícího
+        # Update existujícího — smaž staré soubory pokud se filename změnil
+        old_base = entry.get("filename_base", tid)
+        if old_base != filename_base:
+            for ext in (".html", ".txt"):
+                old_f = TRANSCRIPTS_ROOT / f"{old_base}{ext}"
+                if old_f.exists():
+                    old_f.unlink()
         entry["title"] = req.title
         entry["updated_at"] = now
         entry["source_label"] = req.source_label
@@ -122,6 +134,7 @@ def save_transcript(req: SaveTranscriptRequest):
         entry["range_from"] = req.range_from
         entry["range_to"] = req.range_to
         entry["plain_text_preview"] = req.plain_text[:200]
+        entry["filename_base"] = filename_base
     else:
         # Nový přepis (upsert — přijmout i frontend-generované ID)
         entry = {
@@ -134,16 +147,13 @@ def save_transcript(req: SaveTranscriptRequest):
             "range_from": req.range_from,
             "range_to": req.range_to,
             "plain_text_preview": req.plain_text[:200],
+            "filename_base": filename_base,
         }
         index.insert(0, entry)  # nejnovější první
 
-    # Ulož HTML obsah do samostatného souboru
-    html_file = TRANSCRIPTS_ROOT / f"{tid}.html"
-    html_file.write_text(req.html, encoding="utf-8")
-
-    # Ulož také TXT verzi
-    txt_file = TRANSCRIPTS_ROOT / f"{tid}.txt"
-    txt_file.write_text(req.plain_text, encoding="utf-8")
+    # Ulož HTML + TXT pod čitelným jménem
+    (TRANSCRIPTS_ROOT / f"{filename_base}.html").write_text(req.html, encoding="utf-8")
+    (TRANSCRIPTS_ROOT / f"{filename_base}.txt").write_text(req.plain_text, encoding="utf-8")
 
     _save_index(index)
     return {"transcript_id": tid, "updated_at": now}
@@ -158,7 +168,8 @@ def get_transcript(transcript_id: str):
     entry = next((e for e in index if e["transcript_id"] == transcript_id), None)
     if entry is None:
         raise HTTPException(404, "Transcript not found")
-    html_file = TRANSCRIPTS_ROOT / f"{transcript_id}.html"
+    fb = entry.get("filename_base", transcript_id)
+    html_file = TRANSCRIPTS_ROOT / f"{fb}.html"
     html = html_file.read_text(encoding="utf-8") if html_file.exists() else ""
     return {**entry, "html": html}
 
@@ -169,13 +180,15 @@ def delete_transcript(transcript_id: str):
     if not all(c.isalnum() or c in "-_" for c in transcript_id):
         raise HTTPException(400, "Invalid transcript_id")
     index = _load_index()
-    new_index = [e for e in index if e["transcript_id"] != transcript_id]
-    if len(new_index) == len(index):
+    entry = next((e for e in index if e["transcript_id"] == transcript_id), None)
+    if entry is None:
         raise HTTPException(404, "Transcript not found")
-    html_file = TRANSCRIPTS_ROOT / f"{transcript_id}.html"
-    if html_file.exists():
-        html_file.unlink()
-    _save_index(new_index)
+    fb = entry.get("filename_base", transcript_id)
+    for ext in (".html", ".txt"):
+        f = TRANSCRIPTS_ROOT / f"{fb}{ext}"
+        if f.exists():
+            f.unlink()
+    _save_index([e for e in index if e["transcript_id"] != transcript_id])
 
 
 # ── UI Nastavení (pamatuj si nastavení stránky Přepis) ────────────────────────
