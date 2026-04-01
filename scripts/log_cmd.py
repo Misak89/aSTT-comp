@@ -16,6 +16,7 @@ Spuštění:
   python scripts/log_cmd.py --pause             # pozastaví běžící logger
   python scripts/log_cmd.py --resume            # zruší pozastavení loggeru
   python scripts/log_cmd.py --help-short        # stručná nápověda
+  python scripts/log_cmd.py --help              # širší help (všechny parametry)
   python scripts/log_cmd.py --status            # je logger spuštěn?
   python scripts/log_cmd.py --install           # zaregistruj do Task Scheduler (spustí se po přihlášení)
   python scripts/log_cmd.py --uninstall         # odstraň z Task Scheduler
@@ -26,6 +27,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -45,6 +47,9 @@ import psutil
 
 TASK_NAME = 'aSTT-comp-log-cmd'
 DEFAULT_SHUTDOWN_REASON = 'normal_exit'
+DEFAULT_HELP_INTERVAL_SEC = 3 * 60 + 33
+DEFAULT_HELP_PAUSE_MIN_SEC = 5.0
+DEFAULT_HELP_PAUSE_MAX_SEC = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +168,32 @@ def _clear_paused(out_path: Path) -> None:
 
 def _print_short_help(out_path: Path) -> None:
     resolved = out_path.resolve()
+    python_exe = Path(sys.executable).resolve()
+    script_path = Path(__file__).resolve()
+    cmd_base = f'"{python_exe}" "{script_path}"'
+    ps_base = f'& "{python_exe}" "{script_path}"'
+
     print('Stručná nápověda:', flush=True)
     print('  Ovládání: --status | --pause | --resume | --help-short', flush=True)
+    print('  Širší help: --help', flush=True)
     print('  Ukládání: --out C:\\cesta\\cmd.jsonl  (výchozí: logs\\cmd.jsonl)', flush=True)
     print(f'  Aktivní výstup: {resolved}', flush=True)
+    print('', flush=True)
+    print('HELP (CMD copy-paste):', flush=True)
+    print(f'  {cmd_base} --help-short', flush=True)
+    print(f'  {cmd_base} --pause', flush=True)
+    print(f'  {cmd_base} --resume', flush=True)
+    print(f'  {cmd_base} --status', flush=True)
+    print(f'  {cmd_base} --out "{resolved}"', flush=True)
+    print(f'  {cmd_base} --help', flush=True)
+    print('', flush=True)
+    print('HELP (PowerShell copy-paste):', flush=True)
+    print(f'  {ps_base} --help-short', flush=True)
+    print(f'  {ps_base} --pause', flush=True)
+    print(f'  {ps_base} --resume', flush=True)
+    print(f'  {ps_base} --status', flush=True)
+    print(f'  {ps_base} --out "{resolved}"', flush=True)
+    print(f'  {ps_base} --help', flush=True)
 
 
 def request_pause(out_path: Path) -> None:
@@ -188,14 +215,29 @@ def request_resume(out_path: Path) -> None:
 # Task Scheduler — install / uninstall
 # ---------------------------------------------------------------------------
 
-def install_task(out_path: Path, interval: float) -> None:
+def install_task(
+    out_path: Path,
+    interval: float,
+    periodic_help: bool,
+    help_interval_sec: float,
+    help_pause_min_sec: float,
+    help_pause_max_sec: float,
+) -> None:
     python = str(Path(sys.executable).resolve())
     script = str(Path(__file__).resolve())
     out = str(out_path.resolve())
     user = os.environ.get('USERNAME', os.environ.get('USER', ''))
+    periodic_flags = ''
+    if not periodic_help:
+        periodic_flags += ' --no-periodic-help'
+    periodic_flags += (
+        f' --help-interval-sec {help_interval_sec}'
+        f' --help-pause-min-sec {help_pause_min_sec}'
+        f' --help-pause-max-sec {help_pause_max_sec}'
+    )
 
     ps_cmd = f"""
-$action   = New-ScheduledTaskAction -Execute '{python}' -Argument '"{script}" --no-history --interval {interval} --out "{out}"'
+$action   = New-ScheduledTaskAction -Execute '{python}' -Argument '"{script}" --no-history --interval {interval} --out "{out}"{periodic_flags}'
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User '{user}'
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0
 $principal = New-ScheduledTaskPrincipal -UserId '{user}' -LogonType Interactive -RunLevel Limited
@@ -326,30 +368,51 @@ def import_bash_history(out_file, seen: set[str]) -> int:
 # Live monitoring
 # ---------------------------------------------------------------------------
 
-def snapshot() -> dict[int, dict]:
-    result: dict[int, dict] = {}
-    for p in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+def _process_key(pid: int, created_ts: float) -> tuple[int, float]:
+    """Unikátní identita procesu i při recyklaci PID."""
+    return (pid, created_ts)
+
+
+def _safe_cmdline_text(pid: int) -> str:
+    """Drahé volání - používat pouze pro nově objevené procesy."""
+    try:
+        cmd = psutil.Process(pid).cmdline()
+        return ' '.join(cmd) if cmd else ''
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return ''
+
+
+def snapshot_meta() -> dict[tuple[int, float], dict]:
+    """Lehký snapshot bez cmdline - výrazně nižší CPU náročnost."""
+    result: dict[tuple[int, float], dict] = {}
+    for p in psutil.process_iter(['pid', 'name', 'create_time']):
         try:
-            cmd = p.info['cmdline']
-            if not cmd:
-                continue
-            result[p.pid] = {
+            pid = int(p.info['pid'])
+            created = float(p.info['create_time'])
+            result[_process_key(pid, created)] = {
+                'pid': pid,
                 'name': p.info['name'],
-                'cmd': ' '.join(cmd),
-                'started': datetime.fromtimestamp(
-                    p.info['create_time'], tz=timezone.utc
-                ).isoformat(),
+                'started': datetime.fromtimestamp(created, tz=timezone.utc).isoformat(),
             }
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, KeyError, TypeError, ValueError):
             pass
     return result
 
 
-def live_monitor(out_file, interval: float, out_path: Path) -> None:
+def live_monitor(
+    out_file,
+    interval: float,
+    out_path: Path,
+    periodic_help: bool,
+    help_interval_sec: float,
+    help_pause_min_sec: float,
+    help_pause_max_sec: float,
+) -> None:
     print(f'Live monitoring (interval {interval}s, PID {os.getpid()}) — Ctrl+C pro stop', flush=True)
     _write_pid(out_path)
-    prev: dict[int, dict] = {}
+    prev: dict[tuple[int, float], dict] = {}
     was_paused = False
+    next_periodic_help_ts = time.monotonic() + max(help_interval_sec, 1.0)
 
     while True:
         now = _now()
@@ -369,7 +432,7 @@ def live_monitor(out_file, interval: float, out_path: Path) -> None:
                 )
                 print('[||] Logger pozastaven (--resume pro obnovení)', flush=True)
             was_paused = True
-            prev = snapshot()
+            prev = snapshot_meta()
             time.sleep(interval)
             continue
 
@@ -386,28 +449,84 @@ def live_monitor(out_file, interval: float, out_path: Path) -> None:
                 },
             )
             print('[>>] Logger obnoven', flush=True)
-            prev = snapshot()
+            prev = snapshot_meta()
             was_paused = False
             time.sleep(interval)
             continue
 
-        curr = snapshot()
+        # Volitelná periodická "oddechová" pauza + připomenutí HELP příkazů.
+        if periodic_help and time.monotonic() >= next_periodic_help_ts:
+            pause_seconds = random.uniform(help_pause_min_sec, help_pause_max_sec)
+            pause_seconds = max(0.1, pause_seconds)
+            _write(
+                out_file,
+                {
+                    'ts': now,
+                    'event': 'pause',
+                    'source': 'logger',
+                    'lifecycle': 'cooldown',
+                    **_self_process_info(),
+                    'reason': 'periodic_help',
+                    'pause_seconds': round(pause_seconds, 3),
+                },
+            )
+            print(
+                f'[i] Periodická pauza loggeru {pause_seconds:.1f}s '
+                f'(každých {help_interval_sec:.0f}s).',
+                flush=True,
+            )
+            _print_short_help(out_path)
+            time.sleep(pause_seconds)
+            resume_now = _now()
+            _write(
+                out_file,
+                {
+                    'ts': resume_now,
+                    'event': 'resume',
+                    'source': 'logger',
+                    'lifecycle': 'cooldown',
+                    **_self_process_info(),
+                    'reason': 'periodic_help_complete',
+                    'pause_seconds': round(pause_seconds, 3),
+                },
+            )
+            prev = snapshot_meta()
+            next_periodic_help_ts = time.monotonic() + max(help_interval_sec, 1.0)
+            time.sleep(interval)
+            continue
 
-        for pid, info in curr.items():
-            if pid not in prev:
-                entry = {'ts': now, 'event': 'start', 'source': 'live',
-                         'pid': pid, **info}
-                _write(out_file, entry)
-                print(f"[+] {pid:>6}  {info['name']:<22}  {info['cmd'][:90]}", flush=True)
+        curr_meta = snapshot_meta()
+        curr_keys = set(curr_meta.keys())
+        prev_keys = set(prev.keys())
 
-        for pid, info in prev.items():
-            if pid not in curr:
-                entry = {'ts': now, 'event': 'end', 'source': 'live',
-                         'pid': pid, 'ended': now, **info}
-                _write(out_file, entry)
-                print(f"[-] {pid:>6}  {info['name']:<22}  {info['cmd'][:90]}", flush=True)
+        # End eventy pro dříve sledované procesy, které zmizely.
+        for key in (prev_keys - curr_keys):
+            info = prev[key]
+            entry = {'ts': now, 'event': 'end', 'source': 'live',
+                     'pid': info['pid'], 'ended': now, **info}
+            _write(out_file, entry)
+            print(f"[-] {info['pid']:>6}  {info['name']:<22}  {info['cmd'][:90]}", flush=True)
 
-        prev = curr
+        next_prev: dict[tuple[int, float], dict] = {}
+
+        # Procesy které trvají dál - recykluj existující info.
+        for key in (curr_keys & prev_keys):
+            next_prev[key] = prev[key]
+
+        # Nové procesy - cmdline načti pouze teď.
+        for key in (curr_keys - prev_keys):
+            meta = curr_meta[key]
+            cmd_text = _safe_cmdline_text(meta['pid'])
+            if not cmd_text:
+                continue
+            info = {**meta, 'cmd': cmd_text}
+            next_prev[key] = info
+            entry = {'ts': now, 'event': 'start', 'source': 'live',
+                     'pid': info['pid'], **info}
+            _write(out_file, entry)
+            print(f"[+] {info['pid']:>6}  {info['name']:<22}  {info['cmd'][:90]}", flush=True)
+
+        prev = next_prev
         time.sleep(interval)
 
 
@@ -420,6 +539,14 @@ def main() -> None:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--interval', type=float, default=2.0)
     parser.add_argument('--out', default=str(PROJECT_ROOT / 'logs' / 'cmd.jsonl'))
+    parser.add_argument('--no-periodic-help', action='store_true',
+                        help='Vypni periodickou HELP pauzu (jinak každých 3:33 min)')
+    parser.add_argument('--help-interval-sec', type=float, default=DEFAULT_HELP_INTERVAL_SEC,
+                        help='Interval periodické HELP pauzy v sekundách (default 213)')
+    parser.add_argument('--help-pause-min-sec', type=float, default=DEFAULT_HELP_PAUSE_MIN_SEC,
+                        help='Min délka periodické HELP pauzy v sekundách (default 5)')
+    parser.add_argument('--help-pause-max-sec', type=float, default=DEFAULT_HELP_PAUSE_MAX_SEC,
+                        help='Max délka periodické HELP pauzy v sekundách (default 10)')
     parser.add_argument('--no-history', action='store_true')
     parser.add_argument('--history-only', action='store_true')
     parser.add_argument('--pause', action='store_true', help='Pozastav běžící logger')
@@ -432,6 +559,17 @@ def main() -> None:
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    periodic_help = not args.no_periodic_help
+
+    if args.help_interval_sec <= 0:
+        print('Chyba: --help-interval-sec musí být > 0.', flush=True)
+        sys.exit(2)
+    if args.help_pause_min_sec <= 0:
+        print('Chyba: --help-pause-min-sec musí být > 0.', flush=True)
+        sys.exit(2)
+    if args.help_pause_max_sec < args.help_pause_min_sec:
+        print('Chyba: --help-pause-max-sec musí být >= --help-pause-min-sec.', flush=True)
+        sys.exit(2)
 
     if args.status:
         status(out_path)
@@ -450,7 +588,14 @@ def main() -> None:
         return
 
     if args.install:
-        install_task(out_path, args.interval)
+        install_task(
+            out_path,
+            args.interval,
+            periodic_help=periodic_help,
+            help_interval_sec=args.help_interval_sec,
+            help_pause_min_sec=args.help_pause_min_sec,
+            help_pause_max_sec=args.help_pause_max_sec,
+        )
         return
 
     if args.uninstall:
@@ -494,7 +639,15 @@ def main() -> None:
             if args.history_only:
                 return
 
-            live_monitor(f, args.interval, out_path)
+            live_monitor(
+                f,
+                args.interval,
+                out_path,
+                periodic_help=periodic_help,
+                help_interval_sec=args.help_interval_sec,
+                help_pause_min_sec=args.help_pause_min_sec,
+                help_pause_max_sec=args.help_pause_max_sec,
+            )
     except KeyboardInterrupt:
         if shutdown_reason == DEFAULT_SHUTDOWN_REASON:
             shutdown_reason = 'keyboard_interrupt'
