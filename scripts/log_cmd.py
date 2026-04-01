@@ -13,6 +13,9 @@ Spuštění:
   python scripts/log_cmd.py                     # history import + live od teď
   python scripts/log_cmd.py --no-history        # jen live
   python scripts/log_cmd.py --history-only      # jen import history, pak konec
+  python scripts/log_cmd.py --pause             # pozastaví běžící logger
+  python scripts/log_cmd.py --resume            # zruší pozastavení loggeru
+  python scripts/log_cmd.py --help-short        # stručná nápověda
   python scripts/log_cmd.py --status            # je logger spuštěn?
   python scripts/log_cmd.py --install           # zaregistruj do Task Scheduler (spustí se po přihlášení)
   python scripts/log_cmd.py --uninstall         # odstraň z Task Scheduler
@@ -115,6 +118,10 @@ def _pid_path(out_path: Path) -> Path:
     return out_path.parent / 'cmd.pid'
 
 
+def _pause_path(out_path: Path) -> Path:
+    return out_path.parent / 'cmd.paused'
+
+
 def _write_pid(out_path: Path) -> None:
     _pid_path(out_path).write_text(str(os.getpid()), encoding='utf-8')
 
@@ -140,6 +147,41 @@ def _running_pid(out_path: Path) -> int | None:
         pass
     pid_file.unlink(missing_ok=True)
     return None
+
+
+def _is_paused(out_path: Path) -> bool:
+    return _pause_path(out_path).exists()
+
+
+def _set_paused(out_path: Path) -> None:
+    _pause_path(out_path).write_text(_now(), encoding='utf-8')
+
+
+def _clear_paused(out_path: Path) -> None:
+    _pause_path(out_path).unlink(missing_ok=True)
+
+
+def _print_short_help(out_path: Path) -> None:
+    resolved = out_path.resolve()
+    print('Stručná nápověda:', flush=True)
+    print('  Ovládání: --status | --pause | --resume | --help-short', flush=True)
+    print('  Ukládání: --out C:\\cesta\\cmd.jsonl  (výchozí: logs\\cmd.jsonl)', flush=True)
+    print(f'  Aktivní výstup: {resolved}', flush=True)
+
+
+def request_pause(out_path: Path) -> None:
+    _set_paused(out_path)
+    pid = _running_pid(out_path)
+    print('Logger je POZASTAVEN (set cmd.paused).', flush=True)
+    print(f'  Soubor: {_pause_path(out_path)}', flush=True)
+    print(f'  Běžící instance: {"ANO (PID " + str(pid) + ")" if pid else "NE"}', flush=True)
+
+
+def request_resume(out_path: Path) -> None:
+    _clear_paused(out_path)
+    pid = _running_pid(out_path)
+    print('Logger je OBNOVEN (cmd.paused odstraněn).', flush=True)
+    print(f'  Běžící instance: {"ANO (PID " + str(pid) + ")" if pid else "NE"}', flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +229,7 @@ def uninstall_task() -> None:
 
 def status(out_path: Path) -> None:
     pid = _running_pid(out_path)
+    paused = _is_paused(out_path)
     task_result = subprocess.run(
         ['schtasks', '/Query', '/TN', TASK_NAME, '/FO', 'LIST'],
         capture_output=True, text=True
@@ -194,6 +237,7 @@ def status(out_path: Path) -> None:
     task_installed = task_result.returncode == 0
 
     print(f'Logger běží:       {"ANO (PID " + str(pid) + ")" if pid else "NE"}')
+    print(f'Pause režim:       {"ANO (pozastaveno)" if paused else "NE (aktivní)"}')
     print(f'Task Scheduler:    {"zaregistrován — spustí se po přihlášení" if task_installed else "NENÍ zaregistrován"}')
     print(f'Log soubor:        {out_path.resolve()}')
     if out_path.exists():
@@ -305,9 +349,48 @@ def live_monitor(out_file, interval: float, out_path: Path) -> None:
     print(f'Live monitoring (interval {interval}s, PID {os.getpid()}) — Ctrl+C pro stop', flush=True)
     _write_pid(out_path)
     prev: dict[int, dict] = {}
+    was_paused = False
 
     while True:
         now = _now()
+        paused = _is_paused(out_path)
+        if paused:
+            if not was_paused:
+                _write(
+                    out_file,
+                    {
+                        'ts': now,
+                        'event': 'pause',
+                        'source': 'logger',
+                        'lifecycle': 'control',
+                        **_self_process_info(),
+                        'reason': 'pause_file',
+                    },
+                )
+                print('[||] Logger pozastaven (--resume pro obnovení)', flush=True)
+            was_paused = True
+            prev = snapshot()
+            time.sleep(interval)
+            continue
+
+        if was_paused:
+            _write(
+                out_file,
+                {
+                    'ts': now,
+                    'event': 'resume',
+                    'source': 'logger',
+                    'lifecycle': 'control',
+                    **_self_process_info(),
+                    'reason': 'pause_file_removed',
+                },
+            )
+            print('[>>] Logger obnoven', flush=True)
+            prev = snapshot()
+            was_paused = False
+            time.sleep(interval)
+            continue
+
         curr = snapshot()
 
         for pid, info in curr.items():
@@ -339,6 +422,9 @@ def main() -> None:
     parser.add_argument('--out', default=str(PROJECT_ROOT / 'logs' / 'cmd.jsonl'))
     parser.add_argument('--no-history', action='store_true')
     parser.add_argument('--history-only', action='store_true')
+    parser.add_argument('--pause', action='store_true', help='Pozastav běžící logger')
+    parser.add_argument('--resume', action='store_true', help='Obnov pozastavený logger')
+    parser.add_argument('--help-short', action='store_true', help='Stručná nápověda')
     parser.add_argument('--status', action='store_true', help='Zkontroluj zda logger běží')
     parser.add_argument('--install', action='store_true', help='Zaregistruj do Task Scheduler')
     parser.add_argument('--uninstall', action='store_true', help='Odstraň z Task Scheduler')
@@ -349,6 +435,18 @@ def main() -> None:
 
     if args.status:
         status(out_path)
+        return
+
+    if args.help_short:
+        _print_short_help(out_path)
+        return
+
+    if args.pause:
+        request_pause(out_path)
+        return
+
+    if args.resume:
+        request_resume(out_path)
         return
 
     if args.install:
@@ -366,6 +464,7 @@ def main() -> None:
         sys.exit(0)
 
     seen = _load_seen_hashes(out_path)
+    _print_short_help(out_path)
     print(f'Výstup: {out_path}  (existující záznamy: {len(seen)})', flush=True)
 
     shutdown_reason = DEFAULT_SHUTDOWN_REASON
