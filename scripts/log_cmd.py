@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -40,6 +41,7 @@ configure_console_io()
 import psutil
 
 TASK_NAME = 'aSTT-comp-log-cmd'
+DEFAULT_SHUTDOWN_REASON = 'normal_exit'
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +55,36 @@ def _now() -> str:
 def _write(f, entry: dict) -> None:
     f.write(json.dumps(entry, ensure_ascii=False) + '\n')
     f.flush()
+
+
+def _self_process_info() -> dict:
+    """Vrátí základní metadata aktuálního logger procesu."""
+    proc = psutil.Process(os.getpid())
+    cmdline = proc.cmdline()
+    cmd = ' '.join(cmdline) if cmdline else f'{sys.executable} {" ".join(sys.argv)}'
+    return {
+        'pid': proc.pid,
+        'name': proc.name(),
+        'cmd': cmd,
+        'started': datetime.fromtimestamp(proc.create_time(), tz=timezone.utc).isoformat(),
+    }
+
+
+def _write_self_lifecycle(out_file, event: str, self_info: dict, reason: str | None = None) -> None:
+    """Zapíše explicitní start/end záznam samotného loggeru."""
+    now = _now()
+    entry = {
+        'ts': now,
+        'event': event,
+        'source': 'logger',
+        'lifecycle': 'self',
+        **self_info,
+    }
+    if event == 'end':
+        entry['ended'] = now
+    if reason:
+        entry['reason'] = reason
+    _write(out_file, entry)
 
 
 def _entry_hash(entry: dict) -> str:
@@ -288,7 +320,7 @@ def live_monitor(out_file, interval: float, out_path: Path) -> None:
         for pid, info in prev.items():
             if pid not in curr:
                 entry = {'ts': now, 'event': 'end', 'source': 'live',
-                         'pid': pid, **info}
+                         'pid': pid, 'ended': now, **info}
                 _write(out_file, entry)
                 print(f"[-] {pid:>6}  {info['name']:<22}  {info['cmd'][:90]}", flush=True)
 
@@ -336,8 +368,23 @@ def main() -> None:
     seen = _load_seen_hashes(out_path)
     print(f'Výstup: {out_path}  (existující záznamy: {len(seen)})', flush=True)
 
+    shutdown_reason = DEFAULT_SHUTDOWN_REASON
+
+    def _signal_handler(signum, _frame):
+        nonlocal shutdown_reason
+        shutdown_reason = f'signal:{signal.Signals(signum).name}'
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, _signal_handler)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, _signal_handler)
+    if hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, _signal_handler)
+
     try:
         with out_path.open('a', encoding='utf-8') as f:
+            self_info = _self_process_info()
+            _write_self_lifecycle(f, 'start', self_info, reason='boot')
             if not args.no_history:
                 n = import_powershell_history(f, seen)
                 print(f'PowerShell history: importováno {n} příkazů', flush=True)
@@ -349,7 +396,20 @@ def main() -> None:
                 return
 
             live_monitor(f, args.interval, out_path)
+    except KeyboardInterrupt:
+        if shutdown_reason == DEFAULT_SHUTDOWN_REASON:
+            shutdown_reason = 'keyboard_interrupt'
+        raise
+    except Exception as exc:
+        shutdown_reason = f'exception:{type(exc).__name__}'
+        raise
     finally:
+        # Self end je nejlepší možné "vypnutí sebe"; kill -9 / tvrdé ukončení nelze zachytit.
+        try:
+            with out_path.open('a', encoding='utf-8') as f:
+                _write_self_lifecycle(f, 'end', _self_process_info(), reason=shutdown_reason)
+        except Exception:
+            pass
         _clear_pid(out_path)
 
 
