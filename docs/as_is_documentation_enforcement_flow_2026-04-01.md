@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T16:34:54Z
+- last_updated_utc: 2026-04-01T19:03:45Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## Co je hard vs soft
@@ -14,12 +14,13 @@ Doc-Meta:
 ```mermaid
 flowchart TD
   DEV["Developer / LLM agent"]
+  PR["PR opened / updated"]
 
   subgraph Advisory["Advisory vrstva (sama o sobe neblokuje)"]
     A1["AGENTS.md"]
     A2["CONTRIBUTING.md"]
-    A3["DOCS_GOVERNANCE.md"]
-    A4["PLAN_TRACKER.md"]
+    A3["docs/DOCS_GOVERNANCE.md"]
+    A4["docs/PLAN_TRACKER.md"]
   end
 
   subgraph LocalSoft["Lokalni soft gate (lze obejit, napr. --no-verify)"]
@@ -37,11 +38,12 @@ flowchart TD
   subgraph RepoHard["GitHub hard gate (branch protection)"]
     R1["Require PR before merge"]
     R2["Required status check: docs-guard"]
-    R3["Require approvals + code owner review"]
+    R3["Require approvals + CODEOWNERS review"]
     R4["Enforce admins + no force push"]
   end
 
   BLOCK["Merge blocked"]
+  ALL_OK["All required rules satisfied (AND)"]
   MERGE["Merge allowed"]
 
   DEV --> A1
@@ -52,9 +54,10 @@ flowchart TD
   DEV --> L1
   L1 --> L2
   L1 --> L3
-  DEV -. "skip local hooks possible" .-> C1
+  DEV -. "skip local hooks possible" .-> PR
 
-  DEV --> C1
+  DEV --> PR
+  PR --> C1
   C1 --> C2
   C1 --> C3
 
@@ -63,14 +66,15 @@ flowchart TD
   C2 -- pass --> R2
   C3 -- pass --> R2
 
-  DEV --> R1
-  DEV --> R3
-  DEV --> R4
+  PR --> R1
+  PR --> R3
+  PR --> R4
 
-  R1 --> MERGE
-  R2 --> MERGE
-  R3 --> MERGE
-  R4 --> MERGE
+  R1 --> ALL_OK
+  R2 --> ALL_OK
+  R3 --> ALL_OK
+  R4 --> ALL_OK
+  ALL_OK --> MERGE
 
   classDef advisory fill:#eef2ff,stroke:#4f46e5,stroke-width:1px,color:#111827;
   classDef soft fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#111827;
@@ -80,7 +84,7 @@ flowchart TD
 
   class A1,A2,A3,A4 advisory;
   class L1,L2,L3 soft;
-  class C1,C2,C3,R1,R2,R3,R4 hard;
+  class C1,C2,C3,R1,R2,R3,R4,ALL_OK hard;
   class BLOCK fail;
   class MERGE ok;
 ```

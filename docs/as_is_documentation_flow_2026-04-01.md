@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T16:14:00Z
+- last_updated_utc: 2026-04-01T19:03:45Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Pro enforcement pohled (hard vs soft gate) viz:
@@ -43,7 +43,7 @@ flowchart LR
   subgraph CI["CI / PR Gates"]
     C1["scripts/verify_docs_guard.py"]
     C2[".github/workflows/docs-guard.yml"]
-    C3["PR template + CODEOWNERS"]
+    C3["GitHub branch protection + required check + CODEOWNERS"]
   end
 
   A1 --> D1
@@ -83,7 +83,7 @@ flowchart LR
   D9 --> C1
   D10 --> C1
 
-  C1 --> C2
-  L3 --> C2
-  C3 --> C2
+  C2 --> C1
+  C2 --> L3
+  C2 --> C3
 ```
