@@ -141,6 +141,10 @@ def save_transcript(req: SaveTranscriptRequest):
     html_file = TRANSCRIPTS_ROOT / f"{tid}.html"
     html_file.write_text(req.html, encoding="utf-8")
 
+    # Ulož také TXT verzi
+    txt_file = TRANSCRIPTS_ROOT / f"{tid}.txt"
+    txt_file.write_text(req.plain_text, encoding="utf-8")
+
     _save_index(index)
     return {"transcript_id": tid, "updated_at": now}
 

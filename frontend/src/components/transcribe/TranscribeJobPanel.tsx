@@ -74,6 +74,7 @@ interface Props {
   audioDuration?: number
   onModelChange?: (modelId: string) => void
   onSourceLabelChange?: (label: string) => void
+  onVideoIdChange?: (videoId: string) => void
 }
 
 // Formátování sekund na MM:SS nebo H:MM:SS
@@ -94,14 +95,16 @@ function parseTime(s: string): number | null {
   return null
 }
 
-export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop, audioDuration, onModelChange, onSourceLabelChange }: Props) {
+const ACTIVE_JOB_KEY = 'astt_active_transcribe_job'
+
+export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop, audioDuration, onModelChange, onSourceLabelChange, onVideoIdChange }: Props) {
   // Načti uložená nastavení
   const _saved = loadSettings()
 
   // --- Zdroj ---
   const [sourceTab, setSourceTab] = useState<'library' | 'upload'>((_saved.source_tab as 'library' | 'upload') ?? 'library')
   const [library, setLibrary] = useState<LibraryItem[]>([])
-  const [selectedVideoId, setSelectedVideoId] = useState<string>('')
+  const [selectedVideoId, setSelectedVideoId] = useState<string>(_saved.selected_video_id ?? '')
   const [uploadedSource, setUploadedSource] = useState<UploadedSource | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
@@ -112,16 +115,21 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
   const [rangeFrom, setRangeFrom] = useState(_saved.range_from ?? '00:00')
   const [rangeTo, setRangeTo] = useState(_saved.range_to ?? '')
   const [rangeError, setRangeError] = useState('')
+  const [tsEnabled, setTsEnabled] = useState(_saved.ts_enabled ?? true)
+  const [tsIntervalS, setTsIntervalS] = useState(_saved.ts_interval_s ?? 60)
 
   // --- Model ---
   const [registry, setRegistry] = useState<ModelDescriptor[]>([])
   const [selectedModel, setSelectedModel] = useState<string>(_saved.model ?? '')
-  const [modelParams, setModelParams] = useState<Record<string, unknown>>({})
+  const [modelParams, setModelParams] = useState<Record<string, unknown>>(
+    (_saved.model_params ?? {})[_saved.model ?? ''] ?? {}
+  )
 
   // --- Job ---
-  const [job, setJob] = useState<BenchmarkJobStatus | null>(null)
+  const _savedJob = (() => { try { return JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) ?? 'null') } catch { return null } })()
+  const [job, setJob] = useState<BenchmarkJobStatus | null>(_savedJob)
   const [live, setLive] = useState<LiveJobProgress | null>(null)
-  const [running, setRunning] = useState(false)
+  const [running, setRunning] = useState<boolean>(_savedJob?.status === 'running' || _savedJob?.status === 'pending')
   const [msg, setMsg] = useState('')
   const [finalMetrics, setFinalMetrics] = useState<{
     rtf: number | null; latency_ms: number | null; ram_mb: number | null
@@ -154,15 +162,36 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     return () => { if (elapsedRef.current) clearInterval(elapsedRef.current) }
   }, [running, job?.started_at])
 
+  // Obnov poll po reloadu pokud byl job running
+  useEffect(() => {
+    if (_savedJob?.job_id && (_savedJob.status === 'running' || _savedJob.status === 'pending')) {
+      startPoll(_savedJob.job_id)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     api.library.list().then(items => {
       const visible = sortLibraryItems(items.filter(i => i.visible_in_menus !== false))
       setLibrary(visible)
-      if (visible.length > 0) setSelectedVideoId(visible[0].video_id)
+      const savedVid = loadSettings().selected_video_id
+      if (savedVid && visible.find(v => v.video_id === savedVid)) {
+        setSelectedVideoId(savedVid)
+      } else if (visible.length > 0) {
+        setSelectedVideoId(visible[0].video_id)
+      }
     }).catch(() => {})
     api.models.registry().then(reg => {
       setRegistry(reg)
-      if (reg.length > 0) setSelectedModel(reg[0].model_id)
+      // Přednostně použij uloženou volbu; fallback na první model
+      const saved = loadSettings().model
+      const chosen = (saved && reg.find(m => m.model_id === saved))
+        ? saved
+        : reg.length > 0 ? reg[0].model_id : ''
+      if (chosen) {
+        setSelectedModel(chosen)
+        saveSettings({ model: chosen })
+      }
     }).catch(() => {})
   }, [])
 
@@ -193,9 +222,14 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
       isNew: i === newSegments.length - 1,
     })))
 
-    // Parsuj audio čas pro auto-timestamp
+    // Odvoď audio čas pro timestamp:
+    // 1) z progress message "Xs zprac." (benchmark mode)
+    // 2) z live.percent (10–90 = replay fáze) × délka audia
     const audioMatch = live?.message?.match(/(\d+(?:\.\d+)?)s\s+zprac/)
-    const audioSecs = audioMatch ? parseFloat(audioMatch[1]) : undefined
+    let audioSecs: number | undefined = audioMatch ? parseFloat(audioMatch[1]) : undefined
+    if (audioSecs == null && live?.percent != null && live.percent >= 10 && audioDuration && audioDuration > 0) {
+      audioSecs = ((live.percent - 10) / 80) * audioDuration
+    }
     onTranscriptUpdate(newText, audioSecs)
 
     // Auto-scroll
@@ -229,10 +263,12 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
           api.benchmark.getLive(jobId).catch(() => null),
         ])
         setJob(jobStatus)
+        localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(jobStatus))
         if (liveData) setLive(liveData)
         if (['completed', 'failed', 'cancelled'].includes(jobStatus.status)) {
           clearInterval(pollRef.current!)
           setRunning(false)
+          localStorage.removeItem(ACTIVE_JOB_KEY)
           onJobStop?.()
           // Po dokončení načti finální metriky z run výsledku
           if (jobStatus.status === 'completed' && jobStatus.run_id) {
@@ -294,11 +330,13 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
       onAudioReady(audioUrl, '')
       const vid = library.find(v => v.video_id === selectedVideoId)
       onSourceLabelChange?.(vid?.title ?? selectedVideoId)
+      onVideoIdChange?.(selectedVideoId)
     } else {
       if (!uploadedSource) { setMsg('Nahrajte soubor'); setRunning(false); return }
       sources = [uploadedSource.source_path]
       audioUrl = uploadedSource.url
       onSourceLabelChange?.(uploadedSource.original_name)
+      onVideoIdChange?.('')
     }
     onModelChange?.(selectedModel)
 
@@ -315,6 +353,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         label: `Přepis: ${selectedModelDesc?.label || selectedModel}${rangeMode === 'segment' ? ` (${rangeFrom}-${rangeTo})` : ''}`,
       })
       setJob(jobStatus)
+      localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(jobStatus))
       startPoll(jobStatus.job_id)
     } catch (e: unknown) {
       setMsg(e instanceof Error ? e.message : 'Chyba při spuštění')
@@ -326,6 +365,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     if (!job) return
     await api.benchmark.cancelJob(job.job_id).catch(() => {})
     setRunning(false)
+    localStorage.removeItem(ACTIVE_JOB_KEY)
     onJobStop?.()
   }, [job, onJobStop])
 
@@ -380,7 +420,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         </div>
 
         {sourceTab === 'library' ? (
-          <select value={selectedVideoId} onChange={e => setSelectedVideoId(e.target.value)}
+          <select value={selectedVideoId} onChange={e => { setSelectedVideoId(e.target.value); saveSettings({ selected_video_id: e.target.value }) }}
             className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100">
             {library.length === 0 && <option value="">Načítám...</option>}
             {library.map(v => (
@@ -433,14 +473,14 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
           <div className="flex items-center gap-2">
             <div className="flex flex-col gap-0.5">
               <label className="text-xs text-gray-400">Od</label>
-              <input value={rangeFrom} onChange={e => setRangeFrom(e.target.value)}
+              <input value={rangeFrom} onChange={e => { setRangeFrom(e.target.value); saveSettings({ range_from: e.target.value }) }}
                 placeholder="00:00"
                 className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 w-24 font-mono" />
             </div>
             <span className="text-gray-500 mt-4">–</span>
             <div className="flex flex-col gap-0.5">
               <label className="text-xs text-gray-400">Do</label>
-              <input value={rangeTo} onChange={e => setRangeTo(e.target.value)}
+              <input value={rangeTo} onChange={e => { setRangeTo(e.target.value); saveSettings({ range_to: e.target.value }) }}
                 placeholder={audioDuration ? fmtTime(audioDuration) : 'MM:SS'}
                 className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 w-24 font-mono" />
             </div>
@@ -457,18 +497,50 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         {rangeMode === 'segment' && (
           <div className="text-xs text-gray-500 mt-1">Formát: MM:SS nebo H:MM:SS</div>
         )}
+
+        {/* Časové značky */}
+        <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-700">
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs text-gray-300">
+            <input type="checkbox" checked={tsEnabled}
+              onChange={e => { setTsEnabled(e.target.checked); saveSettings({ ts_enabled: e.target.checked }) }}
+              className="accent-blue-500 w-3.5 h-3.5" />
+            Časové značky
+          </label>
+          {tsEnabled && (
+            <div className="flex items-center gap-1.5 text-xs text-gray-400">
+              <span>každých</span>
+              <input
+                type="number" min={10} max={3600} step={10}
+                value={tsIntervalS}
+                onChange={e => { const v = Math.max(10, parseInt(e.target.value) || 60); setTsIntervalS(v); saveSettings({ ts_interval_s: v }) }}
+                className="bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-xs text-gray-100 w-16 text-center"
+              />
+              <span>s</span>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* ── 3. Model ── */}
       <section className="bg-gray-750 rounded border border-gray-700 p-3">
         <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Model STT</h3>
-        <select value={selectedModel} onChange={e => { setSelectedModel(e.target.value); setModelParams({}); onModelChange?.(e.target.value); saveSettings({ model: e.target.value }) }}
+        <select value={selectedModel} onChange={e => {
+          const mid = e.target.value
+          setSelectedModel(mid)
+          setModelParams((loadSettings().model_params ?? {})[mid] ?? {})
+          onModelChange?.(mid)
+          saveSettings({ model: mid })
+        }}
           className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100 mb-2">
           {registry.map(m => <option key={m.model_id} value={m.model_id}>{m.label}</option>)}
         </select>
         {selectedModelDesc && selectedModelDesc.params.length > 0 && (
           <ModelParamsForm modelId={selectedModel} params={selectedModelDesc.params}
-            values={modelParams} onChange={setModelParams} compact />
+            values={modelParams} onChange={p => {
+              setModelParams(p)
+              const allParams = { ...(loadSettings().model_params ?? {}), [selectedModel]: p }
+              saveSettings({ model_params: allParams })
+            }} compact />
         )}
       </section>
 

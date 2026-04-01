@@ -28,6 +28,7 @@ export function TranscribePage() {
   const [currentTranscriptId, setCurrentTranscriptId] = useState<string | null>(null)
   const [currentSourceLabel, setCurrentSourceLabel] = useState('')
   const [currentModelId, setCurrentModelId] = useState('')
+  const [currentVideoId, setCurrentVideoId] = useState('')
   const [showArchive, setShowArchive] = useState(false)
   const [archiveList, setArchiveList] = useState<TranscriptEntry[]>([])
   const playerRef = useRef<TranscribeAudioPlayerHandle>(null)
@@ -112,12 +113,16 @@ export function TranscribePage() {
     if (!transcriptStartTimeRef.current) {
       transcriptStartTimeRef.current = new Date().toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })
       lastTsBoundaryRef.current = -1
-      accumulatedBodyRef.current = ''
     }
 
-    // Timestamp marker každých 60s — přidáme do accumulatedBody, nezávisle na textu
-    if (audioSecs != null && audioSecs > 0) {
-      const boundary = Math.floor(audioSecs / 60) * 60
+    // Načti nastavení jednou
+    const settings = loadSettings()
+
+    // Timestamp marker — interval dle nastavení
+    const tsEnabled = settings.ts_enabled !== false  // výchozí true
+    const tsInterval = settings.ts_interval_s ?? 60
+    if (tsEnabled && audioSecs != null && audioSecs > 0) {
+      const boundary = Math.floor(audioSecs / tsInterval) * tsInterval
       if (boundary > lastTsBoundaryRef.current && boundary > 0) {
         const m = Math.floor(boundary / 60)
         const s = boundary % 60
@@ -127,17 +132,16 @@ export function TranscribePage() {
       }
     }
 
-    // Streaming runner posílá kumulativní text — zobrazíme celý aktuální text
-    const contentHtml = text.split('\n').filter(l => l.trim()).map(l => `<p>${l}</p>`).join('')
+    // Streaming runner posílá kumulativní text — nahraď celý textový obsah (za timestamps)
+    const textHtml = text.split('\n').filter(l => l.trim()).map(l => `<p>${l}</p>`).join('')
 
     // Hlavička
-    const settings = loadSettings()
     const rangeInfo = settings.range_mode === 'segment' && settings.range_from
       ? ` | Rozsah: ${settings.range_from}–${settings.range_to || '?'}`
       : ''
     const headerHtml = `<p><strong>${currentSourceLabel || 'Přepis'}</strong></p><p><em>Model: ${currentModelId || '–'} | ${transcriptStartTimeRef.current}${rangeInfo}</em></p><hr/>`
 
-    const html = headerHtml + contentHtml
+    const html = headerHtml + accumulatedBodyRef.current + textHtml
     setTranscriptContent(html)
     editorHtmlRef.current = html
     editorTextRef.current = text
@@ -175,7 +179,15 @@ export function TranscribePage() {
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-3 border-b">
           <h2 className="font-semibold text-gray-800">Archiv přepisů ({archiveList.length})</h2>
-          <button onClick={() => setShowArchive(false)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fetch('/api/open-dir/transcripts', { method: 'POST' }).catch(() => {})}
+              className="px-2.5 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200"
+              title="Otevřít složku runtime/transcripts/ v průzkumníku">
+              📂 Otevřít složku
+            </button>
+            <button onClick={() => setShowArchive(false)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-3">
           {archiveList.length === 0 && (
@@ -224,6 +236,7 @@ export function TranscribePage() {
           audioDuration={audioDuration}
           onModelChange={id => { setCurrentModelId(id); saveSettings({ model: id }) }}
           onSourceLabelChange={label => setCurrentSourceLabel(label)}
+          onVideoIdChange={id => setCurrentVideoId(id)}
         />
       </div>
       <div className="flex-shrink-0 p-3 bg-gray-800 border-t border-gray-700">
@@ -245,6 +258,8 @@ export function TranscribePage() {
         onTimestampClick={handleTimestampClick}
         onSave={handleSave}
         saveStatus={saveStatus}
+        sourceLabel={currentSourceLabel}
+        videoId={currentVideoId}
       />
     </div>
   )

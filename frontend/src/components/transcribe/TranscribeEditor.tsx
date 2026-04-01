@@ -63,6 +63,8 @@ interface Props {
   onTimestampClick?: (seconds: number) => void
   onSave?: (html: string, plainText: string) => void
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
+  sourceLabel?: string
+  videoId?: string
 }
 
 // HTML → simple Markdown
@@ -185,6 +187,30 @@ async function buildEpub(html: string, title = 'Přepis'): Promise<Blob> {
   return zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' })
 }
 
+function buildFilename(sourceLabel: string, videoId: string, ext: string): string {
+  const now = new Date()
+  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+  const clean = (sourceLabel || 'prepis')
+    .replace(/[<>:"/\\|?*]/g, '')
+    .trim()
+    .slice(0, 20)
+    .trim()
+    .replace(/\s+/g, '_')
+  const ytPart = videoId ? `_${videoId}` : ''
+  return `${ts}_${clean}${ytPart}.${ext}`
+}
+
+function exportPdf(html: string, title: string) {
+  const win = window.open('', '_blank')
+  if (!win) return
+  win.document.write(`<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>${title}</title>
+<style>body{font-family:Arial,sans-serif;font-size:14px;line-height:1.6;padding:2cm;max-width:800px;margin:0 auto}
+p{margin:0.4em 0}hr{border:none;border-top:1px solid #ccc;margin:1em 0}
+@media print{body{padding:0}}</style></head>
+<body>${html}<script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`)
+  win.document.close()
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -194,7 +220,7 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url)
 }
 
-export function TranscribeEditor({ initialContent = '', currentAudioTime = 0, onTimestampClick, onSave, saveStatus = 'idle' }: Props) {
+export function TranscribeEditor({ initialContent = '', currentAudioTime = 0, onTimestampClick, onSave, saveStatus = 'idle', sourceLabel = '', videoId = '' }: Props) {
   const [showFindReplace, setShowFindReplace] = useState(false)
   const [findText, setFindText] = useState('')
   const [replaceText, setReplaceText] = useState('')
@@ -273,26 +299,28 @@ export function TranscribeEditor({ initialContent = '', currentAudioTime = 0, on
     }
   }, [editor, findText, replaceText])
 
-  const exportAs = useCallback(async (fmt: 'txt' | 'html' | 'md' | 'docx' | 'epub') => {
+  const exportAs = useCallback(async (fmt: 'txt' | 'html' | 'pdf' | 'md' | 'docx' | 'epub') => {
     if (!editor) return
     const html = editor.getHTML()
     const txt = editor.getText()
-    const base = 'prepis'
+    const title = sourceLabel || 'Přepis'
     if (fmt === 'txt') {
-      downloadBlob(new Blob([txt], { type: 'text/plain;charset=utf-8' }), `${base}.txt`)
+      downloadBlob(new Blob([txt], { type: 'text/plain;charset=utf-8' }), buildFilename(sourceLabel, videoId, 'txt'))
     } else if (fmt === 'html') {
-      const full = `<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>Přepis</title></head><body>${html}</body></html>`
-      downloadBlob(new Blob([full], { type: 'text/html;charset=utf-8' }), `${base}.html`)
+      const full = `<!DOCTYPE html><html lang="cs"><head><meta charset="UTF-8"><title>${title}</title></head><body>${html}</body></html>`
+      downloadBlob(new Blob([full], { type: 'text/html;charset=utf-8' }), buildFilename(sourceLabel, videoId, 'html'))
+    } else if (fmt === 'pdf') {
+      exportPdf(html, title)
     } else if (fmt === 'md') {
-      downloadBlob(new Blob([htmlToMarkdown(html)], { type: 'text/plain;charset=utf-8' }), `${base}.md`)
+      downloadBlob(new Blob([htmlToMarkdown(html)], { type: 'text/plain;charset=utf-8' }), buildFilename(sourceLabel, videoId, 'md'))
     } else if (fmt === 'docx') {
       const blob = await buildDocx(html)
-      downloadBlob(blob, `${base}.docx`)
+      downloadBlob(blob, buildFilename(sourceLabel, videoId, 'docx'))
     } else if (fmt === 'epub') {
-      const blob = await buildEpub(html)
-      downloadBlob(blob, `${base}.epub`)
+      const blob = await buildEpub(html, title)
+      downloadBlob(blob, buildFilename(sourceLabel, videoId, 'epub'))
     }
-  }, [editor])
+  }, [editor, sourceLabel, videoId])
 
   if (!editor) return null
 
@@ -389,31 +417,31 @@ export function TranscribeEditor({ initialContent = '', currentAudioTime = 0, on
           ✕⏱ Smazat ts
         </button>
 
-        <div className="w-px bg-gray-300 mx-1" />
+        <div className="w-full border-t border-gray-200 mt-1" />
 
-        {/* Export */}
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-gray-500">Export:</span>
-          {(['txt', 'html', 'md', 'docx', 'epub'] as const).map(f => (
+        {/* Archiv + Export — dvě řady */}
+        <div className="flex items-center gap-1 w-full flex-wrap">
+          <span className="text-xs text-gray-500 w-12 flex-shrink-0">Archiv:</span>
+          {onSave && (
+            <button
+              onClick={() => editor && onSave(editor.getHTML(), editor.getText())}
+              className="px-2 py-0.5 text-xs rounded border bg-green-600 border-green-500 text-white hover:bg-green-500"
+              title="Uložit přepis do archivu (HTML + TXT)"
+            >
+              {saveStatus === 'saving' ? '⏳ Ukládám' : saveStatus === 'saved' ? '✓ Uloženo' : saveStatus === 'error' ? '✗ Chyba' : '💾 Uložit'}
+            </button>
+          )}
+          <span className="text-xs text-gray-400 ml-1">HTML + TXT</span>
+        </div>
+        <div className="flex items-center gap-1 w-full flex-wrap">
+          <span className="text-xs text-gray-500 w-12 flex-shrink-0">Export:</span>
+          {(['html', 'txt', 'pdf', 'md', 'docx', 'epub'] as const).map(f => (
             <button key={f} onClick={() => exportAs(f)}
-              className="px-2 py-1 text-xs rounded border bg-gray-700 border-gray-600 text-gray-200 hover:bg-gray-600 uppercase">
+              className="px-2 py-0.5 text-xs rounded border bg-gray-700 border-gray-600 text-gray-200 hover:bg-gray-600 uppercase">
               {f}
             </button>
           ))}
         </div>
-
-        <div className="w-px bg-gray-300 mx-1" />
-
-        {/* Uložit */}
-        {onSave && (
-          <button
-            onClick={() => editor && onSave(editor.getHTML(), editor.getText())}
-            className="px-3 py-1 text-sm rounded border bg-green-600 border-green-500 text-white hover:bg-green-500"
-            title="Uložit přepis do archivu"
-          >
-            {saveStatus === 'saving' ? '⏳' : saveStatus === 'saved' ? '✓ Uloženo' : saveStatus === 'error' ? '✗ Chyba' : '💾 Uložit'}
-          </button>
-        )}
       </div>
 
       {/* Find / Replace panel */}
