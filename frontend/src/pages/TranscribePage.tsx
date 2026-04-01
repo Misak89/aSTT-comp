@@ -48,6 +48,9 @@ export function TranscribePage() {
   const transcriptStartTimeRef = useRef('')
   const lastTsBoundaryRef = useRef(-1)   // poslední vložená minutová hranice (v sekundách)
   const accumulatedBodyRef = useRef('')  // body HTML bez hlavičky (akumulovaný přepis s ts)
+  // Refs pro vždy aktuální hodnoty v handleTranscriptUpdate (bez závislosti na closure)
+  const sourceLabelRef = useRef('')
+  const videoIdRef = useRef('')
 
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -117,15 +120,27 @@ export function TranscribePage() {
     doSave(html, plainText)
   }, [doSave])
 
+  // Udržuj refs synchronizované se state
+  useEffect(() => { sourceLabelRef.current = currentSourceLabel }, [currentSourceLabel])
+  useEffect(() => { videoIdRef.current = currentVideoId }, [currentVideoId])
+
   const handleAudioReady = useCallback((url: string) => {
     setAudioUrl(url)
+    // Reset stavu přepisu pro nový job
+    transcriptStartTimeRef.current = ''
+    lastTsBoundaryRef.current = -1
+    accumulatedBodyRef.current = ''
+    setTranscriptTitle('')
+    setCurrentTranscriptId(null)
+    editorHtmlRef.current = ''
+    editorTextRef.current = ''
   }, [])
 
   const handleTranscriptUpdate = useCallback((text: string, audioSecs?: number) => {
     if (!transcriptStartTimeRef.current) {
       transcriptStartTimeRef.current = new Date().toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })
       lastTsBoundaryRef.current = -1
-      const title = buildTranscriptTitle(currentSourceLabel, currentVideoId)
+      const title = buildTranscriptTitle(sourceLabelRef.current, videoIdRef.current)
       setTranscriptTitle(title)
     }
 
