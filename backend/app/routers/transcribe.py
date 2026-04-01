@@ -111,12 +111,10 @@ def save_transcript(req: SaveTranscriptRequest):
     index = _load_index()
     now = datetime.now(timezone.utc).isoformat()
 
-    if req.transcript_id:
+    tid = req.transcript_id or str(uuid.uuid4())
+    entry = next((e for e in index if e["transcript_id"] == tid), None)
+    if entry:
         # Update existujícího
-        tid = req.transcript_id
-        entry = next((e for e in index if e["transcript_id"] == tid), None)
-        if entry is None:
-            raise HTTPException(404, "Transcript not found")
         entry["title"] = req.title
         entry["updated_at"] = now
         entry["source_label"] = req.source_label
@@ -125,8 +123,7 @@ def save_transcript(req: SaveTranscriptRequest):
         entry["range_to"] = req.range_to
         entry["plain_text_preview"] = req.plain_text[:200]
     else:
-        # Nový přepis
-        tid = str(uuid.uuid4())
+        # Nový přepis (upsert — přijmout i frontend-generované ID)
         entry = {
             "transcript_id": tid,
             "title": req.title,
