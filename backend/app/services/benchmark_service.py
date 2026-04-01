@@ -304,7 +304,17 @@ def run_job(job_id: str) -> None:
 
         # Extrahuj transcript z výsledků a ulož do job dictu (spolehlivější než číst soubor v get_live_progress)
         transcript_parts = []
-        for r in matrix_payload.get("results", []):
+        # Pro streaming mode matrix_payload nemá "results" — čti přímo z benchmark_matrix.json
+        results_source = matrix_payload.get("results") or []
+        if not results_source and run_id:
+            try:
+                matrix_file = RUNS_ROOT / run_id / "benchmark_matrix.json"
+                if matrix_file.exists():
+                    full_matrix = json.loads(matrix_file.read_bytes().decode("utf-8"))
+                    results_source = full_matrix.get("results", [])
+            except Exception:
+                pass
+        for r in results_source:
             for sm in r.get("source_metrics", []):
                 t = sm.get("transcript") or sm.get("transcript_text") or ""
                 if t and t not in transcript_parts:
