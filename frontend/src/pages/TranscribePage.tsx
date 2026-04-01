@@ -83,7 +83,10 @@ export function TranscribePage() {
     setSaveStatus('saving')
     if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current)
     try {
-      const saveTitle = transcriptTitle || buildTranscriptTitle(currentSourceLabel, currentVideoId) || currentSourceLabel || 'Přepis'
+      // Pokud titul ještě není nastaven, nastav ho teď — currentSourceLabel je zde vždy správné
+      const builtTitle = buildTranscriptTitle(currentSourceLabel, currentVideoId)
+      const saveTitle = transcriptTitle || builtTitle || currentSourceLabel || 'Přepis'
+      if (!transcriptTitle && builtTitle) setTranscriptTitle(builtTitle)
       const entry = saveTranscript({
         transcript_id: currentTranscriptId ?? undefined,
         title: saveTitle,
@@ -140,8 +143,7 @@ export function TranscribePage() {
     if (!transcriptStartTimeRef.current) {
       transcriptStartTimeRef.current = new Date().toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })
       lastTsBoundaryRef.current = -1
-      const title = buildTranscriptTitle(sourceLabelRef.current, videoIdRef.current)
-      setTranscriptTitle(title)
+      // Titul se nastaví při prvním uložení v doSave (kde je správný currentSourceLabel)
     }
 
     // Načti nastavení jednou
