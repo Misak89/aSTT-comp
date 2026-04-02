@@ -1,16 +1,16 @@
 {
-  "generated_at_utc": "2026-04-01T17:52:43Z",
+  "generated_at_utc": "2026-04-02T03:18:05Z",
   "source": {
     "history_dir": ".specstory/history",
     "stats_file": ".specstory/statistics.json",
-    "stats_sessions_count": 19
+    "stats_sessions_count": 22
   },
   "summary": {
-    "scanned_files": 35,
-    "total_events": 998,
-    "unique_templates": 35,
-    "promoted_rules_this_run": 0,
-    "learned_rules_total": 0
+    "scanned_files": 40,
+    "total_events": 1111,
+    "unique_templates": 38,
+    "promoted_rules_this_run": 1,
+    "learned_rules_total": 1
   },
   "templates": [
     {
@@ -19,14 +19,14 @@
       "example": "Exit code: 1",
       "category": "command_failure",
       "rule_source": "static",
-      "count": 842,
-      "recent_7d": 842,
+      "count": 901,
+      "recent_7d": 901,
       "first_seen": "2026-03-27T15:38:19Z",
-      "last_seen": "2026-03-30T18:11:20Z",
+      "last_seen": "2026-04-01T19:06:55Z",
       "priority_score": 32,
       "priority_label": "P0",
       "recommended_action": "Inspect stderr for root cause and convert repeated failures into explicit pre-checks.",
-      "trend": "stable"
+      "trend": "up"
     },
     {
       "template_id": "a27fdbdfc27e",
@@ -34,14 +34,29 @@
       "example": "warning: unable to access 'C:\\Users\\adamf/.config/git/ignore': Permission denied",
       "category": "permissions",
       "rule_source": "static",
-      "count": 64,
-      "recent_7d": 64,
+      "count": 88,
+      "recent_7d": 88,
       "first_seen": "2026-03-27T15:38:19Z",
-      "last_seen": "2026-03-27T18:42:39Z",
+      "last_seen": "2026-04-01T13:28:18Z",
       "priority_score": 39,
       "priority_label": "P0",
       "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
-      "trend": "stable"
+      "trend": "up"
+    },
+    {
+      "template_id": "960d87be6f37",
+      "normalized": "command timed out after <num> milliseconds",
+      "example": "command timed out after 10155 milliseconds",
+      "category": "timeout",
+      "rule_source": "static",
+      "count": 19,
+      "recent_7d": 19,
+      "first_seen": "2026-03-27T15:38:19Z",
+      "last_seen": "2026-04-01T19:06:55Z",
+      "priority_score": 26,
+      "priority_label": "P0",
+      "recommended_action": "Tune timeout + split long operations into smaller validated steps.",
+      "trend": "up"
     },
     {
       "template_id": "cf06d7cf54ab",
@@ -125,13 +140,28 @@
       "category": "service_unavailable",
       "rule_source": "static",
       "count": 6,
-      "recent_7d": 4,
+      "recent_7d": 2,
       "first_seen": "2026-03-24T23:22:22Z",
       "last_seen": "2026-03-31T00:38:45Z",
       "priority_score": 37,
       "priority_label": "P0",
       "recommended_action": "Verify service health/port first, then retry workflow.",
       "trend": "stable"
+    },
+    {
+      "template_id": "6ce1ba347840",
+      "normalized": "failed to create root command: failed to read configuration: open <path> cli\\config.yml: access is denied.",
+      "example": "failed to create root command: failed to read configuration: open C:\\Users\\adamf\\AppData\\Roaming\\GitHub CLI\\config.yml: Access is denied.",
+      "category": "permissions",
+      "rule_source": "static",
+      "count": 5,
+      "recent_7d": 5,
+      "first_seen": "2026-03-27T15:38:19Z",
+      "last_seen": "2026-04-01T13:28:18Z",
+      "priority_score": 35,
+      "priority_label": "P0",
+      "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
+      "trend": "up"
     },
     {
       "template_id": "50273bd81fd9",
@@ -188,21 +218,6 @@
       "recent_7d": 3,
       "first_seen": "2026-03-27T15:38:19Z",
       "last_seen": "2026-03-27T15:38:19Z",
-      "priority_score": 33,
-      "priority_label": "P0",
-      "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
-      "trend": "stable"
-    },
-    {
-      "template_id": "6ce1ba347840",
-      "normalized": "failed to create root command: failed to read configuration: open <path> cli\\config.yml: access is denied.",
-      "example": "failed to create root command: failed to read configuration: open C:\\Users\\adamf\\AppData\\Roaming\\GitHub CLI\\config.yml: Access is denied.",
-      "category": "permissions",
-      "rule_source": "static",
-      "count": 3,
-      "recent_7d": 3,
-      "first_seen": "2026-03-27T15:38:19Z",
-      "last_seen": "2026-03-30T12:18:23Z",
       "priority_score": 33,
       "priority_label": "P0",
       "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
@@ -269,19 +284,49 @@
       "trend": "stable"
     },
     {
-      "template_id": "960d87be6f37",
-      "normalized": "command timed out after <num> milliseconds",
-      "example": "command timed out after 10155 milliseconds",
-      "category": "timeout",
+      "template_id": "4526e3b7f99d",
+      "normalized": "+ \"keywords\": [\"permission denied\", \"access is denied\", \"spawn eperm\"],",
+      "example": "+        \"keywords\": [\"permission denied\", \"access is denied\", \"spawn eperm\"],",
+      "category": "permissions",
       "rule_source": "static",
-      "count": 5,
-      "recent_7d": 5,
+      "count": 1,
+      "recent_7d": 1,
+      "first_seen": "2026-04-01T13:28:18Z",
+      "last_seen": "2026-04-01T13:28:18Z",
+      "priority_score": 31,
+      "priority_label": "P0",
+      "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
+      "trend": "up"
+    },
+    {
+      "template_id": "6faf984f07d7",
+      "normalized": "error: could not install packages due to an oserror: [errno <num>] permission denied: '<path>'",
+      "example": "ERROR: Could not install packages due to an OSError: [Errno 13] Permission denied: 'C:\\\\Users\\\\adamf\\\\AppData\\\\Local\\\\Temp\\\\pip-unpack-tl96xbkv\\\\pre_commit-4.5.1-py2.py3-none-any.whl.metadata'",
+      "category": "permissions",
+      "rule_source": "static",
+      "count": 1,
+      "recent_7d": 1,
+      "first_seen": "2026-04-01T13:28:18Z",
+      "last_seen": "2026-04-01T13:28:18Z",
+      "priority_score": 31,
+      "priority_label": "P0",
+      "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
+      "trend": "up"
+    },
+    {
+      "template_id": "c0f33b811960",
+      "normalized": "attributeerror: 'wave_write' object has no attribute '_file'",
+      "example": "AttributeError: 'Wave_write' object has no attribute '_file'",
+      "category": "unknown",
+      "rule_source": "learned",
+      "count": 12,
+      "recent_7d": 12,
       "first_seen": "2026-03-27T15:38:19Z",
-      "last_seen": "2026-03-27T15:38:19Z",
-      "priority_score": 24,
+      "last_seen": "2026-04-01T13:28:18Z",
+      "priority_score": 18,
       "priority_label": "P1",
-      "recommended_action": "Tune timeout + split long operations into smaller validated steps.",
-      "trend": "stable"
+      "recommended_action": "Classify manually and add/prefer repeatable guard condition.",
+      "trend": "up"
     },
     {
       "template_id": "a1c46165cd41",
@@ -389,6 +434,21 @@
       "trend": "stable"
     },
     {
+      "template_id": "dfdf64207174",
+      "normalized": "r\"<path> timed out)\"",
+      "example": "r\"/usr/bin/bash:|command timed out)\"",
+      "category": "timeout",
+      "rule_source": "static",
+      "count": 1,
+      "recent_7d": 1,
+      "first_seen": "2026-04-01T13:28:18Z",
+      "last_seen": "2026-04-01T13:28:18Z",
+      "priority_score": 20,
+      "priority_label": "P1",
+      "recommended_action": "Tune timeout + split long operations into smaller validated steps.",
+      "trend": "up"
+    },
+    {
       "template_id": "0da58d3386c2",
       "normalized": "attributeerror: 'str' object has no attribute 'get'",
       "example": "AttributeError: 'str' object has no attribute 'get'",
@@ -494,21 +554,6 @@
       "trend": "stable"
     },
     {
-      "template_id": "c0f33b811960",
-      "normalized": "attributeerror: 'wave_write' object has no attribute '_file'",
-      "example": "AttributeError: 'Wave_write' object has no attribute '_file'",
-      "category": "unknown",
-      "rule_source": "static",
-      "count": 1,
-      "recent_7d": 1,
-      "first_seen": "2026-03-27T15:38:19Z",
-      "last_seen": "2026-03-27T15:38:19Z",
-      "priority_score": 12,
-      "priority_label": "P2",
-      "recommended_action": "Classify manually and add/prefer repeatable guard condition.",
-      "trend": "stable"
-    },
-    {
       "template_id": "281adcee2140",
       "normalized": "attributeerror: module 'backend.app.services.library_service' has no attribute 'list_available_models'",
       "example": "AttributeError: module 'backend.app.services.library_service' has no attribute 'list_available_models'",
@@ -539,5 +584,13 @@
       "trend": "stable"
     }
   ],
-  "learned_rules": []
+  "learned_rules": [
+    {
+      "pattern": "attributeerror:\\ 'wave_write'\\ object\\ has\\ no\\ attribute\\ '_file'",
+      "category": "unknown",
+      "source_template_id": "c0f33b811960",
+      "promoted_at_utc": "2026-04-02T03:18:05Z",
+      "min_count": "3"
+    }
+  ]
 }

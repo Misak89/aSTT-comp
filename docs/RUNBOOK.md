@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T13:55:00Z
+- last_updated_utc: 2026-04-02T03:17:29Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## 1. Stabilni start webu
@@ -24,6 +24,32 @@ URL:
 2. Over listener na portu 8012.
 3. Zkontroluj posledni backend log.
 4. Pri stale chybe udelej `web-restart.cmd`.
+
+## 2.1 Dashboard monitoring (health/processes)
+- Process monitoring endpointy:
+  - `GET /api/health`
+  - `GET /api/health/processes?mode=fast|slow|full`
+  - `POST /api/health/processes/cleanup-stale-pids`
+- Dashboard ma Performance Monitor panel:
+  - globalni vypinac `Turn monitoring OFF (all)` (zachova nastaveni v localStorage),
+  - rychly preset `Graphs only, no logging`,
+  - `view`: `full`, `graphs_only`, `numbers_only`,
+  - RAM/CPU kanal samostatne: `show graph on/off`, `logging on/off`.
+- Log scale:
+  - `Scale: log/linear` je per graf,
+  - `log coef` je globalni (`1x`, `2x`, `5x`, `10x`).
+- Process panel:
+  - `Full scan now` pro okamzity full scan processu,
+  - `Clean stale PID files` odstrani neplatne PID soubory a ztiší stale warning.
+
+## 2.2 Validace monitoringu (2026-04-02)
+- `web-status.cmd`: health `UP`, backend na `127.0.0.1:8012`.
+- `GET /api/health`: `200`, payload obsahuje `cpu_percent`.
+- `GET /api/health/processes?mode=fast`: `200`.
+- `GET /api/health/processes?mode=slow`: `200`.
+- `GET /api/health/processes?mode=full`: `200`.
+- Frontend build: `npm --prefix frontend run build` OK.
+- Backend sanity: `.venv\Scripts\python -m compileall backend/app/routers/health.py` OK.
 
 ## 3. Kde jsou logy a runtime data
 - Mic session: `runtime/mic_sessions/`

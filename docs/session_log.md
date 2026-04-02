@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T16:12:13Z
+- last_updated_utc: 2026-04-02T03:17:36Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -382,3 +382,13 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Bezpecnostni a quality gate se daji spoustet automaticky i pred push, ne pouze v CI.
+
+---
+
+## Session 2026-04-02T03:17:36Z (dashboard-monitoring-validation)
+
+### Summary
+- Validated dashboard/health/monitoring changes: /api/health and /api/health/processes (fast/slow/full) returned 200, backend was UP, frontend build succeeded, and health router compiled.
+
+### Impact
+- Monitoring behavior is now verified and documented before docs-governance guard execution.

@@ -1,17 +1,31 @@
 {
-  "generated_at_utc": "2026-04-01T17:52:43Z",
-  "learned_rules": [],
+  "generated_at_utc": "2026-04-02T03:18:05Z",
+  "learned_rules": [
+    {
+      "pattern": "attributeerror:\\ 'wave_write'\\ object\\ has\\ no\\ attribute\\ '_file'",
+      "category": "unknown",
+      "source_template_id": "c0f33b811960",
+      "promoted_at_utc": "2026-04-02T03:18:05Z",
+      "min_count": "3"
+    }
+  ],
   "templates": {
     "43dfa1926ef3": {
-      "count": 842,
-      "last_seen": "2026-03-30T18:11:20Z",
+      "count": 901,
+      "last_seen": "2026-04-01T19:06:55Z",
       "category": "command_failure",
       "priority_label": "P0"
     },
     "a27fdbdfc27e": {
-      "count": 64,
-      "last_seen": "2026-03-27T18:42:39Z",
+      "count": 88,
+      "last_seen": "2026-04-01T13:28:18Z",
       "category": "permissions",
+      "priority_label": "P0"
+    },
+    "960d87be6f37": {
+      "count": 19,
+      "last_seen": "2026-04-01T19:06:55Z",
+      "category": "timeout",
       "priority_label": "P0"
     },
     "cf06d7cf54ab": {
@@ -50,6 +64,12 @@
       "category": "service_unavailable",
       "priority_label": "P0"
     },
+    "6ce1ba347840": {
+      "count": 5,
+      "last_seen": "2026-04-01T13:28:18Z",
+      "category": "permissions",
+      "priority_label": "P0"
+    },
     "50273bd81fd9": {
       "count": 4,
       "last_seen": "2026-03-24T23:22:22Z",
@@ -71,12 +91,6 @@
     "366846fae9ae": {
       "count": 3,
       "last_seen": "2026-03-27T15:38:19Z",
-      "category": "permissions",
-      "priority_label": "P0"
-    },
-    "6ce1ba347840": {
-      "count": 3,
-      "last_seen": "2026-03-30T12:18:23Z",
       "category": "permissions",
       "priority_label": "P0"
     },
@@ -104,10 +118,22 @@
       "category": "dependency_missing",
       "priority_label": "P0"
     },
-    "960d87be6f37": {
-      "count": 5,
-      "last_seen": "2026-03-27T15:38:19Z",
-      "category": "timeout",
+    "4526e3b7f99d": {
+      "count": 1,
+      "last_seen": "2026-04-01T13:28:18Z",
+      "category": "permissions",
+      "priority_label": "P0"
+    },
+    "6faf984f07d7": {
+      "count": 1,
+      "last_seen": "2026-04-01T13:28:18Z",
+      "category": "permissions",
+      "priority_label": "P0"
+    },
+    "c0f33b811960": {
+      "count": 12,
+      "last_seen": "2026-04-01T13:28:18Z",
+      "category": "unknown",
       "priority_label": "P1"
     },
     "a1c46165cd41": {
@@ -152,6 +178,12 @@
       "category": "path_assumption",
       "priority_label": "P1"
     },
+    "dfdf64207174": {
+      "count": 1,
+      "last_seen": "2026-04-01T13:28:18Z",
+      "category": "timeout",
+      "priority_label": "P1"
+    },
     "0da58d3386c2": {
       "count": 2,
       "last_seen": "2026-03-31T10:38:34Z",
@@ -191,12 +223,6 @@
     "421d75b124ae": {
       "count": 1,
       "last_seen": "2026-03-24T23:22:22Z",
-      "category": "unknown",
-      "priority_label": "P2"
-    },
-    "c0f33b811960": {
-      "count": 1,
-      "last_seen": "2026-03-27T15:38:19Z",
       "category": "unknown",
       "priority_label": "P2"
     },
