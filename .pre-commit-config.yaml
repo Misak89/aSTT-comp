@@ -1,0 +1,13 @@
+repos:
+  - repo: local
+    hooks:
+      - id: supply-chain-guard
+        name: supply-chain-guard
+        entry: python scripts/supply_chain_guard.py
+        language: system
+        pass_filenames: false
+      - id: specstory-failure-learning
+        name: specstory-failure-learning
+        entry: python scripts/specstory_failure_learning.py
+        language: system
+        pass_filenames: false

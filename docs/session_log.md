@@ -1,5 +1,11 @@
 # Session log — záznamy vývojových session
 
+Doc-Meta:
+- owner: engineering
+- status: active
+- last_updated_utc: 2026-04-01T16:12:13Z
+- review_due_utc: 2026-04-15T00:00:00Z
+
 ---
 
 ## Session 2026-03-21 (00:00–00:25 UTC)
@@ -318,3 +324,61 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 - `scripts/verify_docs_guard.py` zpresnen:
   - nehlida jen pritomnost souboru, ale i **substantive added content** v povinnych docs.
 - `README.md` doplnen o explicitni pravidlo, ze plan se aktualizuje pres `docs/PLAN_TRACKER.md`.
+
+---
+
+## Session 2026-04-01T13:55:00Z (docs-governance-hardening)
+
+### Summary
+- Vytvoren backup dokumentace do `docs/backups/2026-04-01_154911`.
+- `CLAUDE.md` preveden na stub a potvrzeno, ze `AGENTS.md` je jediny source of truth.
+- Zavedena jednotna `Doc-Meta` struktura (owner/status/last_updated_utc/review_due_utc) v core docs.
+- Posilen CI guard (`scripts/verify_docs_guard.py`) o validaci metadata, timestampu a session entry struktury.
+- Pridan helper `scripts/add_session_log_entry.py` pro kratke, konzistentni session zapisy s UTC timestampem.
+
+### Why
+- Predchozi stav mel riziko zastaravani, duplicity instrukci a slabou vymahatelnost.
+
+### Impact
+- Dokumentace ma vynutitelny minimalni standard.
+- PR bez konzistentni dokumentacni aktualizace neprojde CI guardem.
+
+---
+
+## Session 2026-04-01T15:42:10Z (specstory-selfimproving)
+
+### Summary
+- Pridan analyzator recurring failures ze .specstory s auto-prioritizaci a generovanim KNOWN_FAILURES/reportu/state.
+
+### Impact
+- Projekt ma opakovatelny, datovy feedback loop pro vibe coding chyby a pripravenou self-improving dokumentacni smycku.
+
+---
+
+## Session 2026-04-01T15:43:01Z (specstory-guard-link)
+
+### Summary
+- Docs guard doplnen o vazbu: pri zmene specstory analyzatoru musi byt zmenen i KNOWN_FAILURES + report + state artefakty.
+
+### Impact
+- Smycka je vic neobchazitelna: logika analyzy a jeji dokumentacni/statisticke vystupy se nemohou rozjet.
+
+---
+
+## Session 2026-04-01T16:11:04Z (supply-chain-security-gate)
+
+### Summary
+- Pridana security policy a guard proti rizikovym OSS zdrojum/licencim/dependency praktikam vcetne intake registru.
+
+### Impact
+- Inspirace, stahovani i build maji novy strojovy security gate a CI check, ktery snizuje riziko infikovaneho nebo nekompatibilne licencovaneho kodu.
+
+---
+
+## Session 2026-04-01T16:12:13Z (supply-chain-local-hooks)
+
+### Summary
+- Pridany lokalni pre-commit hooky pro supply-chain guard a specstory learning loop.
+
+### Impact
+- Bezpecnostni a quality gate se daji spoustet automaticky i pred push, ne pouze v CI.

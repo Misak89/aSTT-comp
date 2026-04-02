@@ -1,5 +1,12 @@
 # aSTT-comp — projekt kontext pro Codex
 
+Doc-Meta:
+- owner: engineering
+- status: active
+- source_of_truth: true
+- last_updated_utc: 2026-04-01T13:55:00Z
+- review_due_utc: 2026-04-15T00:00:00Z
+
 ## Proč tento projekt existuje
 Čistý přepis `aSTT-comparison` (organicky narostlý, monolitický) do nové struktury.
 Původní: main.py 3224 řádků, index.html 7178 řádků — nešlo udržovat.

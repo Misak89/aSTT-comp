@@ -1,0 +1,216 @@
+{
+  "generated_at_utc": "2026-04-01T17:52:43Z",
+  "learned_rules": [],
+  "templates": {
+    "43dfa1926ef3": {
+      "count": 842,
+      "last_seen": "2026-03-30T18:11:20Z",
+      "category": "command_failure",
+      "priority_label": "P0"
+    },
+    "a27fdbdfc27e": {
+      "count": 64,
+      "last_seen": "2026-03-27T18:42:39Z",
+      "category": "permissions",
+      "priority_label": "P0"
+    },
+    "cf06d7cf54ab": {
+      "count": 10,
+      "last_seen": "2026-03-24T23:22:22Z",
+      "category": "path_assumption",
+      "priority_label": "P0"
+    },
+    "bc1251eb227e": {
+      "count": 8,
+      "last_seen": "2026-03-31T10:38:34Z",
+      "category": "path_assumption",
+      "priority_label": "P0"
+    },
+    "28a8481e412d": {
+      "count": 8,
+      "last_seen": "2026-03-31T10:38:34Z",
+      "category": "path_assumption",
+      "priority_label": "P0"
+    },
+    "8ac03ef6c3b2": {
+      "count": 7,
+      "last_seen": "2026-03-27T18:37:31Z",
+      "category": "dependency_missing",
+      "priority_label": "P0"
+    },
+    "f732afad4a58": {
+      "count": 7,
+      "last_seen": "2026-03-27T18:37:31Z",
+      "category": "dependency_missing",
+      "priority_label": "P0"
+    },
+    "d47b96f5f65a": {
+      "count": 6,
+      "last_seen": "2026-03-31T00:38:45Z",
+      "category": "service_unavailable",
+      "priority_label": "P0"
+    },
+    "50273bd81fd9": {
+      "count": 4,
+      "last_seen": "2026-03-24T23:22:22Z",
+      "category": "path_assumption",
+      "priority_label": "P0"
+    },
+    "ff7cef30863e": {
+      "count": 3,
+      "last_seen": "2026-03-24T23:22:22Z",
+      "category": "path_assumption",
+      "priority_label": "P0"
+    },
+    "5962964b6d00": {
+      "count": 3,
+      "last_seen": "2026-03-24T23:22:22Z",
+      "category": "path_assumption",
+      "priority_label": "P0"
+    },
+    "366846fae9ae": {
+      "count": 3,
+      "last_seen": "2026-03-27T15:38:19Z",
+      "category": "permissions",
+      "priority_label": "P0"
+    },
+    "6ce1ba347840": {
+      "count": 3,
+      "last_seen": "2026-03-30T12:18:23Z",
+      "category": "permissions",
+      "priority_label": "P0"
+    },
+    "5d055fcc3ed7": {
+      "count": 2,
+      "last_seen": "2026-03-30T12:18:23Z",
+      "category": "dependency_missing",
+      "priority_label": "P0"
+    },
+    "6b82bbcab6a4": {
+      "count": 1,
+      "last_seen": "2026-03-23T11:58:36Z",
+      "category": "dependency_missing",
+      "priority_label": "P0"
+    },
+    "08b7f8e40705": {
+      "count": 1,
+      "last_seen": "2026-03-27T15:38:19Z",
+      "category": "dependency_missing",
+      "priority_label": "P0"
+    },
+    "758603204492": {
+      "count": 1,
+      "last_seen": "2026-03-30T12:18:23Z",
+      "category": "dependency_missing",
+      "priority_label": "P0"
+    },
+    "960d87be6f37": {
+      "count": 5,
+      "last_seen": "2026-03-27T15:38:19Z",
+      "category": "timeout",
+      "priority_label": "P1"
+    },
+    "a1c46165cd41": {
+      "count": 2,
+      "last_seen": "2026-03-24T23:22:22Z",
+      "category": "path_assumption",
+      "priority_label": "P1"
+    },
+    "46f44ba51178": {
+      "count": 2,
+      "last_seen": "2026-03-31T10:38:34Z",
+      "category": "path_assumption",
+      "priority_label": "P1"
+    },
+    "a92cb5e4c409": {
+      "count": 1,
+      "last_seen": "2026-03-22T00:35:50Z",
+      "category": "path_assumption",
+      "priority_label": "P1"
+    },
+    "08c91711c968": {
+      "count": 1,
+      "last_seen": "2026-03-23T01:28:02Z",
+      "category": "path_assumption",
+      "priority_label": "P1"
+    },
+    "60d694e8fc16": {
+      "count": 1,
+      "last_seen": "2026-03-24T02:11:34Z",
+      "category": "path_assumption",
+      "priority_label": "P1"
+    },
+    "776cd5426e72": {
+      "count": 1,
+      "last_seen": "2026-03-24T23:22:22Z",
+      "category": "path_assumption",
+      "priority_label": "P1"
+    },
+    "b88f5161f01f": {
+      "count": 1,
+      "last_seen": "2026-03-30T13:52:37Z",
+      "category": "path_assumption",
+      "priority_label": "P1"
+    },
+    "0da58d3386c2": {
+      "count": 2,
+      "last_seen": "2026-03-31T10:38:34Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "ab1e6be7e5ed": {
+      "count": 1,
+      "last_seen": "2026-03-21T21:41:34Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "f8a53bb6f37e": {
+      "count": 1,
+      "last_seen": "2026-03-23T11:58:36Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "5df4827a66b7": {
+      "count": 1,
+      "last_seen": "2026-03-23T11:58:36Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "3c575261e879": {
+      "count": 1,
+      "last_seen": "2026-03-23T11:58:36Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "fd1e220f13f4": {
+      "count": 1,
+      "last_seen": "2026-03-23T20:29:40Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "421d75b124ae": {
+      "count": 1,
+      "last_seen": "2026-03-24T23:22:22Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "c0f33b811960": {
+      "count": 1,
+      "last_seen": "2026-03-27T15:38:19Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "281adcee2140": {
+      "count": 1,
+      "last_seen": "2026-03-30T12:18:23Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    },
+    "155596a1d8bc": {
+      "count": 1,
+      "last_seen": "2026-03-30T13:52:37Z",
+      "category": "unknown",
+      "priority_label": "P2"
+    }
+  }
+}

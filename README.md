@@ -1,9 +1,24 @@
 # aSTT-comp
 
+Doc-Meta:
+- owner: engineering
+- status: active
+- last_updated_utc: 2026-04-01T13:55:00Z
+- review_due_utc: 2026-04-15T00:00:00Z
+
 Nástroj pro měření a porovnání STT (Speech-to-Text) modelů pro online přepis češtiny v reálném čase.  
 Testuje skutečnou použitelnost pro živý rozhovor — audio jde do modelu v real-time chuncích, ne dávkově.
 
 ---
+
+## Dokumentacni governance
+
+- Jediny autoritativni vstup pro AI agenty je `AGENTS.md`.
+- `CLAUDE.md` je zamerne jen stub s odkazem na `AGENTS.md`.
+- Povinne procesni pravidla jsou v `CONTRIBUTING.md`.
+- Implementacni kontrakt je v `docs/DOCS_GOVERNANCE.md`.
+- CI guard (`scripts/verify_docs_guard.py` + `.github/workflows/docs-guard.yml`) je povinny gate pred mergem.
+- Aktivni plan a stav je jen v `docs/PLAN_TRACKER.md`.
 
 ## Instalace
 

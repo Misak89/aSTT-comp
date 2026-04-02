@@ -1,5 +1,11 @@
 # Runbook (Operations)
 
+Doc-Meta:
+- owner: engineering
+- status: active
+- last_updated_utc: 2026-04-01T13:55:00Z
+- review_due_utc: 2026-04-15T00:00:00Z
+
 ## 1. Stabilni start webu
 Pouzivej root skripty:
 - `web-up.cmd` - stabilni start v aktualnim okne
@@ -35,3 +41,9 @@ URL:
 Pri oprave incidentu:
 1. zapsat co se stalo a fix do `docs/session_log.md`,
 2. pokud se meni start/provozni postup, aktualizovat tento `docs/RUNBOOK.md`.
+
+## 6. Dokumentacni rutina po dokonceni zmeny
+1. Pridat strucny zaznam do `docs/session_log.md` (idealne pres `scripts/add_session_log_entry.py`).
+2. V zmenenych core dokumentech aktualizovat `Doc-Meta.last_updated_utc`.
+3. Overit guard lokalne:
+   - `python scripts/verify_docs_guard.py --base HEAD~1 --head HEAD`

@@ -6,7 +6,7 @@ const NAV = [
   { to: '/benchmark', label: 'Benchmark' },
   { to: '/results',   label: 'Výsledky' },
   { to: '/tuning',    label: 'Tuning' },
-  { to: '/prepis',    label: 'Přepis' },
+  { to: '/transcript', label: 'Přepis' },
   { to: '/models',    label: 'Modely' },
   { to: '/hwflow',    label: 'HW Flow' },
   { to: '/dashboard', label: 'Dashboard' },
@@ -14,7 +14,7 @@ const NAV = [
 
 export function Layout() {
   const { pathname } = useLocation()
-  const isPrepis = pathname === '/prepis'
+  const isPrepis = pathname === '/transcript'
 
   return (
     <div className="min-h-screen bg-gray-50">

@@ -20,7 +20,8 @@ export default function App() {
           <Route path="tuning" element={<TuningPage />} />
           <Route path="models" element={<ModelsPage />} />
           {/* TranscribePage is always mounted in Layout — route renders empty placeholder */}
-          <Route path="prepis" element={<></>} />
+          <Route path="transcript" element={<></>} />
+          <Route path="prepis" element={<Navigate to="/transcript" replace />} />
           <Route path="hwflow" element={<HWFlowPage />} />
           <Route path="hw-flow" element={<HWFlowPage />} />
           <Route path="HWFlow" element={<HWFlowPage />} />

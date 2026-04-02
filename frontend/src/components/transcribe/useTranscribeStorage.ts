@@ -26,9 +26,13 @@ export interface TranscriptEntry {
 export interface TranscribeSettings {
   model?: string
   source_tab?: 'library' | 'upload'
+  selected_video_id?: string
   range_mode?: 'full' | 'segment'
   range_from?: string
   range_to?: string
+  ts_enabled?: boolean      // vkládat časové značky do přepisu
+  ts_interval_s?: number    // interval v sekundách (výchozí 60)
+  model_params?: Record<string, Record<string, unknown>>  // { [model_id]: { threads: 8, ... } }
   layout_mode?: 'horizontal' | 'vertical' | 'tabs'
   layout_split?: number
   player_speed?: number
@@ -58,18 +62,47 @@ export function listTranscripts(): TranscriptEntry[] {
 export function saveTranscript(entry: Omit<TranscriptEntry, 'transcript_id' | 'created_at' | 'updated_at'> & { transcript_id?: string }): TranscriptEntry {
   const archive = loadArchive()
   const now = new Date().toISOString()
+  let saved: TranscriptEntry
 
   if (entry.transcript_id) {
     const idx = archive.findIndex(e => e.transcript_id === entry.transcript_id)
     if (idx >= 0) {
       archive[idx] = { ...archive[idx], ...entry, updated_at: now } as TranscriptEntry
       saveArchive(archive)
-      return archive[idx]
+      saved = archive[idx]
+    } else {
+      saved = _makeNew(entry, now)
+      archive.unshift(saved)
+      saveArchive(archive)
     }
+  } else {
+    saved = _makeNew(entry, now)
+    archive.unshift(saved)
+    saveArchive(archive)
   }
 
-  const newEntry: TranscriptEntry = {
-    transcript_id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  // Zároveň ulož na disk přes backend (fire-and-forget)
+  fetch('/api/transcribe/transcripts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      transcript_id: saved.transcript_id,
+      title: saved.title,
+      html: saved.html,
+      plain_text: saved.plain_text,
+      source_label: saved.source_label ?? null,
+      model_id: saved.model_id ?? null,
+      range_from: saved.range_from ?? null,
+      range_to: saved.range_to ?? null,
+    }),
+  }).catch(() => {})
+
+  return saved
+}
+
+function _makeNew(entry: Omit<TranscriptEntry, 'transcript_id' | 'created_at' | 'updated_at'> & { transcript_id?: string }, now: string): TranscriptEntry {
+  return {
+    transcript_id: entry.transcript_id ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     created_at: now,
     updated_at: now,
     title: entry.title,
@@ -80,9 +113,6 @@ export function saveTranscript(entry: Omit<TranscriptEntry, 'transcript_id' | 'c
     range_from: entry.range_from,
     range_to: entry.range_to,
   }
-  archive.unshift(newEntry)
-  saveArchive(archive)
-  return newEntry
 }
 
 export function getTranscript(id: string): TranscriptEntry | null {

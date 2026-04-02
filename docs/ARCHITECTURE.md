@@ -1,5 +1,11 @@
 # Architecture (Single Source)
 
+Doc-Meta:
+- owner: engineering
+- status: active
+- last_updated_utc: 2026-04-01T13:55:00Z
+- review_due_utc: 2026-04-15T00:00:00Z
+
 Tento dokument je centralni popis toho, jak projekt funguje.
 Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 
@@ -39,3 +45,8 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 - Provozni navody: `docs/RUNBOOK.md`
 - Pravidla aktualizace dokumentace: `CONTRIBUTING.md`
 - Session historie implementace: `docs/session_log.md`
+
+## 7. Dokumentacni gate architektura
+- Vynuceni bezi pres `scripts/verify_docs_guard.py`.
+- Guard kontroluje mapovani kod->docs i povinne `Doc-Meta` bloky.
+- CI workflow `.github/workflows/docs-guard.yml` je merge gate.

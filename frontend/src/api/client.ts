@@ -5,6 +5,8 @@ import type {
   TuningDecisionReport,
   TuningMicCalibrationCheckResponse,
   WebAppAutostartStatus,
+  SpecstoryLiveStatus,
+  AppProcessSnapshot,
   MicManualRecordRequest,
   MicManualRecordResponse,
   MicManualRecordListResponse,
@@ -65,6 +67,15 @@ async function delJson<T>(path: string): Promise<T> {
 
 // Library
 export const api = {
+  health: {
+    specstory: () => get<SpecstoryLiveStatus>('/health/specstory'),
+    processes: (mode?: 'fast' | 'slow' | 'full') =>
+      get<AppProcessSnapshot>(`/health/processes${mode ? `?mode=${encodeURIComponent(mode)}` : ''}`),
+    cleanupStalePids: () =>
+      post<{ status: string; removed_count: number; kept_count: number; error_count: number; removed: string[]; kept: string[]; errors: string[] }>(
+        '/health/processes/cleanup-stale-pids'
+      ),
+  },
   library: {
     list: () => get<LibraryItem[]>('/library/items'),
     upsert: (item: Partial<LibraryItem> & { video_id: string; title: string; url: string }) =>
@@ -113,6 +124,7 @@ export const api = {
     runs: () => post<{ path: string }>('/open-dir/runs'),
     modelStore: () => post<{ path: string }>('/open-dir/model_store'),
     modelsLog: () => post<{ path: string }>('/open-dir/models_log'),
+    loggerLogs: () => post<{ path: string }>('/open-dir/logger_logs'),
     subtitles: () => post<{ path: string }>('/open-dir/subtitles'),
     subtitlesVideo: (videoId: string) => post<{ path: string }>(`/open-dir/subtitles/${videoId}`),
   },

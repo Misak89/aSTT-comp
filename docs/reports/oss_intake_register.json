@@ -1,0 +1,78 @@
+{
+  "generated_at_utc": "2026-04-01T16:07:44Z",
+  "owner": "engineering",
+  "entries": [
+    {
+      "component_id": "drain3",
+      "purpose": "log-template-mining for recurring failure analysis",
+      "source_url": "https://github.com/logpai/Drain3",
+      "source_ref": "planned-evaluation",
+      "license_spdx": "MIT",
+      "commercial_use_allowed": true,
+      "adoption_status": "planned",
+      "integrity": {
+        "type": "n/a",
+        "value": ""
+      },
+      "review": {
+        "reviewed_at_utc": "2026-04-01T16:07:44Z",
+        "reviewer": "engineering",
+        "threat_notes": "Planning phase only; no artifact downloaded or executed yet."
+      }
+    },
+    {
+      "component_id": "pre-commit",
+      "purpose": "local enforcement of security and docs guard hooks",
+      "source_url": "https://github.com/pre-commit/pre-commit",
+      "source_ref": "planned-evaluation",
+      "license_spdx": "MIT",
+      "commercial_use_allowed": true,
+      "adoption_status": "planned",
+      "integrity": {
+        "type": "n/a",
+        "value": ""
+      },
+      "review": {
+        "reviewed_at_utc": "2026-04-01T16:07:44Z",
+        "reviewer": "engineering",
+        "threat_notes": "Planning phase only; enforce hook strategy after controlled pilot."
+      }
+    },
+    {
+      "component_id": "oss-review-toolkit",
+      "purpose": "license and policy automation for OSS intake",
+      "source_url": "https://github.com/oss-review-toolkit/ort",
+      "source_ref": "planned-evaluation",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "adoption_status": "planned",
+      "integrity": {
+        "type": "n/a",
+        "value": ""
+      },
+      "review": {
+        "reviewed_at_utc": "2026-04-01T16:07:44Z",
+        "reviewer": "engineering",
+        "threat_notes": "Candidate for future deep license/SBOM automation."
+      }
+    },
+    {
+      "component_id": "scancode-toolkit",
+      "purpose": "license discovery and compliance evidence generation",
+      "source_url": "https://github.com/aboutcode-org/scancode-toolkit",
+      "source_ref": "planned-evaluation",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "adoption_status": "planned",
+      "integrity": {
+        "type": "n/a",
+        "value": ""
+      },
+      "review": {
+        "reviewed_at_utc": "2026-04-01T16:07:44Z",
+        "reviewer": "engineering",
+        "threat_notes": "Candidate for offline license scanning at release time."
+      }
+    }
+  ]
+}

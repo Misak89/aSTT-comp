@@ -1,0 +1,134 @@
+log_cmd - quick help and logic notes
+====================================
+
+Files
+-----
+- Windows script: scripts/log_cmd.py
+- Linux/macOS script: scripts/log_cmd_unix.py
+
+Multilingual quick help for GitHub page (requested order)
+---------------------------------------------------------
+en:
+- GitHub page: https://github.com/Misak89/aSTT-comp
+- Open scripts quickly on GitHub: repo -> scripts -> log_cmd.py / log_cmd_unix.py
+
+cs:
+- Stránka GitHub: https://github.com/Misak89/aSTT-comp
+- Skripty najdeš rychle: repozitář -> scripts -> log_cmd.py / log_cmd_unix.py
+
+sk:
+- GitHub stránka: https://github.com/Misak89/aSTT-comp
+- Skripty nájdeš rýchlo: repozitár -> scripts -> log_cmd.py / log_cmd_unix.py
+
+pl:
+- Strona GitHub: https://github.com/Misak89/aSTT-comp
+- Skrypty znajdziesz szybko: repozytorium -> scripts -> log_cmd.py / log_cmd_unix.py
+
+hu:
+- GitHub oldal: https://github.com/Misak89/aSTT-comp
+- A szkriptek gyorsan: repository -> scripts -> log_cmd.py / log_cmd_unix.py
+
+ru:
+- Страница GitHub: https://github.com/Misak89/aSTT-comp
+- Скрипты: репозиторий -> scripts -> log_cmd.py / log_cmd_unix.py
+
+germ:
+- GitHub-Seite: https://github.com/Misak89/aSTT-comp
+- Skripte schnell finden: Repository -> scripts -> log_cmd.py / log_cmd_unix.py
+
+
+Mini help (Windows, quick copy/paste)
+-------------------------------------
+- .venv\Scripts\python scripts\log_cmd.py --help-short
+- .venv\Scripts\python scripts\log_cmd.py --pause
+- .venv\Scripts\python scripts\log_cmd.py --resume
+- .venv\Scripts\python scripts\log_cmd.py --status
+- .venv\Scripts\python scripts\log_cmd.py --out C:\path\cmd.jsonl
+
+Wider help (all parameters)
+---------------------------
+- .venv\Scripts\python scripts\log_cmd.py --help
+
+If the script is installed in another folder, use absolute paths:
+- "C:\full\path\to\python.exe" "C:\full\path\to\log_cmd.py" --help
+
+
+Mini help (Linux/macOS)
+-----------------------
+- python3 scripts/log_cmd_unix.py --help-short
+- python3 scripts/log_cmd_unix.py --pause
+- python3 scripts/log_cmd_unix.py --resume
+- python3 scripts/log_cmd_unix.py --status
+- python3 scripts/log_cmd_unix.py --out /path/to/cmd_unix.jsonl
+
+Wider help (all parameters)
+---------------------------
+- python3 scripts/log_cmd_unix.py --help
+
+
+Core script logic
+-----------------
+1) Startup
+   - script writes logger self-start event (source=logger, lifecycle=self, event=start)
+   - optional history import runs once at start
+
+2) Main loop
+   - loop runs every --interval seconds
+   - compares previous and current process snapshots
+   - writes:
+     - event=start when a process appears
+     - event=end when a process disappears
+
+3) Pause/resume controls
+   - --pause creates control file cmd.paused
+   - --resume removes cmd.paused
+   - script writes logger pause/resume control events
+
+4) Periodic help cooldown (Windows script)
+   - default: every 3:33 minutes
+   - script pauses for random 5-10 seconds
+   - prints short help block
+   - can be tuned by:
+     --help-interval-sec
+     --help-pause-min-sec
+     --help-pause-max-sec
+   - can be disabled by:
+     --no-periodic-help
+
+5) Shutdown
+   - script writes logger self-end event with reason
+   - pid file is cleaned up
+
+
+Process data source and performance model
+-----------------------------------------
+The scripts use psutil process data.
+
+Important optimization now used in both scripts:
+- Instead of heavy process_iter(..., cmdline, ...) in each cycle,
+  the loop reads only lightweight metadata:
+  pid / name / create_time
+  (see log_cmd.py and log_cmd_unix.py).
+- cmdline() is called only for newly detected processes.
+- Process identity is tracked by (pid, create_time), so PID reuse is handled safely.
+
+Why this lowers CPU:
+- cmdline collection for every process on every loop is expensive.
+- metadata-only scans are much cheaper.
+- full cmdline fetch is limited to new processes only.
+
+
+Which processes can be logged
+-----------------------------
+- Usually: user-space processes visible to the current user/session.
+- Sometimes limited:
+  - protected/system processes can return AccessDenied
+  - some short-lived processes can appear/disappear between scans
+  - command line can be unavailable for restricted processes
+- Such entries are skipped or partially logged by design.
+
+
+Notes
+-----
+- For lower CPU, increase --interval (for example 4 or 5 seconds).
+- Hard kill (for example taskkill /F or SIGKILL) may prevent clean self-end write.

@@ -446,19 +446,30 @@ def import_fish_history(out_file, seen: set[str]) -> int:
     return count
 
 
-def snapshot() -> dict[int, dict]:
-    result: dict[int, dict] = {}
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+def _process_key(pid: int, created_ts: float) -> tuple[int, float]:
+    return (pid, created_ts)
+
+
+def _safe_cmdline_text(pid: int) -> str:
+    try:
+        cmdline = psutil.Process(pid).cmdline()
+        return ' '.join(cmdline) if cmdline else ''
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return ''
+
+
+def snapshot_meta() -> dict[tuple[int, float], dict]:
+    result: dict[tuple[int, float], dict] = {}
+    for proc in psutil.process_iter(['pid', 'name', 'create_time']):
         try:
-            cmdline = proc.info['cmdline']
-            if not cmdline:
-                continue
-            result[proc.pid] = {
+            pid = int(proc.info['pid'])
+            created = float(proc.info['create_time'])
+            result[_process_key(pid, created)] = {
+                'pid': pid,
                 'name': proc.info['name'],
-                'cmd': ' '.join(cmdline),
-                'started': datetime.fromtimestamp(proc.info['create_time'], tz=timezone.utc).isoformat(),
+                'started': datetime.fromtimestamp(created, tz=timezone.utc).isoformat(),
             }
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, KeyError, TypeError, ValueError):
             pass
     return result
 
@@ -466,7 +477,7 @@ def snapshot() -> dict[int, dict]:
 def live_monitor(out_file, interval: float, out_path: Path) -> None:
     print(f'Live monitoring (interval {interval}s, PID {os.getpid()}) - Ctrl+C to stop', flush=True)
     _write_pid(out_path)
-    prev: dict[int, dict] = {}
+    prev: dict[tuple[int, float], dict] = {}
     was_paused = False
 
     while True:
@@ -487,7 +498,7 @@ def live_monitor(out_file, interval: float, out_path: Path) -> None:
                 )
                 print('[||] Logger paused (--resume to continue)', flush=True)
             was_paused = True
-            prev = snapshot()
+            prev = snapshot_meta()
             time.sleep(interval)
             continue
 
@@ -504,22 +515,36 @@ def live_monitor(out_file, interval: float, out_path: Path) -> None:
                 },
             )
             print('[>>] Logger resumed', flush=True)
-            prev = snapshot()
+            prev = snapshot_meta()
             was_paused = False
             time.sleep(interval)
             continue
 
-        curr = snapshot()
-        for pid, info in curr.items():
-            if pid not in prev:
-                _write(out_file, {'ts': now, 'event': 'start', 'source': 'live', 'pid': pid, **info})
-        for pid, info in prev.items():
-            if pid not in curr:
-                _write(
-                    out_file,
-                    {'ts': now, 'event': 'end', 'source': 'live', 'pid': pid, 'ended': now, **info},
-                )
-        prev = curr
+        curr_meta = snapshot_meta()
+        curr_keys = set(curr_meta.keys())
+        prev_keys = set(prev.keys())
+
+        for key in (prev_keys - curr_keys):
+            info = prev[key]
+            _write(
+                out_file,
+                {'ts': now, 'event': 'end', 'source': 'live', 'pid': info['pid'], 'ended': now, **info},
+            )
+
+        next_prev: dict[tuple[int, float], dict] = {}
+        for key in (curr_keys & prev_keys):
+            next_prev[key] = prev[key]
+
+        for key in (curr_keys - prev_keys):
+            meta = curr_meta[key]
+            cmd_text = _safe_cmdline_text(meta['pid'])
+            if not cmd_text:
+                continue
+            info = {**meta, 'cmd': cmd_text}
+            next_prev[key] = info
+            _write(out_file, {'ts': now, 'event': 'start', 'source': 'live', 'pid': info['pid'], **info})
+
+        prev = next_prev
         time.sleep(interval)
 
 

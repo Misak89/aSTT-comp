@@ -1,0 +1,8 @@
+# Documentation governance owners
+README.md @Misak89
+AGENTS.md @Misak89
+CLAUDE.md @Misak89
+CONTRIBUTING.md @Misak89
+docs/** @Misak89
+scripts/verify_docs_guard.py @Misak89
+.github/workflows/docs-guard.yml @Misak89

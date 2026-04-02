@@ -7,7 +7,16 @@ import sys
 
 from fastapi import APIRouter, HTTPException
 
-from ..config import JOBS_ROOT, RUNS_ROOT, MODEL_STORE_ROOT, MODELS_LOG_ROOT, SUBTITLES_ROOT, ROOT
+from ..config import (
+    JOBS_ROOT,
+    RUNS_ROOT,
+    MODEL_STORE_ROOT,
+    MODELS_LOG_ROOT,
+    SUBTITLES_ROOT,
+    ROOT,
+    TRANSCRIPTS_ROOT,
+    LOGGER_LOGS_ROOT,
+)
 
 router = APIRouter(prefix="/api/open-dir")
 
@@ -18,6 +27,8 @@ _DIRS = {
     "model_store": MODEL_STORE_ROOT,
     "models_log":  MODELS_LOG_ROOT,
     "subtitles":   SUBTITLES_ROOT,
+    "transcripts": TRANSCRIPTS_ROOT,
+    "logger_logs": LOGGER_LOGS_ROOT,
     "root":        ROOT,
 }
 

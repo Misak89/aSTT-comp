@@ -454,6 +454,66 @@ export interface WebAppAutostartStatus {
   launch_url: string
 }
 
+export interface SpecstoryLiveStatus {
+  status: 'ok' | 'stale' | 'missing' | 'error'
+  source: string
+  generated_at_utc: string
+  loop_started_utc?: string | null
+  loop_pid?: number | null
+  interval_seconds?: number | null
+  last_run_utc?: string | null
+  last_success_utc?: string | null
+  last_exit_code?: number | null
+  last_error?: string | null
+  history_files_count?: number | null
+  runs_total?: number | null
+  runs_failed?: number | null
+  stale_seconds_threshold?: number | null
+  message?: string | null
+}
+
+export interface AppProcessInfo {
+  pid: number
+  name: string
+  status: string
+  started_at_utc: string | null
+  running_for_seconds: number | null
+  exe: string | null
+  cmdline_preview: string
+  is_root?: boolean
+  profile_id?: string | null
+  profile_label?: string | null
+  cpu_percent?: number | null
+  ram_mb?: number | null
+  gpu_memory_mb?: number | null
+  zombie_candidate?: boolean
+}
+
+export interface AppProcessProfile {
+  id: string
+  label: string
+  expected: boolean
+}
+
+export interface AppProcessGpuSummary {
+  provider?: string | null
+  total_util_percent?: number | null
+}
+
+export interface AppProcessSnapshot {
+  status: 'ok' | 'unavailable' | 'error'
+  updated_at_utc: string
+  scan_phase?: 'fast' | 'slow' | 'full'
+  count: number
+  root_pids?: number[]
+  processes: AppProcessInfo[]
+  profiles?: AppProcessProfile[]
+  zombie_count?: number
+  warnings?: string[]
+  gpu?: AppProcessGpuSummary
+  message?: string | null
+}
+
 // Tuning
 export interface TuningTrialResult {
   trial_idx: number
