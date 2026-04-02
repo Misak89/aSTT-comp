@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 import shutil
 
+from packages.common.runtime_paths import runtime_subpath
 from packages.ingest.youtube.models import FetchResult
 from packages.ingest.youtube.source_list import load_sources_from_txt
 from packages.ingest.youtube.yt_dlp_fetcher import YtDlpFetcher
@@ -21,7 +22,7 @@ class OnlineDatasetProfile:
 
 
 class OnlineTestsetRunner:
-    def __init__(self, run_root: str | Path = ".runtime/runs") -> None:
+    def __init__(self, run_root: str | Path = runtime_subpath("runs")) -> None:
         self.run_root = Path(run_root)
 
     def prepare(
@@ -133,7 +134,7 @@ def _write_log(path: Path, payload: dict[str, object]) -> None:
 def prepare_online_testset(
     profile_path: str | Path,
     *,
-    run_root: str | Path = ".runtime/runs",
+    run_root: str | Path = runtime_subpath("runs"),
     run_id: str | None = None,
     dry_run: bool = False,
     fetcher: YtDlpFetcher | None = None,

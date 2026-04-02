@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T23:18:00Z
+- last_updated_utc: 2026-04-02T07:11:11Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## 1. Stabilni start webu
@@ -41,9 +41,6 @@ URL:
 - Process panel:
   - `Full scan now` pro okamzity full scan processu,
   - `Clean stale PID files` odstrani neplatne PID soubory a ztiší stale warning.
-- Refactor note:
-  - Frontend process scan cadence je interně přesunut do samostatného hooku `frontend/src/components/dashboard/useProcessScanCadence.ts`.
-  - Externí kontrakt zůstává stejný: stejné endpointy `GET /api/health/processes?mode=fast|slow|full` a stejné UI ovládání panelu.
 
 ## 2.2 Validace monitoringu (2026-04-02)
 - `web-status.cmd`: health `UP`, backend na `127.0.0.1:8012`.

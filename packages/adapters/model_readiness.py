@@ -13,6 +13,7 @@ from packages.adapters.sherpa_onnx_runner import (
 from packages.adapters.vosk_runner import detect_vosk_model_language, resolve_vosk_model_dir
 from packages.adapters.whisper_cpp_runner import resolve_whisper_cli, resolve_whisper_model_file
 from packages.adapters.faster_whisper_runner import resolve_faster_whisper_model_path
+from packages.common.runtime_paths import runtime_subpath
 
 ModuleChecker = Callable[[str], bool]
 
@@ -58,11 +59,11 @@ class ModelCheckResult:
 
 
 def collect_model_readiness(
-    model_store_root: str | Path = ".runtime/model_store",
+    model_store_root: str | Path | None = None,
     *,
     module_checker: ModuleChecker | None = None,
 ) -> list[dict[str, object]]:
-    root = Path(model_store_root)
+    root = Path(model_store_root) if model_store_root is not None else runtime_subpath("model_store")
     checker = module_checker or _module_available
     whisper_bin = resolve_whisper_cli(root)
 

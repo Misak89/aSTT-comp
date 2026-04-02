@@ -3,38 +3,8 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T23:18:00Z
+- last_updated_utc: 2026-04-02T22:05:22Z
 - review_due_utc: 2026-04-15T00:00:00Z
-
----
-
-## Session 2026-04-02T23:18:00Z - v5 refactor start: path portability + dashboard scan cadence extraction
-
-### Co bylo provedeno
-- Pred dokumentacnimi upravami byl vytvoren centralni backup do `docs/backups/2026-04-03_011754/`.
-- Zavedena centralni path utilita `packages/common/runtime_paths.py`:
-  - canonical runtime root `runtime/`,
-  - env override `ASTT_RUNTIME_ROOT`,
-  - kandidati `runtime` + legacy `.runtime` pro kompatibilni cteni.
-- Refactor runtime cest bez zmeny externi funkcnosti:
-  - `packages/adapters/model_readiness.py`,
-  - `packages/adapters/whisper_cpp_runner.py`,
-  - `packages/benchmarks/runners/matrix_benchmark_runner.py`,
-  - `packages/benchmarks/runners/online_testset_runner.py`,
-  - `scripts/check_model.py`,
-  - `scripts/copy_subtitles.py` (odstranen hardcoded absolutni path, pridany CLI parametry).
-- Frontend monitoring refactor bez zmeny kontraktu:
-  - process scan cadence vytazena z `DashboardPage.tsx` do `frontend/src/components/dashboard/useProcessScanCadence.ts`.
-- Pridany testy: `tests/unit/test_runtime_paths.py`.
-
-### Validace
-- `pytest tests/unit/test_runtime_paths.py tests/unit/test_dashboard_monitor_contract.py` -> PASS.
-- `python -m compileall ...` pro zmenene Python moduly -> PASS.
-- `npm --prefix frontend run build` -> PASS.
-
-### Dopad
-- Runtime path handling je prenositelnejsi mezi stroji a konzistentni s `runtime/`.
-- Dashboard monitoring orchestrace je modularnejsi pri stejnem API/UI chovani.
 
 ---
 

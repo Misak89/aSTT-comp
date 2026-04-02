@@ -36,6 +36,7 @@ from packages.adapters.whisper_cpp_runner import (
     resolve_whisper_model_file,
     run_whisper_source,
 )
+from packages.common.runtime_paths import runtime_subpath
 from packages.ingest.source_resolver import SourceEntry
 
 
@@ -197,6 +198,9 @@ DEFAULT_SETTINGS: dict[str, SettingPreset] = {
     ),
 }
 
+_DEFAULT_RUNS_ROOT = runtime_subpath("runs")
+_DEFAULT_MODEL_STORE_ROOT = runtime_subpath("model_store")
+
 
 @dataclass(frozen=True)
 class ClipSelection:
@@ -228,8 +232,8 @@ def run_benchmark_matrix(
     model_ids: list[str],
     setting_ids: list[str],
     sample_seconds: int,
-    run_root: str | Path = ".runtime/runs",
-    model_store_root: str | Path = ".runtime/model_store",
+    run_root: str | Path = _DEFAULT_RUNS_ROOT,
+    model_store_root: str | Path = _DEFAULT_MODEL_STORE_ROOT,
     reference_manifest_path: str | Path | None = None,
     run_id: str | None = None,
     evaluation_mode: str = "synthetic",
@@ -508,7 +512,7 @@ def run_real_source_once(
     sample_seconds: int,
     start_offset_seconds: int = 0,
     output_dir: str | Path,
-    model_store_root: str | Path = ".runtime/model_store",
+    model_store_root: str | Path = _DEFAULT_MODEL_STORE_ROOT,
     reference_manifest_path: str | Path | None = None,
     clip_seed: int = 0,
     source_duration_seconds: float | None = None,
@@ -1252,7 +1256,7 @@ def _run_real_matrix(
             if sherpa_bundle is None:
                 raise ValueError(
                     "No sherpa-onnx transducer bundle found. Expected tokens+encoder+decoder+joiner .onnx files "
-                    "under .runtime/model_store/sherpa_onnx_small or similar."
+                    "under runtime/model_store/sherpa_onnx_small or similar."
                 )
 
         qwen_model_path = _resolve_qwen_model_path(model_store_root, model.model_id)
@@ -1261,7 +1265,7 @@ def _run_real_matrix(
         vosk_model_path = _resolve_vosk_model_path(model_store_root, model.model_id)
         if model.model_id == "vosk_small_cs_0_4" and vosk_model_path is None:
             raise ValueError(
-                "VOSK model directory not found. Expected conf/model.conf + am/final.mdl under .runtime/model_store/vosk_small_cs_0_4."
+                "VOSK model directory not found. Expected conf/model.conf + am/final.mdl under runtime/model_store/vosk_small_cs_0_4."
             )
         if vosk_model_path is not None and not vosk_model_path.exists():
             raise ValueError(f"VOSK model directory not found: {vosk_model_path}")

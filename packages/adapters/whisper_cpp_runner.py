@@ -18,6 +18,7 @@ import urllib.request
 import uuid
 
 from packages.ingest.source_resolver import SourceEntry
+from packages.common.runtime_paths import runtime_subpath
 
 try:
     import psutil
@@ -64,6 +65,8 @@ class WhisperLiveSessionState:
 
 _SERVER_CACHE: dict[tuple[str, str, str, int], _WhisperServerRuntime] = {}
 _SERVER_CACHE_LOCK = threading.Lock()
+_DEFAULT_MODEL_STORE_ROOT = runtime_subpath("model_store")
+_DEFAULT_MIC_RUNS_ROOT = runtime_subpath("runs", "mic_whisper_live")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -429,7 +432,7 @@ def create_whisper_live_session(
     analysis_window_seconds: int = 12,
 ) -> WhisperLiveSessionState:
     runtime = _get_or_start_cached_server(config=config)
-    temp_dir = Path(".runtime") / "runs" / "mic_whisper_live" / f"session_{uuid.uuid4().hex[:8]}"
+    temp_dir = _DEFAULT_MIC_RUNS_ROOT / f"session_{uuid.uuid4().hex[:8]}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     return WhisperLiveSessionState(
         runtime=runtime,
@@ -545,7 +548,7 @@ def _infer_live_text(*, session: WhisperLiveSessionState, tail_only: bool) -> st
 
     session.request_seq += 1
     if session.temp_dir is None:
-        session.temp_dir = Path(".runtime") / "runs" / "mic_whisper_live" / f"session_{uuid.uuid4().hex[:8]}"
+        session.temp_dir = _DEFAULT_MIC_RUNS_ROOT / f"session_{uuid.uuid4().hex[:8]}"
         session.temp_dir.mkdir(parents=True, exist_ok=True)
     wav_path = session.temp_dir / f"chunk_{session.request_seq:06d}.wav"
     _write_pcm16_wave(path=wav_path, sample_rate=session.sample_rate, pcm=pcm_window)
@@ -621,7 +624,7 @@ def _write_pcm16_wave(*, path: Path, sample_rate: int, pcm: array) -> None:
 
 
 def resolve_whisper_server(
-    model_store_root: str | Path = ".runtime/model_store",
+    model_store_root: str | Path = _DEFAULT_MODEL_STORE_ROOT,
     whisper_bin: str | None = None,
 ) -> str | None:
     env_server = os.environ.get("WHISPER_CPP_SERVER_BIN")
@@ -734,7 +737,7 @@ def _wait_server_ready(port: int, timeout_s: int = 30) -> None:
 
 
 def _get_or_start_cached_server(*, config: WhisperRunConfig) -> _WhisperServerRuntime:
-    model_store_root = Path(config.model_path).parents[1] if len(Path(config.model_path).parents) >= 2 else Path(".runtime/model_store")
+    model_store_root = Path(config.model_path).parents[1] if len(Path(config.model_path).parents) >= 2 else _DEFAULT_MODEL_STORE_ROOT
     server_bin = resolve_whisper_server(model_store_root=model_store_root, whisper_bin=config.whisper_bin)
     if not server_bin:
         raise RuntimeError("whisper-server binary nenalezen")
@@ -800,7 +803,7 @@ def _shutdown_cached_servers() -> None:
 atexit.register(_shutdown_cached_servers)
 
 
-def resolve_whisper_cli(model_store_root: str | Path = ".runtime/model_store") -> str | None:
+def resolve_whisper_cli(model_store_root: str | Path = _DEFAULT_MODEL_STORE_ROOT) -> str | None:
     root = Path(model_store_root)
     env_bin = os.environ.get("WHISPER_CPP_BIN")
     if env_bin is not None:

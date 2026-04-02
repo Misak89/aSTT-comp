@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from 'recharts'
 import { api } from '../api/client'
 import { listTranscripts } from '../components/transcribe/useTranscribeStorage'
+import { useProcessScanCadence } from '../components/dashboard/useProcessScanCadence'
 import type { AppProcessInfo, AppProcessSnapshot, BenchmarkJobStatus, LibraryItem, SpecstoryLiveStatus } from '../types'
 
 interface HealthState {
@@ -577,116 +578,29 @@ export function DashboardPage() {
     return () => clearInterval(t)
   }, [])
 
-  // Process scan cadence (phase-shifted):
-  // fast = lightweight refresh, slow = heavier refresh with marker/GPU.
-  useEffect(() => {
-    const shouldScan = processPanelMode !== 'hide_no_log'
-    const shouldLog = processPanelMode !== 'hide_no_log'
-
-    if (!shouldScan) {
-      setProcessPhaseLabel('paused')
-      setNextFastScanAtMs(null)
-      setNextSlowScanAtMs(null)
-      setNextLogAtMs(null)
-      return
-    }
-
-    const fastEveryMs = PROCESS_FAST_BASE_MS * clampMult(processFastMult)
-    const slowEveryMs = PROCESS_SLOW_BASE_MS * clampMult(processSlowMult)
-    const logEveryMs = PROCESS_LOG_BASE_MS * clampMult(processLogMult)
-    let cancelled = false
-    let fastTimer: number | null = null
-    let slowTimer: number | null = null
-
-    const scheduleFast = (delayMs: number) => {
-      const nextAt = Date.now() + delayMs
-      setNextFastScanAtMs(nextAt)
-      fastTimer = window.setTimeout(runFast, delayMs)
-    }
-
-    const scheduleSlow = (delayMs: number) => {
-      const nextAt = Date.now() + delayMs
-      setNextSlowScanAtMs(nextAt)
-      slowTimer = window.setTimeout(runSlow, delayMs)
-    }
-
-    const maybeWriteScanLog = (snapshot: AppProcessSnapshot, phase: string) => {
-      if (!shouldLog) return
-      const now = Date.now()
-      if (lastLogWriteAtRef.current > 0 && (now - lastLogWriteAtRef.current) < logEveryMs) {
-        setNextLogAtMs(lastLogWriteAtRef.current + logEveryMs)
-        return
-      }
-      lastLogWriteAtRef.current = now
-      setNextLogAtMs(now + logEveryMs)
-      const running = (snapshot.processes ?? []).length
-      const total = Math.max(running, (snapshot.profiles ?? []).filter(p => p.expected).length)
-      const count = appendScanLogEntry({
-        ts_utc: new Date(now).toISOString(),
-        phase,
-        running,
-        total,
-        zombies: snapshot.zombie_count ?? 0,
-        warnings: (snapshot.warnings ?? []).length,
-      })
-      setProcessScanLogCount(count)
-    }
-
-    const runFast = async () => {
-      if (cancelled) return
-      lastFastRunAtRef.current = Date.now()
-      setProcessPhaseLabel('fast')
-      try {
-        const snapshot = await api.health.processes('fast')
-        if (!cancelled) {
-          setProcessPhaseLabel(snapshot.scan_phase ?? 'fast')
-          setProcesses(prev => mergeProcessSnapshots(prev, snapshot))
-          maybeWriteScanLog(snapshot, snapshot.scan_phase ?? 'fast')
-        }
-      } catch {
-        // ignore polling errors
-      } finally {
-        if (!cancelled) scheduleFast(fastEveryMs)
-      }
-    }
-
-    const runSlow = async () => {
-      if (cancelled) return
-      const now = Date.now()
-      const nearFast = Math.abs(now - lastFastRunAtRef.current) < PROCESS_COLLISION_GUARD_MS
-      if (nearFast) {
-        scheduleSlow(PROCESS_PHASE_OFFSET_MS)
-        return
-      }
-      lastSlowRunAtRef.current = now
-      setProcessPhaseLabel('slow')
-      try {
-        const snapshot = await api.health.processes('slow')
-        if (!cancelled) {
-          setProcessPhaseLabel(snapshot.scan_phase ?? 'slow')
-          setProcesses(prev => mergeProcessSnapshots(prev, snapshot))
-          maybeWriteScanLog(snapshot, snapshot.scan_phase ?? 'slow')
-        }
-      } catch {
-        // ignore polling errors
-      } finally {
-        if (!cancelled) scheduleSlow(slowEveryMs)
-      }
-    }
-
-    // Initial run: fast now, slow phase-shifted.
-    scheduleFast(0)
-    scheduleSlow(PROCESS_PHASE_OFFSET_MS)
-    if (shouldLog) {
-      setNextLogAtMs(lastLogWriteAtRef.current > 0 ? lastLogWriteAtRef.current + logEveryMs : Date.now() + logEveryMs)
-    }
-
-    return () => {
-      cancelled = true
-      if (fastTimer != null) window.clearTimeout(fastTimer)
-      if (slowTimer != null) window.clearTimeout(slowTimer)
-    }
-  }, [processFastMult, processSlowMult, processLogMult, processPanelMode])
+  useProcessScanCadence({
+    processPanelMode,
+    processFastMult,
+    processSlowMult,
+    processLogMult,
+    setProcessPhaseLabel,
+    setNextFastScanAtMs,
+    setNextSlowScanAtMs,
+    setNextLogAtMs,
+    setProcessScanLogCount,
+    setProcesses,
+    lastFastRunAtRef,
+    lastSlowRunAtRef,
+    lastLogWriteAtRef,
+    processFastBaseMs: PROCESS_FAST_BASE_MS,
+    processSlowBaseMs: PROCESS_SLOW_BASE_MS,
+    processLogBaseMs: PROCESS_LOG_BASE_MS,
+    processPhaseOffsetMs: PROCESS_PHASE_OFFSET_MS,
+    processCollisionGuardMs: PROCESS_COLLISION_GUARD_MS,
+    clampMult,
+    appendScanLogEntry,
+    mergeProcessSnapshots,
+  })
 
   // Persist process multipliers
   useEffect(() => {

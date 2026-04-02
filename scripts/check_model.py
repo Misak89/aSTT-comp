@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import first_existing_runtime_path, runtime_subpath
 
 configure_console_io()
 
@@ -40,14 +41,15 @@ def check_via_api(model_id: str) -> int:
 
 
 def check_model_files(model_id: str) -> None:
-    """Informativní kontrola souborů modelu v .runtime/model_store."""
-    runtime = Path(__file__).parent.parent / ".runtime" / "model_store" / model_id
-    if runtime.exists():
-        files = list(runtime.rglob("*"))
+    """Informativní kontrola souborů modelu v runtime/model_store (fallback i na legacy .runtime)."""
+    model_dir = first_existing_runtime_path("model_store", model_id)
+    if model_dir.exists():
+        files = list(model_dir.rglob("*"))
         size_mb = sum(f.stat().st_size for f in files if f.is_file()) / 1024 / 1024
-        print(f"INFO  Model store: {runtime} ({size_mb:.0f} MB, {len(files)} souborů)")
+        print(f"INFO  Model store: {model_dir} ({size_mb:.0f} MB, {len(files)} souborů)")
     else:
-        print(f"INFO  Model store: {runtime} — nenalezen (model nemusí být stažen)")
+        canonical = runtime_subpath("model_store", model_id)
+        print(f"INFO  Model store: {canonical} — nenalezen (model nemusí být stažen)")
 
 
 def main() -> int:

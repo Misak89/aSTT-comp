@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T23:18:00Z
+- last_updated_utc: 2026-04-02T20:07:29Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento dokument je centralni popis toho, jak projekt funguje.
@@ -20,7 +20,6 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 - STT/adapters: `packages/adapters`
 - Benchmark/tuning pipeline: `packages/benchmarks`, `scripts/tuning_worker.py`
 - Runtime data: `runtime/` (single active runtime root)
-- Runtime path resolver: `packages/common/runtime_paths.py` (canonical `runtime/`, optional legacy read fallback for `.runtime` in utility flows)
 
 ## 3. Datove toky (zjednodusene)
 1. Frontend vola API (`/api/...`).
