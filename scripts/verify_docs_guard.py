@@ -95,7 +95,14 @@ PLAN_DOC_PREFIXES = (
 
 
 def _run(cmd: list[str]) -> list[str]:
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     if proc.returncode != 0:
         print(proc.stdout)
         print(proc.stderr, file=sys.stderr)
@@ -104,7 +111,14 @@ def _run(cmd: list[str]) -> list[str]:
 
 
 def _run_text(cmd: list[str]) -> str:
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     if proc.returncode != 0:
         print(proc.stdout)
         print(proc.stderr, file=sys.stderr)
@@ -117,6 +131,8 @@ def _show_file(ref: str, path: str) -> str | None:
         ["git", "show", f"{ref}:{path}"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if proc.returncode != 0:

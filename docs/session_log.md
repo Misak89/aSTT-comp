@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T03:17:36Z
+- last_updated_utc: 2026-04-02T03:19:38Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -392,3 +392,13 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Monitoring behavior is now verified and documented before docs-governance guard execution.
+
+---
+
+## Session 2026-04-02T03:19:38Z (docs-guard-utf8-fix)
+
+### Summary
+- Fixed verify_docs_guard subprocess decoding on Windows by forcing UTF-8 with replacement fallback for git outputs.
+
+### Impact
+- Docs guard now reliably validates session_log and core docs in Czech/UTF-8 content on this environment.
