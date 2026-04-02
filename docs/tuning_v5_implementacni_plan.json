@@ -1,0 +1,124 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "tuning_v5_implementacni_plan.json",
+    "last_updated_utc": "2026-04-02T07:11:11Z",
+    "review_due_utc": "2026-04-15T00:00:00Z",
+    "source_md": "docs/tuning_v5_implementacni_plan.md",
+    "format_role": "canonical_structured_snapshot"
+  },
+  "plan_id": "post-audit-v5",
+  "scope": "stabilization",
+  "context": {
+    "root_causes": [
+      "monitoring overhead",
+      "mixed latency methodology",
+      "file-based polling orchestration"
+    ],
+    "goal": "stabilize measurability, reproducibility, and HW efficiency before model expansion"
+  },
+  "goals": [
+    "Reduce monitoring overhead without losing diagnostics",
+    "Split strict_live vs proxy measurement lane",
+    "Replace file polling with event-native runtime",
+    "Improve root-cause diagnostics for long runs",
+    "Prepare stable baseline for next model matrix expansion"
+  ],
+  "out_of_scope": [
+    "Android/iOS expansion",
+    "Large UI redesigns without runtime value",
+    "New STT adapters before metrics stabilization"
+  ],
+  "workstreams": [
+    "WS-A Monitoring budget and scan policy",
+    "WS-B Measurement discipline",
+    "WS-C Event-store orchestration",
+    "WS-D Test and validation harness",
+    "WS-E Docs and governance synchronization"
+  ],
+  "phases": [
+    {
+      "phase": "0",
+      "title": "Baseline and instrumentation lock",
+      "window_days": "1-2",
+      "dod": [
+        "Baseline report exists",
+        "All later phases use same measurement protocol"
+      ]
+    },
+    {
+      "phase": "1",
+      "title": "Monitoring budget and phased scanning",
+      "window_days": "2-4",
+      "dod": [
+        "Measured CPU overhead drop vs baseline",
+        "No practical loss of diagnostics"
+      ]
+    },
+    {
+      "phase": "2",
+      "title": "Latency discipline split",
+      "window_days": "2-4",
+      "dod": [
+        "No mixed latency classes in decision outputs",
+        "Live best-model derived from live-valid metrics only"
+      ]
+    },
+    {
+      "phase": "3",
+      "title": "Event-store orchestration",
+      "window_days": "4-7",
+      "dod": [
+        "File polling is no longer primary runtime channel",
+        "Timeline and state reconstruction are available"
+      ]
+    },
+    {
+      "phase": "4",
+      "title": "Runtime hardening and tests",
+      "window_days": "3-5",
+      "dod": [
+        "Long-run tests pass reproducibly",
+        "Limits and mitigations are documented"
+      ]
+    },
+    {
+      "phase": "5",
+      "title": "Release gate and rollout",
+      "window_days": "2-3",
+      "dod": [
+        "v5 baseline approved",
+        "Next expansion steps are explicitly allowed"
+      ]
+    }
+  ],
+  "milestones": [
+    "M0",
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5"
+  ],
+  "risks": [
+    {
+      "risk": "orchestration changes may introduce races/regressions",
+      "mitigation": "phased rollout, canary, replay tests"
+    },
+    {
+      "risk": "reduced monitoring may hide incidents",
+      "mitigation": "minimum signal contract and explicit full-scan escalation"
+    },
+    {
+      "risk": "unclear cross-team ownership",
+      "mitigation": "phase owner and DoD gates per milestone"
+    }
+  ],
+  "acceptance_criteria": [
+    "Monitoring overhead is measurably lower",
+    "Live decision lane is methodologically clean",
+    "Runtime telemetry flow is event-native and auditable",
+    "Reproducibility and diagnostics improve over baseline"
+  ]
+}

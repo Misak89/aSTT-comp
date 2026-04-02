@@ -4,7 +4,7 @@ Doc-Meta:
 - owner: engineering
 - status: active
 - doc_file: DOCS_GOVERNANCE.md
-- last_updated_utc: 2026-04-02T22:02:50Z
+- last_updated_utc: 2026-04-02T22:01:03Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 
@@ -103,7 +103,6 @@ Mandatory Start (in this repository): README.md -> AGENTS.md -> docs/PLAN_TRACKE
 - Backup musi zachovat relativni strukturu:
   - root soubory pod `root/`
   - docs soubory pod `docs/`
-- Historie dokumentace je dohledatelna podle timestampu adresaru v `docs/backups/` (od data ve jmenu backup slozky).
 - Priklady:
   - `docs/backups/2026-04-03_000058/root/CONTRIBUTING.md`
   - `docs/backups/2026-04-03_000058/docs/DOCS_GOVERNANCE.md`

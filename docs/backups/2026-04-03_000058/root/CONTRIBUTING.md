@@ -4,7 +4,7 @@ Doc-Meta:
 - owner: engineering
 - status: active
 - doc_file: CONTRIBUTING.md
-- last_updated_utc: 2026-04-02T22:02:50Z
+- last_updated_utc: 2026-04-02T20:07:29Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 
@@ -22,12 +22,6 @@ Tento soubor je zavazny pro vsechny, kdo meni kod nebo dokumentaci.
 3. Precist `docs/session_log.md` (alespon posledni relevantni session).
 4. Pri dopadu na architekturu/provoz precist `docs/ARCHITECTURE.md` a `docs/RUNBOOK.md`.
 5. Teprve potom menit kod.
-
-## 1.1 Backup dokumentace (MUST)
-- Pred jakoukoli editaci dokumentace vytvor centralni timestamp backup do `docs/backups/<YYYY-MM-DD_HHMMSS>/`.
-- V backupu zachovej relativni strukturu puvodnich souboru (napr. `root/CONTRIBUTING.md`, `docs/DOCS_GOVERNANCE.md`, `docs/session_log.md`).
-- Zalohuj minimalne vsechny soubory, ktere budes v dane session upravovat.
-- Historii dokumentace dohledavej podle data/casu v `docs/backups/` (timestamp ve jmenu adresare).
 
 ## 2. Definition Of Done (Nejde Obejít)
 - Kod je upraven a smysluplne otestovan.

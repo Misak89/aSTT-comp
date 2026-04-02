@@ -1,4 +1,5 @@
 # Tuning systém — architektura a logika
+
 **Datum:** 2026-03-26
 **Verze kódu:** feature/tuning-v2
 **Autor:** Claude Sonnet 4.6 (generováno ze session 48bb4468)

@@ -3,30 +3,8 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T22:05:22Z
+- last_updated_utc: 2026-04-02T22:02:50Z
 - review_due_utc: 2026-04-15T00:00:00Z
-
----
-
-## Session 2026-04-02T22:05:22Z - AGENTS compact rewrite finished (one-page contract)
-
-### Co bylo provedeno
-- Pred editaci byl vytvoren centralni backup do `docs/backups/2026-04-03_000435/`.
-- `AGENTS.md` byl zkracen a prepsan do kratke kontraktni verze:
-  - proc projekt existuje,
-  - aktualni cil v 5 bodech,
-  - priority,
-  - hard rules,
-  - definition of done,
-  - odkazy na detailni dokumenty.
-- Dlouhe sekce (obsahle seznamy endpointu, velke stromy a procedury) byly odstraneny z AGENTS a delegovany na specializovane docs.
-
-### Vystupy
-- `AGENTS.md`
-- `docs/backups/2026-04-03_000435/*`
-
-### Dopad
-- Source-of-truth je ted mnohem prehlednejsi, kratsi a prakticky pouzitelny pro cizi LLM i lidskeho maintainera.
 
 ---
 

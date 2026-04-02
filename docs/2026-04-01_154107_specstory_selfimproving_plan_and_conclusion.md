@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T15:41:07Z
+- last_updated_utc: 2026-04-02T07:11:11Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## Strucny plan

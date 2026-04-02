@@ -3,9 +3,12 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T13:55:00Z
+- last_updated_utc: 2026-04-02T07:11:11Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
+
+Global Authority (Repository-wide): AGENTS.md is the only top-level Source of Truth for all project rules and interpretation. If any document conflicts with AGENTS.md, AGENTS.md always prevails.
+Mandatory Start (in this repository): README.md -> AGENTS.md -> docs/PLAN_TRACKER.md.
 Nástroj pro měření a porovnání STT (Speech-to-Text) modelů pro online přepis češtiny v reálném čase.  
 Testuje skutečnou použitelnost pro živý rozhovor — audio jde do modelu v real-time chuncích, ne dávkově.
 

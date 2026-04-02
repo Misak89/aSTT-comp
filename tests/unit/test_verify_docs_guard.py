@@ -69,3 +69,39 @@ def test_show_file_uses_utf8_decoding(monkeypatch):
     assert kwargs["errors"] == "replace"
     assert kwargs["text"] is True
     assert "český" in out
+
+
+def test_validate_new_jsonl_doc_file_contract_passes():
+    mod = _load_module()
+    content = (
+        '{"doc_meta":{"doc_file":"sample_2026-04-02.jsonl"},"event":"doc_created"}\n'
+        '{"event":"snapshot_published"}\n'
+    )
+    failures = mod._validate_new_doc_file_contract(
+        path="docs/reports/sample_2026-04-02.jsonl",
+        content=content,
+    )
+    assert failures == []
+
+
+def test_validate_new_jsonl_doc_file_contract_fails_without_doc_meta():
+    mod = _load_module()
+    content = '{"event":"doc_created"}\n{"event":"snapshot_published"}\n'
+    failures = mod._validate_new_doc_file_contract(
+        path="docs/reports/sample_2026-04-02.jsonl",
+        content=content,
+    )
+    assert failures
+    assert "doc_meta" in failures[0]
+
+
+def test_txt_file_under_docs_is_not_guarded_triplet_format():
+    mod = _load_module()
+    assert not mod._is_guarded_doc_format_path("docs/log_cmd_help.txt")
+
+
+def test_triplet_exempt_for_models_and_runs_paths():
+    mod = _load_module()
+    assert mod._is_triplet_exempt("docs/models/whisper_cpp_small.json")
+    assert mod._is_triplet_exempt("docs/runs/run_1/README.md")
+    assert not mod._is_triplet_exempt("docs/reports/audit_conclusion_2026-04-02.json")

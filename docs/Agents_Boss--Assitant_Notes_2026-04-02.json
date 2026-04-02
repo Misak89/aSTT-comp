@@ -1,0 +1,170 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "Agents_Boss--Assitant_Notes_2026-04-02.json",
+    "last_updated_utc": "2026-04-02T07:11:11Z",
+    "review_due_utc": "2026-04-15T00:00:00Z"
+  },
+  "run_utc": "2026-04-02T07:11:11Z",
+  "updated_total": 38,
+  "updated_by_format": {
+    "md": 31,
+    "json": 5,
+    "jsonl": 2
+  },
+  "updated_files": [
+    {
+      "path": "AGENTS.md",
+      "format": "md"
+    },
+    {
+      "path": "CLAUDE.md",
+      "format": "md"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "format": "md"
+    },
+    {
+      "path": "README.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/2026-03-26_tuning_architektura.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/2026-04-01_154107_specstory_selfimproving_plan_and_conclusion.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/DOCS_GOVERNANCE.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/KNOWN_FAILURES.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/PLAN_TRACKER.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/RUNBOOK.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/SECURITY_SUPPLY_CHAIN.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/as_is_documentation_enforcement_flow_2026-04-01.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/as_is_documentation_flow_2026-04-01.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/audit_conclusion_2026-04-02.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/doc_audit_2026-04-01.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/kriticke-selhani-analyzy/2026-03-26_1130_TUNING_STT_analyza.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/mic_sequence_rychla_vs_orchestracni_prestavba_2026-03-30.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/mic_sequence_vibe_coding_short_2026-03-30.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/offline_network_inventory.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/plan.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/reports/audit_conclusion_2026-04-02.json",
+      "format": "json"
+    },
+    {
+      "path": "docs/reports/audit_conclusion_2026-04-02.jsonl",
+      "format": "jsonl"
+    },
+    {
+      "path": "docs/reports/oss_intake_register.json",
+      "format": "json"
+    },
+    {
+      "path": "docs/reports/specstory_failures.json",
+      "format": "json"
+    },
+    {
+      "path": "docs/reports/specstory_pattern_state.json",
+      "format": "json"
+    },
+    {
+      "path": "docs/session_log.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/test_log.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_analyza_2026-03-27.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_system_design.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_v2_kompletni_data.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_v3_zmeny.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_v4_implementacni_plan.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_v4_inteligentni_plan.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_v4_tasky.md",
+      "format": "md"
+    },
+    {
+      "path": "docs/tuning_v5_implementacni_plan.json",
+      "format": "json"
+    },
+    {
+      "path": "docs/tuning_v5_implementacni_plan.jsonl",
+      "format": "jsonl"
+    },
+    {
+      "path": "docs/tuning_v5_implementacni_plan.md",
+      "format": "md"
+    }
+  ]
+}

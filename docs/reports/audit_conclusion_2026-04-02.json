@@ -1,0 +1,330 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "audit_conclusion_2026-04-02.json",
+    "last_updated_utc": "2026-04-02T07:11:11Z",
+    "review_due_utc": "2026-04-15T00:00:00Z"
+  },
+  "project_root": "C:\\Users\\adamf\\OneDrive\\Dokumenty\\aSTT-comp",
+  "audit_scope": {
+    "method": "docs-first review, then code verification",
+    "code_changes_during_audit": false
+  },
+  "executive_summary": [
+    {
+      "id": "ES1",
+      "finding": "Monitoring overhead is the biggest HW risk: frontend periodic timers + backend process/GPU scans wake CPU unnecessarily.",
+      "evidence": [
+        {
+          "path": "frontend/src/pages/DashboardPage.tsx",
+          "line": 43
+        },
+        {
+          "path": "frontend/src/pages/DashboardPage.tsx",
+          "line": 576
+        },
+        {
+          "path": "frontend/src/pages/DashboardPage.tsx",
+          "line": 742
+        },
+        {
+          "path": "backend/app/routers/health.py",
+          "line": 418
+        },
+        {
+          "path": "backend/app/routers/health.py",
+          "line": 445
+        },
+        {
+          "path": "backend/app/routers/health.py",
+          "line": 168
+        }
+      ]
+    },
+    {
+      "id": "ES2",
+      "finding": "Latency measurement is methodologically mixed (live/probe/proxy), which can pollute ranking for live dialog use.",
+      "evidence": [
+        {
+          "path": "packages/benchmarks/runners/streaming_runner.py",
+          "line": 173
+        },
+        {
+          "path": "packages/benchmarks/runners/streaming_runner.py",
+          "line": 338
+        },
+        {
+          "path": "scripts/tuning_worker.py",
+          "line": 924
+        }
+      ]
+    },
+    {
+      "id": "ES3",
+      "finding": "Benchmark orchestration is robust via subprocess isolation, but file polling still adds overhead and state complexity.",
+      "evidence": [
+        {
+          "path": "backend/app/services/benchmark_service.py",
+          "line": 223
+        },
+        {
+          "path": "backend/app/services/benchmark_service.py",
+          "line": 268
+        },
+        {
+          "path": "scripts/benchmark_worker.py",
+          "line": 33
+        }
+      ]
+    },
+    {
+      "id": "ES4",
+      "finding": "Reproducibility is strong: deterministic selection, manifests, timeline events, immutable summary, host telemetry.",
+      "evidence": [
+        {
+          "path": "packages/benchmarks/runners/matrix_benchmark_runner.py",
+          "line": 263
+        },
+        {
+          "path": "packages/benchmarks/runners/matrix_benchmark_runner.py",
+          "line": 451
+        },
+        {
+          "path": "packages/benchmarks/runners/matrix_benchmark_runner.py",
+          "line": 855
+        },
+        {
+          "path": "packages/benchmarks/runners/host_telemetry.py",
+          "line": 586
+        },
+        {
+          "path": "packages/benchmarks/runners/host_telemetry.py",
+          "line": 608
+        }
+      ]
+    },
+    {
+      "id": "ES5",
+      "finding": "UTF-8/Unicode handling is mostly correct in core flows; major issues are architecture and measurement discipline.",
+      "evidence": [
+        {
+          "path": "packages/benchmarks/metrics/text_metrics.py",
+          "line": 33
+        },
+        {
+          "path": "packages/common/console_io.py",
+          "line": 8
+        }
+      ]
+    },
+    {
+      "id": "ES6",
+      "finding": "Documentation drift exists (e.g., run_benchmark.py reference, .runtime vs runtime mismatch).",
+      "evidence": [
+        {
+          "path": "AGENTS.md",
+          "line": 68
+        },
+        {
+          "path": "AGENTS.md",
+          "line": 73
+        },
+        {
+          "path": "backend/app/config.py",
+          "line": 8
+        }
+      ]
+    },
+    {
+      "id": "ES7",
+      "finding": "Validation signal is partially blocked by environment filesystem tempfile permission errors.",
+      "evidence": [
+        {
+          "path": "tests/unit/test_vtt_reference.py",
+          "line": 57
+        },
+        {
+          "path": "tests/unit/test_benchmark_matrix.py",
+          "line": 122
+        },
+        {
+          "path": "tests/integration/test_api.py",
+          "line": 58
+        }
+      ]
+    }
+  ],
+  "prioritized_weaknesses": [
+    {
+      "priority": "P1",
+      "problem": "Monitoring consumes more HW than needed.",
+      "root_cause": "Split monitoring model without central budget.",
+      "impact": "Higher CPU and jitter during STT measurement.",
+      "severity": "critical",
+      "confidence": "high"
+    },
+    {
+      "priority": "P1",
+      "problem": "Latency KPIs are not homogeneous.",
+      "root_cause": "One lane mixes live/probe/proxy latency.",
+      "impact": "Distorted best-model decision for live Czech.",
+      "severity": "critical",
+      "confidence": "high"
+    },
+    {
+      "priority": "P1",
+      "problem": "File-based polling orchestration.",
+      "root_cause": "File IPC instead of event streaming.",
+      "impact": "CPU wake overhead, race/debug complexity.",
+      "severity": "high",
+      "confidence": "high"
+    },
+    {
+      "priority": "P2",
+      "problem": "High coupling in runtime layers.",
+      "root_cause": "Organic growth without hard module boundaries.",
+      "impact": "Slower refactor and higher regression risk.",
+      "severity": "high",
+      "confidence": "medium-high"
+    },
+    {
+      "priority": "P2",
+      "problem": "Tests skewed toward smoke/schema over stress behavior.",
+      "root_cause": "Limited long-run integration validation.",
+      "impact": "Late detection of production-like failures.",
+      "severity": "high",
+      "confidence": "high"
+    },
+    {
+      "priority": "P3",
+      "problem": "Documentation drift.",
+      "root_cause": "Fast evolution and fragmented docs.",
+      "impact": "Onboarding/agent errors and wasted effort.",
+      "severity": "medium",
+      "confidence": "high"
+    }
+  ],
+  "first_fixes": [
+    {
+      "id": "F1",
+      "change": "Single monitoring budget: backend collector + frontend render-only.",
+      "benefit": "Immediate CPU reduction and cleaner benchmark signal.",
+      "effort": "medium",
+      "risk": "low-medium",
+      "type": "architecture-runtime"
+    },
+    {
+      "id": "F2",
+      "change": "Split benchmark modes into strict_live vs batch_proxy in data model and scoring.",
+      "benefit": "Methodologically clean comparisons for live scenarios.",
+      "effort": "medium",
+      "risk": "medium",
+      "type": "measurement-discipline"
+    },
+    {
+      "id": "F3",
+      "change": "Replace file polling with append-only event store (SQLite WAL or lightweight bus).",
+      "benefit": "Lower I/O overhead and better traceability.",
+      "effort": "medium-high",
+      "risk": "medium",
+      "type": "orchestration"
+    }
+  ],
+  "quick_wins": [
+    "Switch /api/health/processes default from full to fast.",
+    "Add TTL cache for cmdline/exe per PID in health scan.",
+    "Throttle progress writes to state changes or coarse buckets.",
+    "Unify dashboard RAM/CPU sampling from one batch timer.",
+    "Align docs on runtime path naming and remove invalid run_benchmark.py references."
+  ],
+  "defer_now": [
+    "Model/adaptor expansion before strict live-vs-proxy methodology is enforced.",
+    "UI cosmetics before metric correctness and monitoring overhead are fixed.",
+    "Mobile platforms before stable benchmark harness for scenarios 1-4."
+  ],
+  "target_architecture": {
+    "modules": [
+      "orchestrator",
+      "measurement_core",
+      "runtime_collector",
+      "event_store",
+      "ui_adapter"
+    ],
+    "flow": "Worker events -> Event store -> Aggregator -> API/WebSocket -> Frontend render"
+  },
+  "missing_metrics": {
+    "scenario_1_2_8s": [
+      "first-token p50/p95/p99",
+      "partial update cadence",
+      "dropout rate"
+    ],
+    "scenario_2_12_25s": [
+      "quality-latency frontier",
+      "confidence intervals from repeats"
+    ],
+    "scenario_3_1_3min": [
+      "throughput stability",
+      "backlog growth",
+      "catch-up behavior"
+    ],
+    "scenario_4_2_4h": [
+      "memory leak slope",
+      "crash-free duration",
+      "recovery time",
+      "thermal throttling impact"
+    ],
+    "cross_scenario_controls": [
+      "cold-start vs warm-start split",
+      "clean-host vs loaded-host split",
+      "fixed seed+manifest+artifact fingerprint"
+    ]
+  },
+  "phased_plan": [
+    {
+      "phase": "A",
+      "window": "1-2 days",
+      "scope": "Monitoring budget + default fast scan + docs drift fixes"
+    },
+    {
+      "phase": "B",
+      "window": "2-4 days",
+      "scope": "Strict latency mode split + score gating by quality class"
+    },
+    {
+      "phase": "C",
+      "window": "4-7 days",
+      "scope": "Event-store IPC replacing file polling"
+    },
+    {
+      "phase": "D",
+      "window": "3-5 days",
+      "scope": "Long-run/recovery/race integration tests"
+    },
+    {
+      "phase": "E",
+      "window": "after D",
+      "scope": "Model matrix/platform expansion"
+    }
+  ],
+  "uncertainties": [
+    "Environment-level tempfile permission errors reduce local behavior-test confidence.",
+    "No full on-target HW runtime profiling executed in this audit step.",
+    "GPU metric fidelity depends on nvidia-smi and host GPU stack."
+  ],
+  "top_3_root_causes": [
+    "No unified monitoring/measurement architecture.",
+    "Mixed measurement modes in one decision lane.",
+    "File-polling orchestration instead of event-native runtime."
+  ],
+  "top_3_highest_roi_interventions": [
+    "Centralized collector + one-timer frontend render.",
+    "Hard split of strict_live and batch_proxy in data and scoring.",
+    "Append-only event store (SQLite WAL) for job/tuning telemetry."
+  ],
+  "top_3_risks_if_unchanged": [
+    "Wrong best-model selection for live Czech due to metric distortion.",
+    "Monitoring overhead contaminates benchmark results.",
+    "Growing coupling slows delivery and increases regressions."
+  ]
+}

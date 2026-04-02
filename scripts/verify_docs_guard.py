@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -96,6 +97,55 @@ PLAN_DOC_PREFIXES = (
     "docs/mic_sequence_",
 )
 
+DOCS_GUARDED_PREFIX = "docs/"
+DOCS_IGNORE_PREFIXES = (
+    "docs/backups/",
+    "docs/Chat__Lost_in_Codex--private/",
+)
+DOCS_FORMAT_EXTS = (".md", ".json", ".jsonl")
+DOC_DATE_SUFFIX_RE = re.compile(r"_\d{4}-\d{2}-\d{2}$")
+DOC_DATE_SUFFIX_EXEMPT_BASENAMES = {
+    "PLAN_TRACKER.md",
+    "plan.md",
+    "ARCHITECTURE.md",
+    "RUNBOOK.md",
+    "DOCS_GOVERNANCE.md",
+    "KNOWN_FAILURES.md",
+    "session_log.md",
+    "test_log.md",
+    "SECURITY_SUPPLY_CHAIN.md",
+    "oss_intake_register.json",
+    "specstory_failures.json",
+    "specstory_pattern_state.json",
+}
+DOC_DATE_SUFFIX_EXEMPT_PREFIXES = (
+    "docs/tuning_",
+    "docs/mic_sequence_",
+)
+DOC_TRIPLET_REQUIRED_EXTS = {".md", ".json", ".jsonl"}
+DOC_TRIPLET_EXEMPT_PREFIXES = (
+    "docs/backups/",
+    "docs/Chat__Lost_in_Codex--private/",
+    "docs/models/",
+    "docs/runs/",
+)
+DOC_TRIPLET_EXEMPT_BASENAMES = {
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "PLAN_TRACKER.md",
+    "session_log.md",
+    "ARCHITECTURE.md",
+    "RUNBOOK.md",
+    "DOCS_GOVERNANCE.md",
+    "KNOWN_FAILURES.md",
+    "SECURITY_SUPPLY_CHAIN.md",
+    "oss_intake_register.json",
+    "specstory_failures.json",
+    "specstory_pattern_state.json",
+}
+
 
 def _run(cmd: list[str]) -> list[str]:
     proc = subprocess.run(
@@ -185,6 +235,63 @@ def _needs_oss_intake_update(changed: Iterable[str]) -> bool:
     return False
 
 
+def _is_guarded_doc_format_path(path: str) -> bool:
+    low = path.lower()
+    if not path.startswith(DOCS_GUARDED_PREFIX):
+        return False
+    if any(path.startswith(prefix) for prefix in DOCS_IGNORE_PREFIXES):
+        return False
+    return low.endswith(DOCS_FORMAT_EXTS)
+
+
+def _is_date_suffix_exempt(path: str) -> bool:
+    if any(path.startswith(prefix) for prefix in DOC_DATE_SUFFIX_EXEMPT_PREFIXES):
+        return True
+    basename = path.rsplit("/", 1)[-1]
+    return basename in DOC_DATE_SUFFIX_EXEMPT_BASENAMES
+
+
+def _has_doc_date_suffix(path: str) -> bool:
+    basename = path.rsplit("/", 1)[-1]
+    stem = basename.rsplit(".", 1)[0]
+    return bool(DOC_DATE_SUFFIX_RE.search(stem))
+
+
+def _doc_ext(path: str) -> str:
+    basename = path.rsplit("/", 1)[-1]
+    if "." not in basename:
+        return ""
+    return "." + basename.rsplit(".", 1)[1].lower()
+
+
+def _doc_stem(path: str) -> str:
+    basename = path.rsplit("/", 1)[-1]
+    if "." not in basename:
+        return basename.lower()
+    return basename.rsplit(".", 1)[0].lower()
+
+
+def _is_triplet_exempt(path: str) -> bool:
+    if any(path.startswith(prefix) for prefix in DOC_TRIPLET_EXEMPT_PREFIXES):
+        return True
+    basename = path.rsplit("/", 1)[-1]
+    return basename in DOC_TRIPLET_EXEMPT_BASENAMES
+
+
+def _get_head_doc_exts_by_stem(head: str) -> dict[str, set[str]]:
+    paths = _run(["git", "ls-tree", "-r", "--name-only", head, "--", "docs"])
+    by_stem: dict[str, set[str]] = {}
+    for path in paths:
+        if not _is_guarded_doc_format_path(path):
+            continue
+        stem = _doc_stem(path)
+        ext = _doc_ext(path)
+        if not stem or not ext:
+            continue
+        by_stem.setdefault(stem, set()).add(ext)
+    return by_stem
+
+
 def _get_changed(base: str | None, head: str) -> list[str]:
     if base and base != ZERO_SHA:
         return _run(["git", "diff", "--name-only", f"{base}...{head}"])
@@ -206,6 +313,29 @@ def _get_numstat(base: str | None, head: str) -> list[tuple[str, int, int]]:
         add_n = int(add_raw) if add_raw.isdigit() else 0
         del_n = int(del_raw) if del_raw.isdigit() else 0
         result.append((path, add_n, del_n))
+    return result
+
+
+def _get_name_status(base: str | None, head: str) -> dict[str, str]:
+    if base and base != ZERO_SHA:
+        raw = _run(["git", "diff", "--name-status", f"{base}...{head}"])
+    else:
+        raw = _run(["git", "show", "--name-status", "--pretty=", head])
+
+    result: dict[str, str] = {}
+    for line in raw:
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status_raw = parts[0].strip()
+        status = status_raw[:1] if status_raw else ""
+        if status in {"R", "C"} and len(parts) >= 3:
+            path = parts[2].strip()
+        else:
+            path = parts[1].strip()
+        if not status or not path:
+            continue
+        result[path.replace("\\", "/")] = status
     return result
 
 
@@ -315,6 +445,72 @@ def _validate_core_doc(path: str, content: str) -> list[str]:
     return failures
 
 
+def _validate_new_doc_file_contract(*, path: str, content: str | None) -> list[str]:
+    failures: list[str] = []
+    if content is None:
+        return failures
+    basename = path.rsplit("/", 1)[-1]
+    low = path.lower()
+
+    if low.endswith(".md"):
+        if "Doc-Meta:" not in content:
+            return failures
+        meta = _parse_doc_meta(content)
+        doc_file = str(meta.get("doc_file", "")).strip()
+        if doc_file != basename:
+            failures.append(
+                f"- {path}: new markdown doc with Doc-Meta must set '- doc_file: {basename}'."
+            )
+        return failures
+
+    if low.endswith(".json"):
+        try:
+            payload = json.loads(content)
+        except Exception:
+            failures.append(f"- {path}: JSON parse failed (invalid JSON).")
+            return failures
+        if isinstance(payload, dict):
+            meta = payload.get("doc_meta")
+            if isinstance(meta, dict):
+                doc_file = str(meta.get("doc_file", "")).strip()
+                if doc_file != basename:
+                    failures.append(
+                        f"- {path}: new JSON doc with doc_meta must set 'doc_meta.doc_file: {basename}'."
+                    )
+        return failures
+
+    if low.endswith(".jsonl"):
+        raw_lines = [line.strip() for line in content.splitlines() if line.strip()]
+        if not raw_lines:
+            failures.append(f"- {path}: JSONL must not be empty.")
+            return failures
+        parsed_lines: list[object] = []
+        for idx, line in enumerate(raw_lines, start=1):
+            try:
+                parsed_lines.append(json.loads(line))
+            except Exception:
+                failures.append(f"- {path}: invalid JSONL at line {idx}.")
+                return failures
+        first = parsed_lines[0]
+        if not isinstance(first, dict):
+            failures.append(
+                f"- {path}: JSONL first line must be JSON object with doc_meta.doc_file."
+            )
+            return failures
+        meta = first.get("doc_meta")
+        if not isinstance(meta, dict):
+            failures.append(f"- {path}: JSONL first line must include doc_meta object.")
+            return failures
+        doc_file = str(meta.get("doc_file", "")).strip()
+        if doc_file != basename:
+            failures.append(
+                f"- {path}: new JSONL doc must set first-line 'doc_meta.doc_file: {basename}'."
+            )
+        return failures
+
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Docs guard for pull requests and pushes.")
     parser.add_argument("--base", default=None, help="Base SHA (optional).")
@@ -322,10 +518,12 @@ def main() -> int:
     args = parser.parse_args()
 
     changed = _get_changed(args.base, args.head)
+    name_status = _get_name_status(args.base, args.head)
     numstat = _get_numstat(args.base, args.head)
     changed_set = set(changed)
     code_changes = [p for p in changed if _is_code(p)]
     code_change_set = set(code_changes)
+    head_doc_exts_by_stem = _get_head_doc_exts_by_stem(args.head)
     code_add = sum(add for path, add, _ in numstat if path in code_change_set)
     code_del = sum(dele for path, _, dele in numstat if path in code_change_set)
     code_churn = code_add + code_del
@@ -334,6 +532,7 @@ def main() -> int:
         or code_churn >= LARGE_CHANGE_LINE_THRESHOLD
     )
     failures: list[str] = []
+    triplet_targets: dict[str, tuple[str, str]] = {}
 
     # Always validate core docs at head. This prevents silent drift.
     for doc in CORE_DOCS:
@@ -342,6 +541,38 @@ def main() -> int:
             failures.append(f"- Missing required core doc in head: {doc}")
             continue
         failures.extend(_validate_core_doc(doc, content))
+
+    # New docs format contract (guarded docs formats only: .md/.json/.jsonl):
+    # - new governed docs should have date suffix in filename unless explicitly exempt
+    # - new markdown/json/jsonl docs with metadata should carry doc_file matching the filename
+    # - new non-exempt docs artifacts should have the full triplet (.md/.json/.jsonl)
+    for path, status in name_status.items():
+        if status != "A":
+            continue
+        if not _is_guarded_doc_format_path(path):
+            continue
+        if not _is_date_suffix_exempt(path) and not _has_doc_date_suffix(path):
+            failures.append(
+                f"- {path}: new docs snapshot/report file should end with '_YYYY-MM-DD' before extension."
+            )
+        content = _show_file(args.head, path)
+        failures.extend(_validate_new_doc_file_contract(path=path, content=content))
+        if not _is_triplet_exempt(path):
+            ext = _doc_ext(path)
+            if ext in DOC_TRIPLET_REQUIRED_EXTS:
+                key = _doc_stem(path)
+                display = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                if key and key not in triplet_targets:
+                    triplet_targets[key] = (display, path)
+
+    for stem_key, (family_display, sample_path) in sorted(triplet_targets.items()):
+        existing_exts = head_doc_exts_by_stem.get(stem_key, set())
+        missing_exts = sorted(DOC_TRIPLET_REQUIRED_EXTS - existing_exts)
+        if missing_exts:
+            missing_names = ", ".join(f"{family_display}{ext}" for ext in missing_exts)
+            failures.append(
+                f"- {sample_path}: missing required doc triplet companion file(s): {missing_names}."
+            )
 
     # If any core doc changed, require last_updated_utc line change in the patch.
     for doc in CORE_DOCS:

@@ -4,7 +4,7 @@ Doc-Meta:
 - owner: engineering
 - status: active
 - doc_file: DOCS_GOVERNANCE.md
-- last_updated_utc: 2026-04-02T22:02:50Z
+- last_updated_utc: 2026-04-02T20:07:29Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 
@@ -84,27 +84,19 @@ Mandatory Start (in this repository): README.md -> AGENTS.md -> docs/PLAN_TRACKE
   - `.pre-commit-config.yaml` (supply-chain + specstory loop)
 
 ## 5. Operacni rutina po kazde zmene
-1. Pred editaci dokumentace vytvor centralni timestamp backup do `docs/backups/<YYYY-MM-DD_HHMMSS>/` se zachovanou relativni strukturou (`root/...`, `docs/...`).
-2. Dokoncit kod + testy.
-3. Zkontrolovat, ze Dashboard odpovida aktualnimu stavu app (health/jobs/processy); pri rozdilu doplnit opravu nebo jasne zdokumentovat omezeni.
-4. Pridat strucny zapis:
+1. Dokoncit kod + testy.
+2. Zkontrolovat, ze Dashboard odpovida aktualnimu stavu app (health/jobs/processy); pri rozdilu doplnit opravu nebo jasne zdokumentovat omezeni.
+3. Pridat strucny zapis:
    - `python scripts/add_session_log_entry.py --title "<kratky_nazev>" --summary "<co>" --impact "<dopad>"`
-5. Aktualizovat recurring failure analyzu:
+4. Aktualizovat recurring failure analyzu:
    - `python scripts/specstory_failure_learning.py`
    - vystupy: `docs/KNOWN_FAILURES.md`, `docs/reports/specstory_failures.json`, `docs/reports/specstory_pattern_state.json`
-6. Aktualizovat OSS intake/security stav:
+5. Aktualizovat OSS intake/security stav:
    - `python scripts/supply_chain_guard.py`
    - vystup/registr: `docs/reports/oss_intake_register.json`
-7. Aktualizovat prislusne core docs a jejich `last_updated_utc`.
-8. Projit docs guard.
+6. Aktualizovat prislusne core docs a jejich `last_updated_utc`.
+7. Projit docs guard.
 
 ## 6. Backup dokumentace
-- Povinne umisteni backupu: `docs/backups/<YYYY-MM-DD_HHMMSS>/`
-- Backup musi zachovat relativni strukturu:
-  - root soubory pod `root/`
-  - docs soubory pod `docs/`
-- Historie dokumentace je dohledatelna podle timestampu adresaru v `docs/backups/` (od data ve jmenu backup slozky).
-- Priklady:
-  - `docs/backups/2026-04-03_000058/root/CONTRIBUTING.md`
-  - `docs/backups/2026-04-03_000058/docs/DOCS_GOVERNANCE.md`
-  - `docs/backups/2026-04-03_000058/docs/session_log.md`
+- Referencni backup pred governance zmenami:
+  - `docs/backups/2026-04-01_154911`

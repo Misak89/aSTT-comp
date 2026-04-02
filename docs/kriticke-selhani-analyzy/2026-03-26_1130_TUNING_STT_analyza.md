@@ -1,4 +1,5 @@
 # Analýza selhání tuningu — TUNING_STT
+
 **Datum:** 2026-03-26
 **Čas:** ~11:30 CZ
 **Job:** tune_20260326_030741_689128

@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T16:07:44Z
+- last_updated_utc: 2026-04-02T07:11:11Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -34,6 +34,23 @@ Navazne dokumenty:
   - self-improving recurring-failure analyza ze `.specstory`
   - supply-chain security gate pro inspiraci/stahovani/build
 
+### C) Post-audit stabilization plan
+- Plan ID: `post-audit-v5`
+- Status: `planned`
+- Scope:
+  - snizeni monitoring overhead bez ztraty diagnostiky
+  - oddeleni strict live vs proxy latency lane
+  - event-store orchestrace misto file polling
+  - long-run/recovery/race validation
+
+Navazne dokumenty:
+- audit summary (MD): `docs/audit_conclusion_2026-04-02.md`
+- audit summary (JSON): `docs/reports/audit_conclusion_2026-04-02.json`
+- audit summary (JSONL): `docs/reports/audit_conclusion_2026-04-02.jsonl`
+- roadmapa (MD): `docs/tuning_v5_implementacni_plan.md`
+- roadmapa (JSON): `docs/tuning_v5_implementacni_plan.json`
+- roadmapa (JSONL): `docs/tuning_v5_implementacni_plan.jsonl`
+
 ## 2. Stav milniku
 
 | Milnik | Stav | Zdroj |
@@ -48,10 +65,15 @@ Navazne dokumenty:
 | D5 specstory self-improving failure analytics | done | `scripts/specstory_failure_learning.py`, `docs/KNOWN_FAILURES.md` |
 | D6 supply-chain security policy + guard | done | `docs/SECURITY_SUPPLY_CHAIN.md`, `scripts/supply_chain_guard.py` |
 | D4 branch protection + required checks + CODEOWNERS | pending_repo_setting | `CONTRIBUTING.md`, `.github/CODEOWNERS` |
+| P0 post-audit baseline + instrumentation lock | planned | `docs/tuning_v5_implementacni_plan.md` |
+| P1 monitoring budget + scan policy | planned | `docs/tuning_v5_implementacni_plan.md` |
+| P2 strict live vs proxy discipline | planned | `docs/tuning_v5_implementacni_plan.md` |
+| P3 event-store orchestration | planned | `docs/tuning_v5_implementacni_plan.md` |
+| P4 long-run validation gate | planned | `docs/tuning_v5_implementacni_plan.md` |
 
 ## 3. Kam co zapisovat (zavazne)
 1. Aktivni plan + stav: `docs/PLAN_TRACKER.md`
-2. Dlouhodoba roadmapa: `docs/tuning_v4_implementacni_plan.md`
+2. Dlouhodoba roadmapa: `docs/tuning_v4_implementacni_plan.md`, `docs/tuning_v5_implementacni_plan.md`
 3. Operacni tasky: `docs/tuning_v4_tasky.md`
 4. Co se realne provedlo: `docs/session_log.md`
 

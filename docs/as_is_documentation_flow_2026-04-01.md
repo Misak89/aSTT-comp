@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T19:03:45Z
+- last_updated_utc: 2026-04-02T07:11:11Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Pro enforcement pohled (hard vs soft gate) viz:
