@@ -88,6 +88,9 @@ CODE_SUFFIXES = (
     ".json",
 )
 
+LARGE_CHANGE_FILE_THRESHOLD = 25
+LARGE_CHANGE_LINE_THRESHOLD = 1800
+
 PLAN_DOC_PREFIXES = (
     "docs/tuning_",
     "docs/mic_sequence_",
@@ -186,6 +189,24 @@ def _get_changed(base: str | None, head: str) -> list[str]:
     if base and base != ZERO_SHA:
         return _run(["git", "diff", "--name-only", f"{base}...{head}"])
     return _run(["git", "show", "--pretty=", "--name-only", head])
+
+
+def _get_numstat(base: str | None, head: str) -> list[tuple[str, int, int]]:
+    if base and base != ZERO_SHA:
+        raw = _run(["git", "diff", "--numstat", f"{base}...{head}"])
+    else:
+        raw = _run(["git", "show", "--numstat", "--pretty=", head])
+
+    result: list[tuple[str, int, int]] = []
+    for line in raw:
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        add_raw, del_raw, path = parts[0], parts[1], parts[2]
+        add_n = int(add_raw) if add_raw.isdigit() else 0
+        del_n = int(del_raw) if del_raw.isdigit() else 0
+        result.append((path, add_n, del_n))
+    return result
 
 
 def _get_patch(base: str | None, head: str, path: str) -> str:
@@ -301,8 +322,17 @@ def main() -> int:
     args = parser.parse_args()
 
     changed = _get_changed(args.base, args.head)
+    numstat = _get_numstat(args.base, args.head)
     changed_set = set(changed)
     code_changes = [p for p in changed if _is_code(p)]
+    code_change_set = set(code_changes)
+    code_add = sum(add for path, add, _ in numstat if path in code_change_set)
+    code_del = sum(dele for path, _, dele in numstat if path in code_change_set)
+    code_churn = code_add + code_del
+    large_change_notice = (
+        len(code_change_set) >= LARGE_CHANGE_FILE_THRESHOLD
+        or code_churn >= LARGE_CHANGE_LINE_THRESHOLD
+    )
     failures: list[str] = []
 
     # Always validate core docs at head. This prevents silent drift.
@@ -397,6 +427,13 @@ def main() -> int:
         else:
             print("  - <none>")
         print("")
+        if large_change_notice:
+            print(
+                f"docs-guard: NOTICE large change-set (code files={len(code_change_set)}, "
+                f"line churn={code_churn}, threshold files>={LARGE_CHANGE_FILE_THRESHOLD}, "
+                f"lines>={LARGE_CHANGE_LINE_THRESHOLD}). Consider checkpoint branch and smaller commits."
+            )
+            print("")
         print("Required documentation updates were not found:")
         for msg in failures:
             print(msg)
@@ -407,6 +444,12 @@ def main() -> int:
         return 0
 
     print("docs-guard: OK")
+    if large_change_notice:
+        print(
+            f"docs-guard: NOTICE large change-set (code files={len(code_change_set)}, "
+            f"line churn={code_churn}, threshold files>={LARGE_CHANGE_FILE_THRESHOLD}, "
+            f"lines>={LARGE_CHANGE_LINE_THRESHOLD}). Consider checkpoint branch and smaller commits."
+        )
     return 0
 
 

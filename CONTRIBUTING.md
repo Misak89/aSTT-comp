@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-01T18:51:55Z
+- last_updated_utc: 2026-04-02T03:19:50Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je zavazny pro vsechny, kdo meni kod nebo dokumentaci.
@@ -107,9 +107,13 @@ Povinne:
   - dle potreby `docs/SECURITY_SUPPLY_CHAIN.md`
 - Pro lokalni automaticke hlidani pred commitem pouzij:
   - `.pre-commit-config.yaml`
+- Pro stabilni hook setup (hlavne Windows) nastav repo-managed hooks:
+  - `python scripts/setup_git_hooks.py`
+  - pote commit bez `--no-verify` spousti guard skripty pres lokalni `.git/hooks/pre-commit`.
 
 ## 6. Git A PR Pravidla
 - Commity prubezne, male, auditovatelne.
+- Pri velkem diffu sleduj upozorneni `verify_docs_guard.py` (many files/lines changed) a udelej checkpoint branch.
 - Push pouze po explicitnim souhlasu maintainera.
 - Zadny force push bez explicitniho souhlasu.
 - PR musi projit checklistem v `.github/pull_request_template.md`.

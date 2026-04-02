@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T03:19:38Z
+- last_updated_utc: 2026-04-02T03:35:50Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -402,3 +402,13 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Docs guard now reliably validates session_log and core docs in Czech/UTF-8 content on this environment.
+
+---
+
+## Session 2026-04-02T03:35:50Z (hooks-and-guard-hardening)
+
+### Summary
+- Added UTF-8-safe docs-guard tests, dashboard monitoring contract tests, large-change reminder in verify_docs_guard, and Windows-safe local hook bootstrap via scripts/setup_git_hooks.py.
+
+### Impact
+- Commits can run local guards without --no-verify in this environment, and monitoring/docs-guard regressions are now covered by tests and proactive large-diff warning.

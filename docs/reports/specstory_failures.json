@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-04-02T03:18:05Z",
+  "generated_at_utc": "2026-04-02T03:36:01Z",
   "source": {
     "history_dir": ".specstory/history",
     "stats_file": ".specstory/statistics.json",
@@ -9,7 +9,7 @@
     "scanned_files": 40,
     "total_events": 1111,
     "unique_templates": 38,
-    "promoted_rules_this_run": 1,
+    "promoted_rules_this_run": 0,
     "learned_rules_total": 1
   },
   "templates": [
@@ -26,7 +26,7 @@
       "priority_score": 32,
       "priority_label": "P0",
       "recommended_action": "Inspect stderr for root cause and convert repeated failures into explicit pre-checks.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "a27fdbdfc27e",
@@ -41,7 +41,7 @@
       "priority_score": 39,
       "priority_label": "P0",
       "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "960d87be6f37",
@@ -56,7 +56,7 @@
       "priority_score": 26,
       "priority_label": "P0",
       "recommended_action": "Tune timeout + split long operations into smaller validated steps.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "cf06d7cf54ab",
@@ -161,7 +161,7 @@
       "priority_score": 35,
       "priority_label": "P0",
       "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "50273bd81fd9",
@@ -296,7 +296,7 @@
       "priority_score": 31,
       "priority_label": "P0",
       "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "6faf984f07d7",
@@ -311,7 +311,7 @@
       "priority_score": 31,
       "priority_label": "P0",
       "recommended_action": "Check sandbox/escalation rule and filesystem access before rerun.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "c0f33b811960",
@@ -326,7 +326,7 @@
       "priority_score": 18,
       "priority_label": "P1",
       "recommended_action": "Classify manually and add/prefer repeatable guard condition.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "a1c46165cd41",
@@ -446,7 +446,7 @@
       "priority_score": 20,
       "priority_label": "P1",
       "recommended_action": "Tune timeout + split long operations into smaller validated steps.",
-      "trend": "up"
+      "trend": "stable"
     },
     {
       "template_id": "0da58d3386c2",
