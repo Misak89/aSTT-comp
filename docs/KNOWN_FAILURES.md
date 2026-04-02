@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T03:36:01Z
+- last_updated_utc: 2026-04-02T03:38:27Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Generated from `.specstory/history/*.md` by `scripts/specstory_failure_learning.py`.

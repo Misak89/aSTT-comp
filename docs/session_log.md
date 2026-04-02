@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-02T03:35:50Z
+- last_updated_utc: 2026-04-02T03:38:14Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -412,3 +412,13 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Commits can run local guards without --no-verify in this environment, and monitoring/docs-guard regressions are now covered by tests and proactive large-diff warning.
+
+---
+
+## Session 2026-04-02T03:38:14Z (windows-hook-stability-tuning)
+
+### Summary
+- Adjusted setup_git_hooks to install local .git/hooks/pre-commit with absolute .venv Python shebang and non-mutating guard step to improve commit reliability on Windows.
+
+### Impact
+- Local commits can run guard checks without shell signal-pipe failures or forced --no-verify workflow.

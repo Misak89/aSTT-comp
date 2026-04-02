@@ -28,7 +28,6 @@ def main() -> int:
         return 0
 
     steps = [
-        [str(python_exe), "scripts/specstory_failure_learning.py"],
         [str(python_exe), "scripts/supply_chain_guard.py"],
     ]
     for step in steps:

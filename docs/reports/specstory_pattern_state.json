@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-04-02T03:36:01Z",
+  "generated_at_utc": "2026-04-02T03:38:27Z",
   "learned_rules": [
     {
       "pattern": "attributeerror:\\ 'wave_write'\\ object\\ has\\ no\\ attribute\\ '_file'",
