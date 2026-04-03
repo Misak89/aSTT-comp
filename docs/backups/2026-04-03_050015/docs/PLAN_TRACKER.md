@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T03:00:29Z
+- last_updated_utc: 2026-04-03T01:48:47Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -50,7 +50,6 @@ Navazne dokumenty:
 - roadmapa (MD): `docs/tuning_v5_implementacni_plan.md`
 - roadmapa (JSON): `docs/tuning_v5_implementacni_plan.json`
 - roadmapa (JSONL): `docs/tuning_v5_implementacni_plan.jsonl`
-- closure report (MD/JSON/JSONL): `docs/reports/refactor_v5_closure_2026-04-03.*`
 
 ## 2. Stav milniku
 
@@ -67,12 +66,10 @@ Navazne dokumenty:
 | D6 supply-chain security policy + guard | done | `docs/SECURITY_SUPPLY_CHAIN.md`, `scripts/supply_chain_guard.py` |
 | D4 branch protection + required checks + CODEOWNERS | pending_repo_setting | `CONTRIBUTING.md`, `.github/CODEOWNERS` |
 | P0 post-audit baseline + instrumentation lock | done | `docs/tuning_v5_implementacni_plan.md`, `docs/reports/monitoring_baseline_2026-04-03.md` |
-| P1 monitoring budget + scan policy | done | `docs/tuning_v5_implementacni_plan.md` |
-| P2 strict live vs proxy discipline | done | `docs/tuning_v5_implementacni_plan.md` |
-| P3 event-store orchestration | done | `docs/tuning_v5_implementacni_plan.md` |
+| P1 monitoring budget + scan policy | in_progress | `docs/tuning_v5_implementacni_plan.md` |
+| P2 strict live vs proxy discipline | in_progress | `docs/tuning_v5_implementacni_plan.md` |
+| P3 event-store orchestration | in_progress | `docs/tuning_v5_implementacni_plan.md` |
 | P4 long-run validation gate | planned | `docs/tuning_v5_implementacni_plan.md` |
-
-Operational note (2026-04-03): P4 (long-run/race/recovery validace dlouhych prepisu) je vedome odlozena na pristi iteraci podle pokynu ownera.
 
 ## 3. Kam co zapisovat (zavazne)
 1. Aktivni plan + stav: `docs/PLAN_TRACKER.md`

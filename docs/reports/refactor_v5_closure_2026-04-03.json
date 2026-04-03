@@ -1,0 +1,133 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "refactor_v5_closure_2026-04-03.json",
+    "last_updated_utc": "2026-04-03T03:00:29Z",
+    "review_due_utc": "2026-04-15T00:00:00Z"
+  },
+  "report_id": "refactor-v5-closure-2026-04-03",
+  "branch": "feature/tuning-v5",
+  "scope": "post-audit v5 refactoring closure for implemented workstreams (excluding deferred long-run transcript validation)",
+  "general_summary": [
+    "P0/P1 monitoring overhead reduced via central cadence and fast-by-default process scan policy.",
+    "P2 strict latency lane separation introduced with pure-lane scoring gates.",
+    "P3 tuning event-store flow integrated from worker to backend API and frontend event panel.",
+    "P3/P4 event sequence validation and replay/validation CLIs added for diagnostics.",
+    "UTF-8-safe web control path introduced for Windows/Nushell without CP1250 dependency."
+  ],
+  "detailed_items": [
+    {
+      "id": "P3-1",
+      "description": "SQLite WAL event-store module",
+      "files": [
+        "packages/common/tuning_event_store.py"
+      ]
+    },
+    {
+      "id": "P3-2",
+      "description": "Worker event emission for lifecycle/progress/results",
+      "files": [
+        "scripts/tuning_worker.py"
+      ]
+    },
+    {
+      "id": "P3-3",
+      "description": "Backend incremental event read and aggregation",
+      "files": [
+        "backend/app/services/tuning_service.py"
+      ]
+    },
+    {
+      "id": "P3-4",
+      "description": "Events API endpoint",
+      "files": [
+        "backend/app/routers/tuning.py"
+      ],
+      "api": [
+        "GET /api/tuning/jobs/{job_id}/events"
+      ]
+    },
+    {
+      "id": "P3-5",
+      "description": "Frontend client/types + live event stream panel",
+      "files": [
+        "frontend/src/api/client.ts",
+        "frontend/src/types/index.ts",
+        "frontend/src/pages/TuningPage.tsx"
+      ]
+    },
+    {
+      "id": "P3P4-1",
+      "description": "Event sequence validation summary in service/API",
+      "files": [
+        "backend/app/services/tuning_service.py",
+        "backend/app/routers/tuning.py"
+      ]
+    },
+    {
+      "id": "P4-1",
+      "description": "Replay CLI CP1250/Unicode hardening",
+      "files": [
+        "scripts/tuning_event_replay.py"
+      ]
+    },
+    {
+      "id": "P4-2",
+      "description": "Event integrity/race validation CLI",
+      "files": [
+        "scripts/tuning_event_validate.py"
+      ]
+    },
+    {
+      "id": "P0P1-1",
+      "description": "Monitoring baseline report generator and triplet output",
+      "files": [
+        "scripts/monitoring_baseline_report.py",
+        "docs/reports/monitoring_baseline_2026-04-03.md",
+        "docs/reports/monitoring_baseline_2026-04-03.json",
+        "docs/reports/monitoring_baseline_2026-04-03.jsonl"
+      ]
+    },
+    {
+      "id": "P4-3",
+      "description": "Unit tests for event-store/service/validation",
+      "files": [
+        "tests/unit/test_tuning_event_store.py",
+        "tests/unit/test_tuning_events_service.py",
+        "tests/unit/test_tuning_event_validation.py"
+      ]
+    },
+    {
+      "id": "UTF8-1",
+      "description": "UTF-8-safe web control and wrappers",
+      "files": [
+        "scripts/webctl.py",
+        "web.nu",
+        "web-up.cmd",
+        "web-down.cmd",
+        "web-status.cmd",
+        "web-restart.cmd",
+        "web-up-bg.cmd",
+        "web-up-build.cmd",
+        "start_web_app.cmd"
+      ]
+    }
+  ],
+  "tracker_status_after_update": {
+    "P1": "done",
+    "P2": "done",
+    "P3": "done",
+    "P4": "planned"
+  },
+  "deferred_note": {
+    "item": "P4 long-run/race/recovery validation for long transcript runs",
+    "state": "deferred_to_next_iteration",
+    "reason": "owner instruction on 2026-04-03"
+  },
+  "github": {
+    "remote_branch": "origin/feature/tuning-v5",
+    "latest_commit": "5f6040e",
+    "push_completed": true
+  }
+}

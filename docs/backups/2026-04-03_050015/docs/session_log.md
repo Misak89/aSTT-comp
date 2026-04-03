@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T03:01:53Z
+- last_updated_utc: 2026-04-03T02:24:36Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -723,13 +723,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Windows restart workflow is now stable (down->up-bg/status) and users can run UTF-8-native commands via Python or Nushell without relying on CP1250 shell behavior.
-
----
-
-## Session 2026-04-03T03:01:53Z (v5-refactor-closure-docs)
-
-### Summary
-- Updated PLAN_TRACKER milestone statuses (P1/P2/P3 done), published refactor closure triplet report in docs/reports, and recorded deferred P4 long-run transcript validation for next iteration.
-
-### Impact
-- Repository now has both executive and detailed closure documentation synced to tracker state, with explicit deferred-note traceability for long transcript validation.
