@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T03:53:52Z
+- last_updated_utc: 2026-04-03T13:45:13Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -763,3 +763,98 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - V6 now has a canonical persisted segment bundle foundation for library/transcript integration, with CP-safe UTF-8 docs and passing unit regression subset.
+
+---
+
+## Session 2026-04-03T04:21:00Z (v6-s2-s3-slicer-and-transcript-orchestration)
+
+### Summary
+- Completed V6 S2/S3 implementation: compact `/library` slicer UI (preset + manual max 21 + pause-aware preview/save), transcript segment-bundle orchestration as one logical output flow, and streaming segment offset handling in benchmark worker for local/online sources.
+
+### Impact
+- Long transcript workflow now supports persisted segment bundles end-to-end (`library -> transcript`) with non-physical gate updated to include frontend build and new V6 unit tests; physical 3-model long-run validation remains deferred to owner execution (V6-S4).
+
+---
+
+## Session 2026-04-03T11:05:02Z (v6-physical-smoke-transcribe-13s)
+
+### Summary
+- Added user-facing one-command physical smoke runner `scripts/smoke_transcribe_13s.py` plus Windows wrapper `smoke-transcribe-13s.cmd` for 13s transcript checks via backend API.
+- Fixed benchmark local-source normalization from `file:///...` to valid local paths in backend source resolving.
+- Fixed model parameter precedence so explicit per-model params (for example `threads`, `beam_size`) are not overwritten by preset setting defaults.
+- Fixed sticky text selection lock in Transcribe layout resize and enforced copyable section headers for `Zdroj audia` and `Model STT`.
+- Executed physical smoke runs: turbo PASS with offset-difference check, plus all-installed run where whisper family passed and non-whisper adapters returned empty transcript in current streaming path.
+
+### Impact
+- Project now has a reproducible physical smoke workflow for user-side STT validation in transcript mode with persistent reports under `runtime/logs`.
+
+---
+
+## Session 2026-04-03T11:32:45Z (v6-smoke-per-model-params-and-live-adapter-fix)
+
+### Summary
+- Updated `scripts/smoke_transcribe_13s.py` to use per-model parameter defaults from `/api/models/registry` (same source as Benchmark model parameter UI), with optional overrides via CLI or JSON file.
+- Fixed streaming benchmark worker direct-WAV optimization to apply only to buffered adapters (`whisper_cpp`, `qwen`), so live adapters (`vosk`, `faster_whisper`, `sherpa_onnx`) keep using `audio_generator`.
+- Re-ran physical 13s smoke runs: turbo pass with offset-difference check, and all-installed run where `vosk` and both `faster_whisper` models now pass under per-model defaults.
+
+### Impact
+- Smoke results are now aligned with per-model Benchmark parameter semantics and no longer biased by a single global `threads/beam` profile.
+
+---
+
+## Session 2026-04-03T11:38:37Z (global-test-validity-policy)
+
+### Summary
+- Added a global test validity policy to `CONTRIBUTING.md` that applies to all test categories (code, security, performance, smoke, reliability, manual verification).
+- Policy now explicitly requires test type declaration, allowed interpretation scope, real used parameters, and audit artifacts.
+- Added explicit invalid-test criteria to prevent false conclusions caused by misconfigured or misleading tests.
+
+### Impact
+- Reduces risk of false pass/fail interpretation and prevents product decisions based on invalid or out-of-scope test evidence.
+
+---
+
+## Session 2026-04-03T11:46:54Z (physical-validation-policy-generalized)
+
+### Summary
+- Extended global contribution policy with explicit `Physical validation gate (MUST when applicable)` in `CONTRIBUTING.md`.
+- Added generalized cross-domain physical validation policy to `docs/RUNBOOK.md`, including:
+  - when physical validation is mandatory,
+  - explicit pluses,
+  - explicit minuses and weak points,
+  - mitigation rules to reduce false conclusions.
+
+### Impact
+- Physical validation is now documented as a controlled gate across code, security, performance, and operations, with transparent tradeoffs and reproducible decision criteria.
+
+---
+
+## Session 2026-04-03T11:54:49Z (physical-validation-abc-loop-policy)
+
+### Summary
+- Refined physical validation policy from a simple trigger rule to a risk-driven A/B/C loop model in `CONTRIBUTING.md` and `docs/RUNBOOK.md`.
+- Added explicit critical notes about weaknesses of naive "always physical" wording and replaced it with decision criteria based on runtime claim + fidelity gap.
+- Added cross-domain weak-point list and mitigation rules (cold/warm dual-run, artifact evidence, deferred validation rule for urgent hotfixes).
+
+### Impact
+- Policy is now more general, stricter, and less ambiguous for code, security, performance, and operations testing decisions.
+
+---
+
+## Session 2026-04-03T12:01:30Z (test-diagram-blueprint-report)
+
+### Summary
+- Added report triplet docs/reports/test_diagram_blueprint_2026-04-03.* with general ABC-loop test diagram basis and aSTT-comp specific domain test flow mapping to V6 CP0-CP6.
+
+### Impact
+- Provides review-ready, diagram-ready test model input for both general governance and app-specific execution without duplicating V6 implementation plan details.
+
+---
+
+## Session 2026-04-03T13:45:13Z (test-diagram-render-svg-and-push)
+
+### Summary
+- Rendered static SVG outputs for general and app-specific test diagrams and linked them from docs/reports/test_diagram_blueprint_2026-04-03.md; synchronized JSON/JSONL metadata and render artifacts.
+
+### Impact
+- Diagram review is now possible without Markdown Mermaid preview dependency; GitHub links can target direct SVG assets for full-size viewing.

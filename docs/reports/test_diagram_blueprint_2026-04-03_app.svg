@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1220" viewBox="0 0 1700 1220">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+</marker>
+</defs>
+<rect x="0" y="0" width="1700" height="1220" fill="#f1f5f9"/>
+<text x="40" y="50" font-family="Segoe UI, Arial, sans-serif" font-size="30" font-weight="700" fill="#0f172a">aSTT-comp Specific Test Model</text>
+<rect x="70" y="90" width="340" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="240.0" y="125.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="240.0" dy="0">Intake: feature / fix / doc change</tspan>
+</text>
+<polygon points="240,200.0 400.0,260 240,320.0 80.0,260" fill="#fff7ed" stroke="#9a3412" stroke-width="2"/>
+<text x="240" y="260.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="240" dy="0">Affected domain</tspan>
+</text>
+<rect x="60" y="390" width="360" height="70" rx="10" ry="10" fill="#eef2ff" stroke="#3730a3" stroke-width="2"/>
+<text x="240.0" y="425.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="240.0" dy="0">Online mic path</tspan>
+</text>
+<rect x="520" y="390" width="420" height="70" rx="10" ry="10" fill="#f0fdf4" stroke="#166534" stroke-width="2"/>
+<text x="730.0" y="425.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="730.0" dy="0">Long transcript + segmentation</tspan>
+</text>
+<rect x="1030" y="390" width="500" height="70" rx="10" ry="10" fill="#fff7ed" stroke="#9a3412" stroke-width="2"/>
+<text x="1280.0" y="425.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="1280.0" dy="0">Dashboard / health / jobs monitoring</tspan>
+</text>
+<rect x="60" y="520" width="360" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="240.0" y="555.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="240.0" dy="0">Loop A: unit + contract + docs guard</tspan>
+</text>
+<rect x="520" y="520" width="420" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="730.0" y="555.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="730.0" dy="0">Loop A: segment API/unit + build + docs guard</tspan>
+</text>
+<rect x="1030" y="520" width="500" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="1280.0" y="555.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="1280.0" dy="0">Loop A: health/dashboard contract</tspan>
+</text>
+<rect x="60" y="680" width="360" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="240.0" y="715.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="240.0" dy="0">Loop B: realtime chunk fidelity + RTF</tspan>
+</text>
+<rect x="520" y="680" width="420" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="730.0" y="703.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="730.0" dy="0">Loop B: physical UI smoke</tspan>
+<tspan x="730.0" dy="24">/library + /transcript</tspan>
+</text>
+<rect x="1030" y="680" width="500" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="1280.0" y="715.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="1280.0" dy="0">Loop B: runtime state parity check</tspan>
+</text>
+<rect x="60" y="860" width="360" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="240.0" y="895.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="240.0" dy="0">Loop C: longer session stability</tspan>
+</text>
+<rect x="520" y="860" width="420" height="70" rx="10" ry="10" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+<text x="730.0" y="883.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="730.0" dy="0">Loop C: 3x CZ model</tspan>
+<tspan x="730.0" dy="24">long-run 30/120/240 min</tspan>
+</text>
+<rect x="700" y="1040" width="420" height="90" rx="10" ry="10" fill="#dcfce7" stroke="#166534" stroke-width="2"/>
+<text x="910.0" y="1085.0" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="20" fill="#111827">
+<tspan x="910.0" dy="0">Release / merge decision</tspan>
+</text>
+<line x1="240" y1="160" x2="240" y2="200" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<polyline points="240,320 240,355 240,390" fill="none" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="134" y="334" width="72" height="24" rx="6" ry="6" fill="#ffffff" opacity="0.92"/>
+<text x="170" y="350" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" fill="#0f172a">online_mic</text>
+<polyline points="240,320 730,320 730,390" fill="none" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="484" y="284" width="72" height="24" rx="6" ry="6" fill="#ffffff" opacity="0.92"/>
+<text x="520" y="300" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" fill="#0f172a">long_transcript</text>
+<polyline points="240,320 1280,320 1280,390" fill="none" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="944" y="284" width="72" height="24" rx="6" ry="6" fill="#ffffff" opacity="0.92"/>
+<text x="980" y="300" text-anchor="middle" dominant-baseline="middle" font-family="Segoe UI, Arial, sans-serif" font-size="16" fill="#0f172a">monitoring</text>
+<line x1="240" y1="460" x2="240" y2="520" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<line x1="730" y1="460" x2="730" y2="520" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<line x1="1280" y1="460" x2="1280" y2="520" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<line x1="240" y1="590" x2="240" y2="680" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<line x1="730" y1="590" x2="730" y2="680" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<line x1="1280" y1="590" x2="1280" y2="680" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<line x1="240" y1="750" x2="240" y2="860" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<line x1="730" y1="750" x2="730" y2="860" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<polyline points="240,930 240,1085 700,1085" fill="none" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<polyline points="730,930 730,1085 700,1085" fill="none" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+<polyline points="1280,750 1280,1085 1120,1085" fill="none" stroke="#334155" stroke-width="2.5" marker-end="url(#arrow)"/>
+</svg>
