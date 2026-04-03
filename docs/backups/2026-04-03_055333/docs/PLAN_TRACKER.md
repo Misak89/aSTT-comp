@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T03:53:38Z
+- last_updated_utc: 2026-04-03T03:49:36Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -86,7 +86,7 @@ Navazne dokumenty:
 | P3 event-store orchestration | done | `docs/tuning_v5_implementacni_plan.md` |
 | P4 long-run validation gate | planned | `docs/tuning_v5_implementacni_plan.md` |
 | V6-S0 intake + one-command non-physical gate | done | `docs/tuning_v6_implementacni_plan.md` |
-| V6-S1 backend segment domain + pause-aware snapping | in_progress | `docs/tuning_v6_implementacni_plan.md` |
+| V6-S1 backend segment domain + pause-aware snapping | planned | `docs/tuning_v6_implementacni_plan.md` |
 | V6-S2 `/library` slicer UI (preset + max 21 bodu) | planned | `docs/tuning_v6_implementacni_plan.md` |
 | V6-S3 `/transcript` bundle orchestration (one logical row) | planned | `docs/tuning_v6_implementacni_plan.md` |
 | V6-S4 3x CZ model stability + long-run validation | planned | `docs/tuning_v6_implementacni_plan.md` |

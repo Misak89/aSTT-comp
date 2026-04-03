@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T03:53:52Z
+- last_updated_utc: 2026-04-03T03:50:54Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -753,13 +753,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - V6 tracker is now in_progress with S0 done and V6 docs now explicitly enforce UTF-8-only workflow without CP1250/windows-1250.
-
----
-
-## Session 2026-04-03T03:53:52Z (v6-s1-segment-bundle-backend)
-
-### Summary
-- Implemented V6 S1 backend segment-bundle domain (models, library API/service preview+upsert+get) and added unit tests for preset/manual validation and persistence roundtrip.
-
-### Impact
-- V6 now has a canonical persisted segment bundle foundation for library/transcript integration, with CP-safe UTF-8 docs and passing unit regression subset.

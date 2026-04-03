@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T03:53:52Z
+- last_updated_utc: 2026-04-03T03:01:53Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -733,33 +733,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Repository now has both executive and detailed closure documentation synced to tracker state, with explicit deferred-note traceability for long transcript validation.
-
----
-
-## Session 2026-04-03T03:41:45Z (v6-plan-and-implementation-docs)
-
-### Summary
-- Added V6 long-transcript segmentation plan triplet with one-command non-physical gate and explicit testing checkpoints by location/time.
-
-### Impact
-- Plan tracker now includes long-transcript-v6 milestones and implementation can proceed without duplicating completed V5 stabilization work.
-
----
-
-## Session 2026-04-03T03:50:54Z (v6-s0-intake-and-utf8-contract)
-
-### Summary
-- Started long-transcript-v6 on feature/tuning-v6 by completing S0: OSS intake update plus verified one-command non-physical gate.
-
-### Impact
-- V6 tracker is now in_progress with S0 done and V6 docs now explicitly enforce UTF-8-only workflow without CP1250/windows-1250.
-
----
-
-## Session 2026-04-03T03:53:52Z (v6-s1-segment-bundle-backend)
-
-### Summary
-- Implemented V6 S1 backend segment-bundle domain (models, library API/service preview+upsert+get) and added unit tests for preset/manual validation and persistence roundtrip.
-
-### Impact
-- V6 now has a canonical persisted segment bundle foundation for library/transcript integration, with CP-safe UTF-8 docs and passing unit regression subset.

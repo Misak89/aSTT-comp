@@ -1,0 +1,209 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "tuning_v6_implementacni_plan.json",
+    "last_updated_utc": "2026-04-03T03:50:17Z",
+    "review_due_utc": "2026-04-15T00:00:00Z",
+    "source_md": "docs/tuning_v6_implementacni_plan.md",
+    "format_role": "canonical_structured_snapshot"
+  },
+  "plan_id": "long-transcript-v6",
+  "scope": "long_transcript_and_segmentation",
+  "depends_on": [
+    "docs/tuning_v5_implementacni_plan.md",
+    "docs/reports/refactor_v5_closure_2026-04-03.md",
+    "docs/ARCHITECTURE.md",
+    "docs/SECURITY_SUPPLY_CHAIN.md"
+  ],
+  "reuse_without_duplication": [
+    "event-store orchestration from v5",
+    "latency lane discipline from v5",
+    "existing wavesurfer-based player and transcribe pipeline"
+  ],
+  "goals": [
+    "Deliver stable long transcript flow for 30-240 minute sources",
+    "Add compact segment slicer in /library with preset windows and max 21 manual points",
+    "Implement pause-aware boundary snapping with configurable tolerance",
+    "Run segmented transcript as one logical job row in /transcript",
+    "Validate stability on at least three Czech models"
+  ],
+  "out_of_scope": [
+    "Changing online microphone priorities from real-mic-v4",
+    "Large UI redesign outside slicer/transcript integration",
+    "Adding brand-new STT adapters before long-run gate passes"
+  ],
+  "encoding_policy": {
+    "windows_mode": "utf8_only",
+    "forbidden": [
+      "cp1250",
+      "windows-1250"
+    ],
+    "fallback_path": "README.md UTF-8 native workflow (webctl.py / web.nu)"
+  },
+  "one_command_non_physical_gate": {
+    "command": "C:\\Program Files\\PowerShell\\7\\pwsh.exe -Command \"$ErrorActionPreference='Stop'; .venv\\Scripts\\python scripts/supply_chain_guard.py; .venv\\Scripts\\python scripts/verify_docs_guard.py --head (git rev-parse HEAD); .venv\\Scripts\\python -m pytest tests/unit/test_tuning_event_store.py tests/unit/test_tuning_events_service.py tests/unit/test_tuning_event_validation.py -q\"",
+    "covers": [
+      "supply-chain guard",
+      "docs guard",
+      "unit test sweep"
+    ],
+    "not_covered": [
+      "physical UI/audio interaction checks",
+      "long-run listening validation by owner"
+    ]
+  },
+  "phases": [
+    {
+      "phase": "0",
+      "title": "Intake and contract lock",
+      "window_days": "0.5",
+      "deliverables": [
+        "Updated OSS intake entries",
+        "Confirmed one-command gate"
+      ],
+      "dod": [
+        "Intake state is up to date",
+        "Gate command is reproducible"
+      ]
+    },
+    {
+      "phase": "1",
+      "title": "Backend segment domain",
+      "window_days": "1-2",
+      "deliverables": [
+        "Canonical segment bundle model",
+        "Segment preview/create/update/get API"
+      ],
+      "dod": [
+        "Bundle can be recreated deterministically",
+        "Validation catches max-points and ordering errors"
+      ]
+    },
+    {
+      "phase": "2",
+      "title": "Pause-aware snapping engine",
+      "window_days": "1",
+      "deliverables": [
+        "Tolerance-window pause search",
+        "Snap metadata in persisted bundle"
+      ],
+      "dod": [
+        "Boundary snaps only when valid pause exists",
+        "No-pause case keeps original boundary"
+      ]
+    },
+    {
+      "phase": "3",
+      "title": "Library slicer UI",
+      "window_days": "1-2",
+      "deliverables": [
+        "Preset split mode",
+        "Manual max-21 point mode",
+        "Keyboard micro-shift controls"
+      ],
+      "dod": [
+        "UI and API carry identical segment bundle",
+        "User can tune boundaries with player preview"
+      ]
+    },
+    {
+      "phase": "4",
+      "title": "Transcript bundle orchestration",
+      "window_days": "1-2",
+      "deliverables": [
+        "One logical transcript job row for segment bundle",
+        "Sequential segment processing with aggregated progress"
+      ],
+      "dod": [
+        "Single transcript artifact with per-segment provenance",
+        "Resumable/error-visible behavior"
+      ]
+    },
+    {
+      "phase": "5",
+      "title": "Three-model Czech stability gate",
+      "window_days": "1-2",
+      "deliverables": [
+        "Matrix runs for faster_whisper_small_cs_int8",
+        "Matrix runs for faster_whisper_medium_cs_int8",
+        "Matrix runs for vosk_small_cs_0_4",
+        "Long-run + recovery report"
+      ],
+      "dod": [
+        "All three models pass minimum stability criteria",
+        "30/120/240 scenarios are reproducible"
+      ]
+    }
+  ],
+  "test_checkpoints": [
+    {
+      "checkpoint": "CP0 contract check",
+      "t_plus_hours": "0.5",
+      "location": "scripts/supply_chain_guard.py + scripts/verify_docs_guard.py",
+      "type": "non_physical"
+    },
+    {
+      "checkpoint": "CP1 backend segment API",
+      "t_plus_hours": "3",
+      "location": "/api/library/...segment... + runtime/library/...",
+      "type": "non_physical"
+    },
+    {
+      "checkpoint": "CP2 pause-aware quality",
+      "t_plus_hours": "5",
+      "location": "unit tests + WAV fixtures",
+      "type": "non_physical"
+    },
+    {
+      "checkpoint": "CP3 slicer UX smoke",
+      "t_plus_hours": "7",
+      "location": "http://127.0.0.1:8012/library",
+      "type": "physical_ui"
+    },
+    {
+      "checkpoint": "CP4 transcript bundle smoke",
+      "t_plus_hours": "9",
+      "location": "http://127.0.0.1:8012/transcript",
+      "type": "physical_ui_audio"
+    },
+    {
+      "checkpoint": "CP5 long-run matrix",
+      "t_plus_hours": "12-20",
+      "location": "/transcript + runtime/jobs + runtime/transcripts",
+      "type": "physical_long_run"
+    },
+    {
+      "checkpoint": "CP6 release gate",
+      "t_plus_hours": "20+",
+      "location": "one-command non-physical gate + docs sync",
+      "type": "mixed"
+    }
+  ],
+  "primary_files": {
+    "backend": [
+      "backend/app/models/library.py",
+      "backend/app/routers/library.py",
+      "backend/app/services/library_service.py",
+      "backend/app/routers/transcribe.py"
+    ],
+    "frontend": [
+      "frontend/src/pages/LibraryPage.tsx",
+      "frontend/src/components/transcribe/TranscribeJobPanel.tsx",
+      "frontend/src/api/client.ts",
+      "frontend/src/types/index.ts"
+    ],
+    "tests": [
+      "tests/unit/*segment*",
+      "tests/unit/*snap*",
+      "tests/integration/*transcript*"
+    ]
+  },
+  "acceptance_criteria": [
+    "Stable 30-240 minute transcript flow",
+    "Segment slicer with preset plus max-21 manual points",
+    "Deterministic pause-aware snapping by tolerance",
+    "Single logical transcript job row for segment bundle",
+    "Three Czech models pass stability gate"
+  ]
+}

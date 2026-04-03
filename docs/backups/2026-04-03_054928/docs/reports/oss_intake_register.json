@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-04-03T03:49:36Z",
+  "generated_at_utc": "2026-04-01T16:07:44Z",
   "owner": "engineering",
   "entries": [
     {
@@ -72,60 +72,6 @@
         "reviewed_at_utc": "2026-04-01T16:07:44Z",
         "reviewer": "engineering",
         "threat_notes": "Candidate for offline license scanning at release time."
-      }
-    },
-    {
-      "component_id": "wavesurfer-js-regions",
-      "purpose": "interactive waveform + region editing for V6 library slicer UI",
-      "source_url": "https://github.com/katspaugh/wavesurfer.js",
-      "source_ref": "planned-evaluation-v6-2026-04-03",
-      "license_spdx": "BSD-3-Clause",
-      "commercial_use_allowed": true,
-      "adoption_status": "planned",
-      "integrity": {
-        "type": "n/a",
-        "value": ""
-      },
-      "review": {
-        "reviewed_at_utc": "2026-04-03T03:49:36Z",
-        "reviewer": "engineering",
-        "threat_notes": "Frontend dependency family already present; V6 reuses existing wavesurfer stack for region-based slicing."
-      }
-    },
-    {
-      "component_id": "py-webrtcvad-wheels",
-      "purpose": "pause-aware boundary snapping in local tolerance windows for long transcript segmentation",
-      "source_url": "https://github.com/daanzu/py-webrtcvad-wheels",
-      "source_ref": "planned-evaluation-v6-2026-04-03",
-      "license_spdx": "MIT",
-      "commercial_use_allowed": true,
-      "adoption_status": "planned",
-      "integrity": {
-        "type": "n/a",
-        "value": ""
-      },
-      "review": {
-        "reviewed_at_utc": "2026-04-03T03:49:36Z",
-        "reviewer": "engineering",
-        "threat_notes": "Candidate for pause-aware snapping backend; adoption requires pinned version and lock update."
-      }
-    },
-    {
-      "component_id": "openvpi-audio-slicer",
-      "purpose": "reference-only fallback for silence segmentation heuristics",
-      "source_url": "https://github.com/openvpi/audio-slicer",
-      "source_ref": "planned-evaluation-v6-2026-04-03",
-      "license_spdx": "MIT",
-      "commercial_use_allowed": true,
-      "adoption_status": "planned",
-      "integrity": {
-        "type": "n/a",
-        "value": ""
-      },
-      "review": {
-        "reviewed_at_utc": "2026-04-03T03:49:36Z",
-        "reviewer": "engineering",
-        "threat_notes": "Reference candidate only; currently no release tags, so primary path remains VAD-first custom implementation."
       }
     }
   ]

@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T03:53:38Z
+- last_updated_utc: 2026-04-03T03:00:29Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -52,20 +52,6 @@ Navazne dokumenty:
 - roadmapa (JSONL): `docs/tuning_v5_implementacni_plan.jsonl`
 - closure report (MD/JSON/JSONL): `docs/reports/refactor_v5_closure_2026-04-03.*`
 
-### D) Long transcript and segmentation plan
-- Plan ID: `long-transcript-v6`
-- Status: `in_progress`
-- Scope:
-  - dokonceni dlouhych prepisu pro `/transcript` (30-240 min)
-  - segmentace importovanych nahravek v `/library` (preset + manual body)
-  - pause-aware posun hranic segmentu
-  - stabilni beh alespon 3 CZ modelu v long transcript rezimu
-
-Navazne dokumenty:
-- roadmapa (MD): `docs/tuning_v6_implementacni_plan.md`
-- roadmapa (JSON): `docs/tuning_v6_implementacni_plan.json`
-- roadmapa (JSONL): `docs/tuning_v6_implementacni_plan.jsonl`
-
 ## 2. Stav milniku
 
 | Milnik | Stav | Zdroj |
@@ -85,17 +71,12 @@ Navazne dokumenty:
 | P2 strict live vs proxy discipline | done | `docs/tuning_v5_implementacni_plan.md` |
 | P3 event-store orchestration | done | `docs/tuning_v5_implementacni_plan.md` |
 | P4 long-run validation gate | planned | `docs/tuning_v5_implementacni_plan.md` |
-| V6-S0 intake + one-command non-physical gate | done | `docs/tuning_v6_implementacni_plan.md` |
-| V6-S1 backend segment domain + pause-aware snapping | in_progress | `docs/tuning_v6_implementacni_plan.md` |
-| V6-S2 `/library` slicer UI (preset + max 21 bodu) | planned | `docs/tuning_v6_implementacni_plan.md` |
-| V6-S3 `/transcript` bundle orchestration (one logical row) | planned | `docs/tuning_v6_implementacni_plan.md` |
-| V6-S4 3x CZ model stability + long-run validation | planned | `docs/tuning_v6_implementacni_plan.md` |
 
-Operational note (2026-04-03): P4 (long-run/race/recovery validace dlouhych prepisu) je vedome odlozena do navazujici iterace `long-transcript-v6`.
+Operational note (2026-04-03): P4 (long-run/race/recovery validace dlouhych prepisu) je vedome odlozena na pristi iteraci podle pokynu ownera.
 
 ## 3. Kam co zapisovat (zavazne)
 1. Aktivni plan + stav: `docs/PLAN_TRACKER.md`
-2. Dlouhodoba roadmapa: `docs/tuning_v4_implementacni_plan.md`, `docs/tuning_v5_implementacni_plan.md`, `docs/tuning_v6_implementacni_plan.md`
+2. Dlouhodoba roadmapa: `docs/tuning_v4_implementacni_plan.md`, `docs/tuning_v5_implementacni_plan.md`
 3. Operacni tasky: `docs/tuning_v4_tasky.md`
 4. Co se realne provedlo: `docs/session_log.md`
 
