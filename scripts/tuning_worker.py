@@ -934,6 +934,19 @@ def _derive_latency_quality(source_metrics: list[dict]) -> str:
     return "mixed"
 
 
+def _latency_lane_from_quality(latency_quality: str | None) -> str:
+    q = str(latency_quality or "").strip().lower()
+    if q == "measured_live":
+        return "strict_live"
+    if q == "probe_online":
+        return "probe_online"
+    if q == "proxy_offline":
+        return "batch_proxy"
+    if q == "mixed":
+        return "mixed"
+    return "unknown"
+
+
 def _compute_perceived_delay(
     source_metrics: list[dict],
     chunk_seconds: int,
@@ -2356,6 +2369,7 @@ def main() -> int:
             avg_rtf = _avg([m.get("rtf") for m in source_metrics])
             avg_wer = _avg([m.get("wer") for m in source_metrics if not m.get("error")])
             latency_quality = _derive_latency_quality(source_metrics)
+            latency_lane = _latency_lane_from_quality(latency_quality)
             perceived_delay_s, perceived_delay_method, perceived_delay_quality = _compute_perceived_delay(
                 source_metrics=source_metrics,
                 chunk_seconds=chunk_seconds,
@@ -2430,6 +2444,7 @@ def main() -> int:
                 "latency_p50_ms": _percentile(latency_values, 50),
                 "latency_p95_ms": _percentile(latency_values, 95),
                 "latency_quality": latency_quality,
+                "latency_lane": latency_lane,
                 "first_token_ms_p50": _percentile(first_token_values, 50),
                 "first_token_ms_p95": _percentile(first_token_p95_values, 95),
                 "segment_finalize_ms_p50": _percentile(segment_finalize_values, 50),

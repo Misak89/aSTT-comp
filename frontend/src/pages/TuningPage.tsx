@@ -169,6 +169,63 @@ function formatClockHHMMSS(iso: string | null | undefined): string {
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
 }
 
+type LatencyLane = 'strict_live' | 'probe_online' | 'batch_proxy' | 'mixed' | 'unknown'
+
+function normalizeLatencyLane(
+  latencyLane: string | null | undefined,
+  latencyQuality: string | null | undefined,
+  perceivedDelayQuality: string | null | undefined,
+): LatencyLane {
+  const lane = String(latencyLane ?? '').trim().toLowerCase()
+  if (lane === 'strict_live' || lane === 'probe_online' || lane === 'batch_proxy' || lane === 'mixed') {
+    return lane
+  }
+  if (lane === 'unknown') return 'unknown'
+
+  const q = String(latencyQuality ?? '').trim().toLowerCase()
+  if (q === 'measured_live') return 'strict_live'
+  if (q === 'probe_online') return 'probe_online'
+  if (q === 'proxy_offline') return 'batch_proxy'
+  if (q === 'mixed') return 'mixed'
+  if (q === 'unknown') return 'unknown'
+
+  const pq = String(perceivedDelayQuality ?? '').trim().toLowerCase()
+  if (pq === 'low') return 'batch_proxy'
+  return 'unknown'
+}
+
+function isApproxLatencyLane(lane: LatencyLane): boolean {
+  return lane === 'batch_proxy' || lane === 'mixed' || lane === 'unknown'
+}
+
+function decisionPoolLabel(pool: TuningDecisionReport['selected_pool'] | string | null | undefined): string {
+  switch (pool) {
+    case 'strict_live':
+      return 'strict_live'
+    case 'probe_online_fallback':
+      return 'probe_online fallback'
+    case 'batch_proxy_fallback':
+      return 'batch_proxy fallback'
+    case 'mixed_fallback':
+      return 'mixed fallback'
+    case 'unknown_fallback':
+      return 'unknown fallback'
+    case 'fallback_all':
+      return 'fallback_all'
+    default:
+      return 'unknown'
+  }
+}
+
+function formatLaneCounts(laneCounts: Record<string, number> | undefined): string {
+  if (!laneCounts) return '—'
+  const order: LatencyLane[] = ['strict_live', 'probe_online', 'batch_proxy', 'mixed', 'unknown']
+  const parts = order
+    .filter((lane) => (laneCounts[lane] ?? 0) > 0)
+    .map((lane) => `${lane}:${laneCounts[lane]}`)
+  return parts.length > 0 ? parts.join(', ') : '—'
+}
+
 function formatJobHistoryName(job: TuningJobStatus): string {
   const ms = parseIsoToMs(job.created_at)
   if (ms == null) return job.job_id
@@ -1789,18 +1846,21 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
   const best = job.best_trial_idx != null
     ? (job.results.find(r => r.trial_idx === job.best_trial_idx) ?? null)
     : null
+  const bestLane = best
+    ? normalizeLatencyLane(best.latency_lane, best.latency_quality, best.perceived_delay_quality)
+    : null
   const nonProxyCandidates = job.results.filter(r =>
     !r.is_repeat &&
     r.wer != null &&
     !r.error &&
     r.rtf != null &&
     r.rtf <= 1.2 &&
-    r.latency_quality !== 'proxy_offline'
+    normalizeLatencyLane(r.latency_lane, r.latency_quality, r.perceived_delay_quality) === 'strict_live'
   )
   const recommendedBest = nonProxyCandidates.length > 0
     ? nonProxyCandidates.reduce((a, b) => ((a.wer ?? Infinity) <= (b.wer ?? Infinity) ? a : b))
     : best
-  const bestIsProxyOnly = !!best && best.latency_quality === 'proxy_offline'
+  const bestIsProxyOnly = bestLane === 'batch_proxy'
   const recommendationDiffers = !!best && !!recommendedBest && best.trial_idx !== recommendedBest.trial_idx
   const highlightedBestTrialIdx = recommendedBest?.trial_idx ?? best?.trial_idx ?? null
   const detailColSpan = 12 + (job.model_ids?.length > 1 ? 1 : 0)
@@ -1995,7 +2055,7 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
 
         {bestIsProxyOnly && (
           <div className="mt-3 text-xs px-3 py-2 rounded border border-amber-300 bg-amber-50 text-amber-900">
-            Tvrdé varování: nejlepší trial má pouze proxy latenci (`proxy_offline`). Neber jako finální live rozhodnutí.
+            Tvrdé varování: nejlepší trial má lane `batch_proxy` (proxy latence). Neber jako finální live rozhodnutí.
           </div>
         )}
 
@@ -2009,7 +2069,7 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
           <div className="mt-3 p-3 bg-indigo-50 border border-indigo-200 rounded text-xs">
             <div className="flex items-center gap-2 mb-2">
               <span className="font-semibold text-indigo-800">
-                Decision report ({decision.selected_pool === 'strict' ? 'strict' : 'fallback'})
+                Decision report ({decisionPoolLabel(decision.selected_pool)})
               </span>
               <span className="font-mono text-indigo-700">
                 trial #{decision.best.trial_idx} · score {decision.best.score.toFixed(4)}
@@ -2020,7 +2080,9 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
               <span>RTF <strong>{decision.best.rtf.toFixed(3)}</strong></span>
               <span>Delay <strong>{decision.best.perceived_delay_s != null ? `${decision.best.perceived_delay_s.toFixed(2)}s` : '-'}</strong></span>
               <span>Success <strong>{decision.best.success_rate != null ? `${(decision.best.success_rate * 100).toFixed(1)}%` : '-'}</strong></span>
+              <span>Lane <strong>{decision.best.latency_lane ?? decision.selected_lane ?? '-'}</strong></span>
               <span>LatencyQ <strong>{decision.best.latency_quality ?? '-'}</strong></span>
+              <span>Lane mix <strong>{formatLaneCounts(decision.lane_counts)}</strong></span>
               {decision.load_profile && decision.load_profile !== 'none' && (
                 <span>
                   Load <strong>{decision.load_profile}</strong> (CPU {decision.load_cpu_target_pct ?? '-'}% / RAM {decision.load_ram_target_pct ?? '-'}%)
@@ -2052,7 +2114,7 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
                 <div className="space-y-0.5 font-mono">
                   {decision.top.slice(0, 3).map((c, i) => (
                     <div key={c.trial_idx}>
-                      {i + 1}. #{c.trial_idx} WER {(c.wer * 100).toFixed(2)}% · RTF {c.rtf.toFixed(3)} · score {c.score.toFixed(4)}
+                      {i + 1}. #{c.trial_idx} WER {(c.wer * 100).toFixed(2)}% · RTF {c.rtf.toFixed(3)} · lane {c.latency_lane ?? '-'} · score {c.score.toFixed(4)}
                     </div>
                   ))}
                 </div>
@@ -2364,7 +2426,7 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
                     </td>
                     <td className="px-3 py-2 text-center font-mono text-gray-600">
                       {r.latency_ms != null
-                        ? `${r.latency_quality === 'proxy_offline' ? '~' : ''}${r.latency_ms.toFixed(0)}ms`
+                        ? `${isApproxLatencyLane(normalizeLatencyLane(r.latency_lane, r.latency_quality, r.perceived_delay_quality)) ? '~' : ''}${r.latency_ms.toFixed(0)}ms`
                         : '–'}
                     </td>
                     <td className="px-3 py-2 text-center font-mono text-gray-600">
@@ -2458,9 +2520,14 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
                                 {r.perceived_delay_quality === 'low' && <span className="ml-1 text-amber-700">(proxy)</span>}
                               </span>
                             )}
-                            {r.latency_quality && (
-                              <span title="Kvalita latence podle způsobu měření">
-                                Latence kvalita: <strong>{r.latency_quality}</strong>
+                            {(r.latency_lane || r.latency_quality) && (
+                              <span title="Lane + kvalita latence podle způsobu měření">
+                                Latence lane: <strong>{normalizeLatencyLane(r.latency_lane, r.latency_quality, r.perceived_delay_quality)}</strong>
+                                {r.latency_quality && (
+                                  <>
+                                    {' · '}kvalita: <strong>{r.latency_quality}</strong>
+                                  </>
+                                )}
                               </span>
                             )}
                             {r.first_token_ms_p95 != null && (

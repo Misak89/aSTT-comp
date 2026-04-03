@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T01:13:51Z
+- last_updated_utc: 2026-04-03T00:14:00Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento dokument je centralni popis toho, jak projekt funguje.
@@ -40,11 +40,7 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 ## 5. Tuning pipeline
 - API/service: `backend/app/routers/tuning.py`, `backend/app/services/tuning_service.py`
 - Worker: `scripts/tuning_worker.py`
-- Reporty/validace: `scripts/tuning_*`, `backend/app/services/tuning_decision.py`
-- Decision lane discipline:
-  - worker zapisuje `latency_quality` + `latency_lane` do `status.json`,
-  - decision report pouziva pure-lane pool (`strict_live` -> `probe_online` -> `batch_proxy` -> `mixed` -> `unknown`),
-  - ranking nikdy nemicha `strict_live` kandidaty s proxy lane.
+- Reporty/validace: `scripts/tuning_*`
 - Stav jobu: `runtime/tuning/<job_id>/status.json`
 
 ## 6. Dokumentacni navaznosti

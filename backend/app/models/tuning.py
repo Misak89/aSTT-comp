@@ -95,6 +95,7 @@ class TuningTrialResult(BaseModel):
     latency_p50_ms: Optional[float] = None
     latency_p95_ms: Optional[float] = None
     latency_quality: Optional[str] = None  # measured_live | probe_online | proxy_offline | mixed | unknown
+    latency_lane: Optional[str] = None     # strict_live | probe_online | batch_proxy | mixed | unknown
     first_token_ms_p50: Optional[float] = None
     first_token_ms_p95: Optional[float] = None
     segment_finalize_ms_p50: Optional[float] = None

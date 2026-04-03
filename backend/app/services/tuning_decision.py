@@ -18,6 +18,7 @@ class Candidate:
     perceived_delay_s: float | None
     latency_ms: float | None
     latency_quality: str | None
+    latency_lane: str | None
     success_rate: float | None
     repro_runs_ok: int
     repro_wer_ci_width: float | None
@@ -43,17 +44,49 @@ def _repro_map(status: dict[str, Any]) -> dict[int, dict[str, Any]]:
     return out
 
 
+_LANE_ORDER = ("strict_live", "probe_online", "batch_proxy", "mixed", "unknown")
+
+
+def _normalize_latency_lane(
+    *,
+    latency_lane: str | None,
+    latency_quality: str | None,
+    perceived_delay_quality: str | None,
+) -> str:
+    lane = str(latency_lane or "").strip().lower()
+    if lane in _LANE_ORDER:
+        return lane
+
+    quality = str(latency_quality or "").strip().lower()
+    if quality == "measured_live":
+        return "strict_live"
+    if quality == "probe_online":
+        return "probe_online"
+    if quality == "proxy_offline":
+        return "batch_proxy"
+    if quality == "mixed":
+        return "mixed"
+    if quality == "unknown":
+        return "unknown"
+
+    # Legacy fallback: low perceived delay quality means proxy-grade evidence.
+    delay_q = str(perceived_delay_quality or "").strip().lower()
+    if delay_q == "low":
+        return "batch_proxy"
+    return "unknown"
+
+
 def _calc_score(
     *,
     wer: float,
     rtf: float,
     perceived_delay_s: float | None,
-    latency_quality: str | None,
+    latency_lane: str | None,
     success_rate: float | None,
     repro_runs_ok: int,
     repro_wer_ci_width: float | None,
     prefer_non_proxy: bool,
-    has_non_proxy: bool,
+    has_live_or_probe: bool,
 ) -> tuple[float, dict[str, float]]:
     parts: dict[str, float] = {}
     parts["wer"] = wer
@@ -65,10 +98,17 @@ def _calc_score(
     delay = perceived_delay_s if perceived_delay_s is not None else 0.0
     parts["delay_penalty"] = min(max(0.0, delay), 20.0) * 0.002
 
-    if prefer_non_proxy and has_non_proxy and latency_quality == "proxy_offline":
-        parts["proxy_penalty"] = 0.08
+    lane = str(latency_lane or "unknown")
+    if lane == "strict_live":
+        parts["lane_penalty"] = 0.0
+    elif lane == "probe_online":
+        parts["lane_penalty"] = 0.01
+    elif lane == "batch_proxy":
+        parts["lane_penalty"] = 0.08 if (prefer_non_proxy and has_live_or_probe) else 0.03
+    elif lane == "mixed":
+        parts["lane_penalty"] = 0.05 if (prefer_non_proxy and has_live_or_probe) else 0.02
     else:
-        parts["proxy_penalty"] = 0.0
+        parts["lane_penalty"] = 0.03 if (prefer_non_proxy and has_live_or_probe) else 0.01
 
     if repro_wer_ci_width is not None:
         parts["repro_ci_penalty"] = max(0.0, repro_wer_ci_width) * 0.50
@@ -88,7 +128,7 @@ def _build_candidates(
     max_rtf: float,
     prefer_non_proxy: bool,
     require_repro_n: int,
-) -> tuple[list[Candidate], list[Candidate]]:
+) -> tuple[list[Candidate], list[Candidate], dict[str, int]]:
     results = status.get("results") or []
     base = [
         r for r in results
@@ -97,7 +137,15 @@ def _build_candidates(
         and isinstance(r.get("wer"), (int, float))
         and isinstance(r.get("rtf"), (int, float))
     ]
-    has_non_proxy = any((r.get("latency_quality") or "") != "proxy_offline" for r in base)
+    has_live_or_probe = any(
+        _normalize_latency_lane(
+            latency_lane=str(r.get("latency_lane") or ""),
+            latency_quality=str(r.get("latency_quality") or ""),
+            perceived_delay_quality=str(r.get("perceived_delay_quality") or ""),
+        )
+        in {"strict_live", "probe_online"}
+        for r in base
+    )
     repro_by_seed = _repro_map(status)
 
     candidates: list[Candidate] = []
@@ -114,6 +162,11 @@ def _build_candidates(
         rtf = float(r["rtf"])
         success_rate = float(r["success_rate"]) if isinstance(r.get("success_rate"), (int, float)) else None
         latency_quality = str(r["latency_quality"]) if r.get("latency_quality") else None
+        latency_lane = _normalize_latency_lane(
+            latency_lane=(str(r["latency_lane"]) if r.get("latency_lane") else None),
+            latency_quality=latency_quality,
+            perceived_delay_quality=(str(r["perceived_delay_quality"]) if r.get("perceived_delay_quality") else None),
+        )
         perceived_delay_s = float(r["perceived_delay_s"]) if isinstance(r.get("perceived_delay_s"), (int, float)) else None
         latency_ms = float(r["latency_ms"]) if isinstance(r.get("latency_ms"), (int, float)) else None
 
@@ -121,12 +174,12 @@ def _build_candidates(
             wer=wer,
             rtf=rtf,
             perceived_delay_s=perceived_delay_s,
-            latency_quality=latency_quality,
+            latency_lane=latency_lane,
             success_rate=success_rate,
             repro_runs_ok=repro_runs_ok,
             repro_wer_ci_width=repro_wer_ci_width,
             prefer_non_proxy=prefer_non_proxy,
-            has_non_proxy=has_non_proxy,
+            has_live_or_probe=has_live_or_probe,
         )
         candidates.append(
             Candidate(
@@ -139,6 +192,7 @@ def _build_candidates(
                 perceived_delay_s=perceived_delay_s,
                 latency_ms=latency_ms,
                 latency_quality=latency_quality,
+                latency_lane=latency_lane,
                 success_rate=success_rate,
                 repro_runs_ok=repro_runs_ok,
                 repro_wer_ci_width=repro_wer_ci_width,
@@ -152,12 +206,16 @@ def _build_candidates(
         if c.rtf <= max_rtf
         and (c.success_rate is None or c.success_rate >= min_success_rate)
         and c.repro_runs_ok >= max(1, int(require_repro_n))
-        and (not (prefer_non_proxy and has_non_proxy) or c.latency_quality != "proxy_offline")
     ]
+
+    lane_counts: dict[str, int] = {lane: 0 for lane in _LANE_ORDER}
+    for c in candidates:
+        lane = str(c.latency_lane or "unknown")
+        lane_counts[lane] = lane_counts.get(lane, 0) + 1
 
     candidates.sort(key=lambda c: (c.score, c.wer, c.rtf))
     strict.sort(key=lambda c: (c.score, c.wer, c.rtf))
-    return strict, candidates
+    return strict, candidates, lane_counts
 
 
 def _candidate_to_dict(c: Candidate) -> dict[str, Any]:
@@ -171,12 +229,38 @@ def _candidate_to_dict(c: Candidate) -> dict[str, Any]:
         "perceived_delay_s": c.perceived_delay_s,
         "latency_ms": c.latency_ms,
         "latency_quality": c.latency_quality,
+        "latency_lane": c.latency_lane,
         "success_rate": c.success_rate,
         "repro_runs_ok": c.repro_runs_ok,
         "repro_wer_ci_width": c.repro_wer_ci_width,
         "score": c.score,
         "score_breakdown": c.score_breakdown,
     }
+
+
+def _lane_pool(candidates: list[Candidate], lane: str) -> list[Candidate]:
+    return [c for c in candidates if str(c.latency_lane or "unknown") == lane]
+
+
+def _choose_lane_pure_pool(
+    *,
+    strict_candidates: list[Candidate],
+    all_candidates: list[Candidate],
+) -> tuple[str, str, list[Candidate]]:
+    # Priority order ensures live-valid decisions do not mix with proxy lanes.
+    for lane in _LANE_ORDER:
+        lane_pool = _lane_pool(strict_candidates, lane)
+        if lane_pool:
+            if lane == "strict_live":
+                return lane, "strict_live", lane_pool
+            return lane, f"{lane}_fallback", lane_pool
+
+    for lane in _LANE_ORDER:
+        lane_pool = _lane_pool(all_candidates, lane)
+        if lane_pool:
+            return lane, f"{lane}_fallback", lane_pool
+
+    return "unknown", "fallback_all", []
 
 
 def get_job_decision_report(
@@ -192,14 +276,17 @@ def get_job_decision_report(
     if status is None:
         return None
 
-    strict, all_candidates = _build_candidates(
+    strict, all_candidates, lane_counts = _build_candidates(
         status,
         min_success_rate=float(min_success_rate),
         max_rtf=float(max_rtf),
         prefer_non_proxy=not bool(allow_proxy),
         require_repro_n=max(1, int(require_repro_n)),
     )
-    chosen_pool = strict if strict else all_candidates
+    selected_lane, selected_pool, chosen_pool = _choose_lane_pure_pool(
+        strict_candidates=strict,
+        all_candidates=all_candidates,
+    )
     if not chosen_pool:
         return {
             "job_id": job_id,
@@ -216,7 +303,9 @@ def get_job_decision_report(
             "constraints_ram_mode": status.get("constraints_ram_mode"),
             "require_repro_n": max(1, int(require_repro_n)),
             "repro_validation": status.get("repro_validation"),
-            "selected_pool": "strict" if strict else "fallback_all",
+            "selected_lane": selected_lane,
+            "selected_pool": selected_pool,
+            "lane_counts": lane_counts,
             "best": None,
             "top": [],
             "error": "no_valid_candidates",
@@ -237,7 +326,9 @@ def get_job_decision_report(
         "constraints_ram_mode": status.get("constraints_ram_mode"),
         "require_repro_n": max(1, int(require_repro_n)),
         "repro_validation": status.get("repro_validation"),
-        "selected_pool": "strict" if strict else "fallback_all",
+        "selected_lane": selected_lane,
+        "selected_pool": selected_pool,
+        "lane_counts": lane_counts,
         "best": _candidate_to_dict(best),
         "top": [_candidate_to_dict(c) for c in chosen_pool[: max(1, int(top))]],
         "error": None,

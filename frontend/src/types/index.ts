@@ -534,6 +534,7 @@ export interface TuningTrialResult {
   latency_p50_ms?: number | null
   latency_p95_ms?: number | null
   latency_quality?: 'measured_live' | 'probe_online' | 'proxy_offline' | 'mixed' | 'unknown' | null
+  latency_lane?: 'strict_live' | 'probe_online' | 'batch_proxy' | 'mixed' | 'unknown' | null
   first_token_ms_p50?: number | null
   first_token_ms_p95?: number | null
   segment_finalize_ms_p50?: number | null
@@ -645,6 +646,7 @@ export interface TuningDecisionCandidate {
   perceived_delay_s: number | null
   latency_ms: number | null
   latency_quality: string | null
+  latency_lane?: 'strict_live' | 'probe_online' | 'batch_proxy' | 'mixed' | 'unknown' | null
   success_rate: number | null
   repro_runs_ok: number
   repro_wer_ci_width: number | null
@@ -673,7 +675,15 @@ export interface TuningDecisionReport {
     missing_trial_idxs?: number[]
     reason?: string
   }
-  selected_pool: 'strict' | 'fallback_all'
+  selected_lane?: 'strict_live' | 'probe_online' | 'batch_proxy' | 'mixed' | 'unknown' | null
+  selected_pool:
+    | 'strict_live'
+    | 'probe_online_fallback'
+    | 'batch_proxy_fallback'
+    | 'mixed_fallback'
+    | 'unknown_fallback'
+    | 'fallback_all'
+  lane_counts?: Record<string, number>
   best: TuningDecisionCandidate | null
   top: TuningDecisionCandidate[]
   error: string | null
