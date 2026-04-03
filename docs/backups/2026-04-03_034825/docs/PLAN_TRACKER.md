@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T01:48:47Z
+- last_updated_utc: 2026-04-02T07:11:11Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -36,7 +36,7 @@ Navazne dokumenty:
 
 ### C) Post-audit stabilization plan
 - Plan ID: `post-audit-v5`
-- Status: `in_progress`
+- Status: `planned`
 - Scope:
   - snizeni monitoring overhead bez ztraty diagnostiky
   - oddeleni strict live vs proxy latency lane
@@ -65,10 +65,10 @@ Navazne dokumenty:
 | D5 specstory self-improving failure analytics | done | `scripts/specstory_failure_learning.py`, `docs/KNOWN_FAILURES.md` |
 | D6 supply-chain security policy + guard | done | `docs/SECURITY_SUPPLY_CHAIN.md`, `scripts/supply_chain_guard.py` |
 | D4 branch protection + required checks + CODEOWNERS | pending_repo_setting | `CONTRIBUTING.md`, `.github/CODEOWNERS` |
-| P0 post-audit baseline + instrumentation lock | done | `docs/tuning_v5_implementacni_plan.md`, `docs/reports/monitoring_baseline_2026-04-03.md` |
-| P1 monitoring budget + scan policy | in_progress | `docs/tuning_v5_implementacni_plan.md` |
-| P2 strict live vs proxy discipline | in_progress | `docs/tuning_v5_implementacni_plan.md` |
-| P3 event-store orchestration | in_progress | `docs/tuning_v5_implementacni_plan.md` |
+| P0 post-audit baseline + instrumentation lock | planned | `docs/tuning_v5_implementacni_plan.md` |
+| P1 monitoring budget + scan policy | planned | `docs/tuning_v5_implementacni_plan.md` |
+| P2 strict live vs proxy discipline | planned | `docs/tuning_v5_implementacni_plan.md` |
+| P3 event-store orchestration | planned | `docs/tuning_v5_implementacni_plan.md` |
 | P4 long-run validation gate | planned | `docs/tuning_v5_implementacni_plan.md` |
 
 ## 3. Kam co zapisovat (zavazne)

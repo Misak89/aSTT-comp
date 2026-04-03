@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T01:49:10Z
+- last_updated_utc: 2026-04-03T01:14:18Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -693,13 +693,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Live recommendation now stays in a dedicated lane without proxy contamination while preserving backward compatibility for legacy latency_quality data.
-
----
-
-## Session 2026-04-03T01:49:10Z (post-audit-v5-event-store)
-
-### Summary
-- Added SQLite WAL tuning event-store flow (worker emission, API/service access, UI event panel) with baseline monitoring report and event validation tooling.
-
-### Impact
-- Moves v5 from planned to in-progress with auditable event timeline, lower-risk diagnostics, and reproducible checks for event integrity and baseline process-scan performance.

@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
 from packages.common.network_access import ensure_online_allowed
+from packages.common.tuning_event_store import append_event, ensure_event_store
 
 try:
     import psutil
@@ -43,11 +44,21 @@ except ModuleNotFoundError:
 
 
 _status_lock = threading.Lock()
+_event_job_dir: Path | None = None
 configure_console_io()
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _emit_event(event_type: str, payload: dict | None = None) -> None:
+    if _event_job_dir is None:
+        return
+    try:
+        append_event(_event_job_dir, event_type=event_type, payload=payload or {})
+    except Exception as e:
+        print(f"WARN: event emit failed ({event_type}): {e}", file=sys.stderr)
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -92,6 +103,14 @@ def _update_status(status_file: Path, updates: dict) -> None:
             data = json.loads(status_file.read_text(encoding="utf-8"))
             data.update(updates)
             _atomic_write(status_file, json.dumps(data, ensure_ascii=False, indent=2))
+            if "status" in updates:
+                _emit_event(
+                    "status_changed",
+                    {
+                        "status": updates.get("status"),
+                        "error": updates.get("error"),
+                    },
+                )
         except Exception as e:
             print(f"WARN: status update failed: {e}", file=sys.stderr)
 
@@ -102,6 +121,7 @@ def _set_progress(status_file: Path, message: str) -> None:
         "progress_message": message,
         "updated_ts": datetime.now().isoformat(),
     })
+    _emit_event("progress", {"message": message})
     try:
         print(message, flush=True)
     except Exception:
@@ -116,6 +136,19 @@ def _append_result(status_file: Path, result: dict) -> None:
                 data.setdefault("results", []).append(result)
                 data["completed_trials"] = len(data["results"])
                 _atomic_write(status_file, json.dumps(data, ensure_ascii=False, indent=2))
+                _emit_event(
+                    "trial_result",
+                    {
+                        "trial_idx": result.get("trial_idx"),
+                        "model_id": result.get("model_id"),
+                        "is_repeat": bool(result.get("is_repeat")),
+                        "repeat_no": result.get("repeat_no"),
+                        "wer": result.get("wer"),
+                        "rtf": result.get("rtf"),
+                        "latency_lane": result.get("latency_lane"),
+                        "error": result.get("error"),
+                    },
+                )
                 return
             except Exception as e:
                 if attempt == 2:
@@ -1581,9 +1614,17 @@ def main() -> int:
     parser.add_argument("--tuning-root", required=True)
     args = parser.parse_args()
 
+    global _event_job_dir
     job_dir = Path(args.tuning_root) / args.job_id
     config_file = job_dir / "config.json"
     status_file = job_dir / "status.json"
+    _event_job_dir = job_dir
+
+    try:
+        ensure_event_store(job_dir)
+        _emit_event("worker_started", {"job_id": args.job_id})
+    except Exception as e:
+        print(f"WARN: event-store init failed: {e}", file=sys.stderr)
 
     if not config_file.exists():
         print(f"ERROR: config not found: {config_file}", file=sys.stderr)
@@ -1650,6 +1691,18 @@ def main() -> int:
     audio_cache_dir: Path | None = Path(config["audio_cache_dir"]) if config.get("audio_cache_dir") else None
     items_json = subtitles_root.parent / "items.json"
     whisper_server_cache_enabled = os.environ.get("ASTT_WHISPER_SERVER_CACHE", "0") == "1"
+    _emit_event(
+        "job_loaded",
+        {
+            "job_id": args.job_id,
+            "input_mode": input_mode,
+            "strategy": strategy,
+            "trials_planned": len(trials),
+            "video_count": len(video_ids),
+            "load_profile": load_profile,
+            "constraints_profile": constraints_profile,
+        },
+    )
 
     if input_mode not in {"replay", "real_mic"}:
         _update_status(status_file, {"status": "failed", "error": f"Neplatný input_mode: {input_mode}"})
@@ -2064,6 +2117,7 @@ def main() -> int:
             # Kontrola cancel flagu
             if (job_dir / "cancel").exists():
                 _update_status(status_file, {"status": "cancelled"})
+                _emit_event("job_cancelled", {"job_id": args.job_id, "completed_trials": queue_pos - 1})
                 print("Job cancelled.", flush=True)
                 return 0
 
@@ -2557,11 +2611,20 @@ def main() -> int:
                 else:
                     data["progress_message"] = f"Hotovo: {len(results)} trialů ({base_count} + {repeat_count} repeat)"
             _atomic_write(status_file, json.dumps(data, ensure_ascii=False, indent=2))
+        _emit_event(
+            "job_completed",
+            {
+                "job_id": args.job_id,
+                "completed_trials": len(results),
+                "best_trial_idx": best_idx,
+            },
+        )
         return 0
 
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         _update_status(status_file, {"status": "failed", "error": str(e)})
+        _emit_event("job_failed", {"job_id": args.job_id, "error": str(e)})
         return 1
 
 

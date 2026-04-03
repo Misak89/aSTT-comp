@@ -9,6 +9,9 @@ import type {
   LibraryItem,
   ModelDescriptor,
   TuningDecisionReport,
+  TuningEventItem,
+  TuningEventStats,
+  TuningEventValidation,
   TuningInputMode,
   TuningJobStatus,
   TuningMicCalibrationCheckResponse,
@@ -224,6 +227,19 @@ function formatLaneCounts(laneCounts: Record<string, number> | undefined): strin
     .filter((lane) => (laneCounts[lane] ?? 0) > 0)
     .map((lane) => `${lane}:${laneCounts[lane]}`)
   return parts.length > 0 ? parts.join(', ') : '—'
+}
+
+function formatEventPayloadShort(payload: Record<string, unknown> | null | undefined): string {
+  if (!payload) return ''
+  const keys = ['status', 'message', 'trial_idx', 'model_id', 'error', 'best_trial_idx']
+  const picked: Record<string, unknown> = {}
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(payload, k)) picked[k] = (payload as any)[k]
+  }
+  const base = Object.keys(picked).length > 0 ? picked : payload
+  const raw = JSON.stringify(base)
+  if (!raw) return ''
+  return raw.length > 180 ? `${raw.slice(0, 177)}...` : raw
 }
 
 function formatJobHistoryName(job: TuningJobStatus): string {
@@ -1774,6 +1790,12 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
   const [filterThreads, setFilterThreads] = useState<number | null>(null)
   const [filterViableOnly, setFilterViableOnly] = useState(false)
   const [filterRamMb, setFilterRamMb] = useState<string>('')
+  const [eventCursor, setEventCursor] = useState<number>(0)
+  const [eventLog, setEventLog] = useState<TuningEventItem[]>([])
+  const [eventStats, setEventStats] = useState<TuningEventStats | null>(null)
+  const [eventValidation, setEventValidation] = useState<TuningEventValidation | null>(null)
+  const [eventError, setEventError] = useState<string>('')
+  const eventCursorRef = useRef<number>(0)
   const hasNonDefaultSort = !(sortPriorities.length === 1 && sortPriorities[0] === 'wer')
   const isValidationPhase = (job.progress_message ?? '').startsWith('Validace ')
   const staleWarnSec = isValidationPhase ? 120 : 90
@@ -1827,6 +1849,67 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
     const iv = setInterval(fetchRam, 3000)
     return () => clearInterval(iv)
   }, [job.status])
+
+  useEffect(() => {
+    let cancelled = false
+    eventCursorRef.current = 0
+    setEventCursor(0)
+    setEventLog([])
+    setEventStats(null)
+    setEventValidation(null)
+    setEventError('')
+
+    const loadInitialEvents = async () => {
+      try {
+        const payload = await api.tuning.events(job.job_id, { after_seq: 0, limit: 80 })
+        if (cancelled) return
+        const nextCursor = Math.max(0, payload.next_after_seq ?? 0)
+        eventCursorRef.current = nextCursor
+        setEventCursor(nextCursor)
+        setEventLog((payload.events ?? []).slice(-40))
+        setEventStats(payload.stats ?? null)
+        setEventValidation(payload.validation ?? null)
+      } catch (e: any) {
+        if (!cancelled) setEventError(e?.message ?? 'Nacteni event streamu selhalo')
+      }
+    }
+
+    void loadInitialEvents()
+    return () => { cancelled = true }
+  }, [job.job_id])
+
+  useEffect(() => {
+    if (job.status !== 'running' && job.status !== 'pending') return
+    let cancelled = false
+    const pollEvents = async () => {
+      try {
+        const payload = await api.tuning.events(job.job_id, {
+          after_seq: eventCursorRef.current,
+          limit: 120,
+        })
+        if (cancelled) return
+        const incoming = payload.events ?? []
+        if (incoming.length > 0) {
+          setEventLog(prev => [...prev, ...incoming].slice(-40))
+        }
+        const nextCursor = Math.max(eventCursorRef.current, payload.next_after_seq ?? eventCursorRef.current)
+        eventCursorRef.current = nextCursor
+        setEventCursor(nextCursor)
+        setEventStats(payload.stats ?? null)
+        setEventValidation(payload.validation ?? null)
+        setEventError('')
+      } catch (e: any) {
+        if (!cancelled) setEventError(e?.message ?? 'Event stream polling selhal')
+      }
+    }
+
+    void pollEvents()
+    const iv = setInterval(() => { void pollEvents() }, 1500)
+    return () => {
+      cancelled = true
+      clearInterval(iv)
+    }
+  }, [job.job_id, job.status])
 
   function toggleSortPriority(col: SortCol, checked: boolean) {
     setSortPriorities(prev => {
@@ -2025,6 +2108,37 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
               <span className={`ml-3 ${msgAge > staleWarnSec ? 'text-red-600 font-bold' : msgAge > 30 ? 'text-amber-600' : 'text-blue-400'}`}>
                 {msgAge > staleWarnSec ? '⚠ zaseknuté?' : `+${msgAge}s`}
               </span>
+            )}
+          </div>
+        )}
+        {(eventLog.length > 0 || eventStats || eventError) && (
+          <div className="mt-2 text-xs px-3 py-2 rounded border border-gray-200 bg-gray-50">
+            <div className="flex flex-wrap items-center gap-2 text-gray-700 mb-1">
+              <span className="font-semibold">Event stream</span>
+              <span className="font-mono text-[11px]">cursor {eventCursor}</span>
+              {eventStats && (
+                <span className="font-mono text-[11px]">
+                  total {eventStats.count} · max {eventStats.max_seq}
+                </span>
+              )}
+              {eventValidation && (
+                <span className={`font-mono text-[11px] ${eventValidation.ok ? 'text-green-700' : 'text-red-700'}`}>
+                  validate {eventValidation.ok ? 'ok' : 'fail'}
+                </span>
+              )}
+              {eventError && <span className="text-red-700">{eventError}</span>}
+            </div>
+            {eventLog.length > 0 && (
+              <div className="max-h-28 overflow-y-auto space-y-0.5 font-mono text-[11px] text-gray-600">
+                {eventLog.slice(-8).map((ev) => (
+                  <div key={`${ev.seq}-${ev.event_type}`} className="flex items-start gap-2">
+                    <span className="text-gray-400 shrink-0">#{ev.seq}</span>
+                    <span className="text-gray-500 shrink-0">{formatClockHHMMSS(ev.ts_utc)}</span>
+                    <span className="text-gray-700 shrink-0">{ev.event_type}</span>
+                    <span className="truncate">{formatEventPayloadShort(ev.payload)}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}

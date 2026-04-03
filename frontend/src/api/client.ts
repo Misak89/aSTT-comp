@@ -3,6 +3,7 @@ import type {
   BenchmarkOptions, Scenario, RunDetail, LiveJobProgress, ModelStatus,
   ModelDescriptor, MicSessionState, AudioDevice, TuningJobStatus, YTSearchResult,
   TuningDecisionReport,
+  TuningEventsResponse,
   TuningMicCalibrationCheckResponse,
   WebAppAutostartStatus,
   SpecstoryLiveStatus,
@@ -161,6 +162,14 @@ export const api = {
       if (opts?.top != null) q.set('top', String(opts.top))
       const suffix = q.toString() ? `?${q.toString()}` : ''
       return get<TuningDecisionReport>(`/tuning/jobs/${id}/decision${suffix}`)
+    },
+    events: (id: string, opts?: { after_seq?: number; limit?: number; event_type?: string }) => {
+      const q = new URLSearchParams()
+      if (opts?.after_seq != null) q.set('after_seq', String(opts.after_seq))
+      if (opts?.limit != null) q.set('limit', String(opts.limit))
+      if (opts?.event_type) q.set('event_type', opts.event_type)
+      const suffix = q.toString() ? `?${q.toString()}` : ''
+      return get<TuningEventsResponse>(`/tuning/jobs/${id}/events${suffix}`)
     },
     cancelJob: (id: string) => post<TuningJobStatus>(`/tuning/jobs/${id}/cancel`),
     openJobDir: (id: string) => post<{ path: string }>(`/tuning/jobs/${id}/open-dir`),

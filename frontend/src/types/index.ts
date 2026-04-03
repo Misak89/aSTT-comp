@@ -689,6 +689,44 @@ export interface TuningDecisionReport {
   error: string | null
 }
 
+export interface TuningEventItem {
+  seq: number
+  ts_utc: string
+  event_type: string
+  payload: Record<string, unknown>
+}
+
+export interface TuningEventStats {
+  exists: boolean
+  count: number
+  max_seq: number
+  event_types: Record<string, number>
+}
+
+export interface TuningEventValidation {
+  ok: boolean
+  issues: string[]
+  count: number
+  first_seq: number
+  last_seq: number
+  terminal_event: string | null
+  terminal_seq: number | null
+  post_terminal_events: number
+  event_type_counts: Record<string, number>
+  status_values: string[]
+}
+
+export interface TuningEventsResponse {
+  job_id: string
+  event_db: string
+  after_seq: number
+  next_after_seq: number
+  count: number
+  events: TuningEventItem[]
+  stats: TuningEventStats
+  validation?: TuningEventValidation
+}
+
 export type TuningInputMode = 'replay' | 'real_mic'
 
 export interface TuningMicProtocol {

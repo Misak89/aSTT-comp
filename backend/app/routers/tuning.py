@@ -45,6 +45,24 @@ def get_tuning_job(job_id: str):
     return job
 
 
+@router.get("/jobs/{job_id}/events")
+def get_tuning_job_events(
+    job_id: str,
+    after_seq: int = 0,
+    limit: int = 200,
+    event_type: str | None = None,
+):
+    payload = tuning_service.get_job_events(
+        job_id,
+        after_seq=after_seq,
+        limit=limit,
+        event_type=event_type,
+    )
+    if not payload:
+        raise HTTPException(status_code=404, detail="tuning job not found")
+    return payload
+
+
 @router.get("/jobs/{job_id}/decision")
 def get_tuning_job_decision(
     job_id: str,

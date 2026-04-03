@@ -23,6 +23,12 @@ from ..models.tuning import (
     TuningMicCalibrationCheckResponse,
 )
 from packages.adapters._registry import get_model
+from packages.common.tuning_event_store import (
+    event_db_path,
+    get_event_stats,
+    read_events,
+    summarize_event_sequence,
+)
 
 try:
     import psutil
@@ -451,6 +457,38 @@ def list_jobs() -> list[TuningJobStatus]:
         if s:
             out.append(s)
     return out
+
+
+def get_job_events(
+    job_id: str,
+    *,
+    after_seq: int = 0,
+    limit: int = 200,
+    event_type: str | None = None,
+) -> dict:
+    job_dir = _job_dir(job_id)
+    status_file = job_dir / "status.json"
+    if not status_file.exists():
+        return {}
+    events = read_events(
+        job_dir,
+        after_seq=max(0, int(after_seq)),
+        limit=max(1, min(int(limit), 2000)),
+        event_type=(str(event_type).strip() if event_type else None),
+    )
+    max_seq = events[-1]["seq"] if events else max(0, int(after_seq))
+    stats = get_event_stats(job_dir)
+    validation = summarize_event_sequence(events)
+    return {
+        "job_id": job_id,
+        "event_db": str(event_db_path(job_dir)),
+        "after_seq": max(0, int(after_seq)),
+        "next_after_seq": max_seq,
+        "count": len(events),
+        "events": events,
+        "stats": stats,
+        "validation": validation,
+    }
 
 
 def cleanup_old_trial_files(min_age_days: int = 10, min_newer_completed_jobs: int = 3) -> int:
