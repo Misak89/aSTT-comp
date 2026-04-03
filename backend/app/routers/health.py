@@ -32,6 +32,10 @@ _APP_MARKERS = (
 _CPU_SAMPLE_LOCK = threading.Lock()
 _CPU_SAMPLE_CACHE: dict[int, tuple[float, float]] = {}
 _CPU_LOGICAL_CORES = max(1, os.cpu_count() or 1)
+_PROC_META_LOCK = threading.Lock()
+_PROC_META_CACHE: dict[int, dict[str, Any]] = {}
+_PROC_META_TTL_FAST_S = 8.0
+_PROC_META_TTL_SLOW_S = 20.0
 _PROCESS_PROFILES: tuple[dict[str, Any], ...] = (
     {"id": "backend_uvicorn", "label": "Backend Uvicorn", "expected": True, "cmd_tokens": ("backend.app.main:app",)},
     {"id": "benchmark_worker", "label": "Benchmark Worker", "expected": True, "cmd_tokens": ("scripts\\benchmark_worker.py", "scripts/benchmark_worker.py")},
@@ -49,6 +53,9 @@ _PROCESS_PROFILES: tuple[dict[str, Any], ...] = (
     {"id": "shell_wrapper", "label": "Shell Wrapper (CMD/PowerShell)", "expected": True, "name_tokens": ("cmd.exe", "powershell.exe", "pwsh.exe"), "cmd_tokens": ("start_web_app", "web-up-bg.cmd", "web-down.cmd", "web-status.cmd")},
     {"id": "other_app_process", "label": "Other aSTT-comp process", "expected": False},
 )
+_PROCESS_PROFILE_BY_ID: dict[str, dict[str, Any]] = {
+    str(profile["id"]): profile for profile in _PROCESS_PROFILES
+}
 
 
 @router.get("/api/health")
@@ -154,6 +161,61 @@ def _cleanup_cpu_cache(current_pids: set[int]) -> None:
         stale = [pid for pid in _CPU_SAMPLE_CACHE.keys() if pid not in current_pids]
         for pid in stale:
             _CPU_SAMPLE_CACHE.pop(pid, None)
+
+
+def _get_proc_meta_cache_ttl(mode: str) -> float:
+    if mode == "fast":
+        return _PROC_META_TTL_FAST_S
+    return _PROC_META_TTL_SLOW_S
+
+
+def _get_cached_process_meta(pid: int, created: float | None, now_ts: float) -> dict[str, Any] | None:
+    with _PROC_META_LOCK:
+        cached = _PROC_META_CACHE.get(pid)
+        if not cached:
+            return None
+        expires_at = float(cached.get("expires_at") or 0.0)
+        if expires_at <= now_ts:
+            _PROC_META_CACHE.pop(pid, None)
+            return None
+        cached_created = cached.get("created")
+        if created is not None and isinstance(cached_created, (int, float)) and abs(float(cached_created) - created) > 1e-3:
+            _PROC_META_CACHE.pop(pid, None)
+            return None
+        return dict(cached)
+
+
+def _put_cached_process_meta(
+    *,
+    pid: int,
+    created: float | None,
+    now_ts: float,
+    ttl_s: float,
+    cmdline: list[str],
+    cmd_join: str,
+    exe: str,
+    profile_id: str,
+) -> None:
+    with _PROC_META_LOCK:
+        _PROC_META_CACHE[pid] = {
+            "created": created,
+            "expires_at": now_ts + max(1.0, ttl_s),
+            "cmdline": list(cmdline),
+            "cmd_join": str(cmd_join),
+            "exe": str(exe),
+            "profile_id": str(profile_id),
+        }
+
+
+def _cleanup_proc_meta_cache(current_pids: set[int], now_ts: float) -> None:
+    with _PROC_META_LOCK:
+        stale = [
+            pid
+            for pid, cached in _PROC_META_CACHE.items()
+            if pid not in current_pids or float(cached.get("expires_at") or 0.0) <= now_ts
+        ]
+        for pid in stale:
+            _PROC_META_CACHE.pop(pid, None)
 
 
 def _query_gpu_snapshot() -> dict[str, Any]:
@@ -416,12 +478,13 @@ def _collect_marker_matched_pids() -> set[int]:
 
 
 @router.get("/api/health/processes")
-def app_processes_health(mode: str = Query(default="full")) -> dict[str, Any]:
-    mode_norm = str(mode or "full").strip().lower()
+def app_processes_health(mode: str = Query(default="fast")) -> dict[str, Any]:
+    mode_norm = str(mode or "fast").strip().lower()
     if mode_norm not in {"fast", "slow", "full"}:
-        mode_norm = "full"
+        mode_norm = "fast"
     include_marker_scan = mode_norm in {"slow", "full"}
     include_gpu_scan = mode_norm in {"slow", "full"}
+    proc_meta_ttl_s = _get_proc_meta_cache_ttl(mode_norm)
 
     now = datetime.now(timezone.utc)
     now_ts = now.timestamp()
@@ -453,18 +516,35 @@ def app_processes_health(mode: str = Query(default="full")) -> dict[str, Any]:
             proc = psutil.Process(pid)
             name = str(proc.name() or "")
             status = str(proc.status() or "")
+            try:
+                created = float(proc.create_time())
+                if created <= 0:
+                    created = None
+            except Exception:
+                created = None
             cmdline: list[str] = []
             cmd_join = ""
             exe = ""
+            profile: dict[str, Any] | None = None
+            cached_meta = _get_cached_process_meta(pid=pid, created=created, now_ts=now_ts)
+            if cached_meta:
+                cmdline_raw = cached_meta.get("cmdline") or []
+                if isinstance(cmdline_raw, list):
+                    cmdline = [str(x) for x in cmdline_raw]
+                cmd_join = str(cached_meta.get("cmd_join") or "")
+                exe = str(cached_meta.get("exe") or "")
+                profile_id = str(cached_meta.get("profile_id") or "")
+                profile = _PROCESS_PROFILE_BY_ID.get(profile_id)
 
-            profile = _match_profile(name=name, exe=exe, cmd_join=cmd_join)
+            if profile is None:
+                profile = _match_profile(name=name, exe=exe, cmd_join=cmd_join)
             lower_name = name.lower()
             needs_cmdline = (
                 profile is None
                 or lower_name.startswith("python")
                 or lower_name in {"cmd.exe", "powershell.exe", "pwsh.exe", "node.exe", "node"}
             )
-            if needs_cmdline:
+            if needs_cmdline and not cached_meta:
                 try:
                     cmdline_raw = proc.cmdline() or []
                 except Exception:
@@ -477,13 +557,16 @@ def app_processes_health(mode: str = Query(default="full")) -> dict[str, Any]:
                     exe = ""
                 if profile is None:
                     profile = _match_profile(name=name, exe=exe, cmd_join=cmd_join)
-
-            try:
-                created = float(proc.create_time())
-                if created <= 0:
-                    created = None
-            except Exception:
-                created = None
+                _put_cached_process_meta(
+                    pid=pid,
+                    created=created,
+                    now_ts=now_ts,
+                    ttl_s=proc_meta_ttl_s,
+                    cmdline=cmdline,
+                    cmd_join=cmd_join,
+                    exe=exe,
+                    profile_id=str(profile["id"]) if profile else "other_app_process",
+                )
             running_for = None
             if created is not None:
                 running_for = max(0, int(now_ts - created))
@@ -538,6 +621,7 @@ def app_processes_health(mode: str = Query(default="full")) -> dict[str, Any]:
             continue
 
     _cleanup_cpu_cache(current_observed_pids)
+    _cleanup_proc_meta_cache(current_observed_pids, now_ts)
     processes.sort(key=lambda p: (p.get("started_at_utc") or "", p.get("pid") or 0))
     profiles = [
         {

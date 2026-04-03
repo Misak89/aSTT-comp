@@ -3,32 +3,8 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T00:14:00Z
+- last_updated_utc: 2026-04-02T23:18:00Z
 - review_due_utc: 2026-04-15T00:00:00Z
-
----
-
-## Session 2026-04-03T00:14:00Z - v5 monitoring quick win: default fast scan + PID metadata TTL cache
-
-### Co bylo provedeno
-- Pred docs editaci byl vytvoren centralni backup do `docs/backups/2026-04-03_021254/`.
-- Refactor monitoringu v `backend/app/routers/health.py` bez zmeny endpoint kontraktu:
-  - `GET /api/health/processes` ma novy default lane `fast` (misto `full`),
-  - invalidni `mode` fallback je `fast`,
-  - pridana kratka TTL cache cmdline/exe metadat per PID (`_PROC_META_CACHE`) pro snizeni scan overheadu.
-- Doplneny unit contract testy: `tests/unit/test_health_scan_policy_contract.py`.
-
-### Validace
-- `pytest tests/unit/test_health_scan_policy_contract.py tests/unit/test_dashboard_monitor_contract.py tests/unit/test_runtime_paths.py` -> PASS.
-- `.venv\Scripts\python -m compileall backend/app/routers/health.py` -> PASS.
-- Fyzicky smoke po plnem restartu (`web-down.cmd` -> `web-up-bg.cmd`):
-  - `GET /api/health` -> 200,
-  - `GET /api/health/processes` -> 200 + `scan_phase=fast`,
-  - `GET /api/health/processes?mode=full` -> 200.
-
-### Dopad
-- Monitoring default lane je levnejsi a vic odpovida audit doporuceni (fast-by-default).
-- Diagnosticke deep scan cesty (`slow/full`) zustavaji dostupne explicitne.
 
 ---
 

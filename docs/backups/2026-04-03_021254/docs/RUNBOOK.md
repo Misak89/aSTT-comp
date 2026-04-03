@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T00:14:00Z
+- last_updated_utc: 2026-04-02T23:18:00Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## 1. Stabilni start webu
@@ -30,9 +30,6 @@ URL:
   - `GET /api/health`
   - `GET /api/health/processes?mode=fast|slow|full`
   - `POST /api/health/processes/cleanup-stale-pids`
-- Policy:
-  - `GET /api/health/processes` bez `mode` pouziva default lane `fast`.
-  - `slow/full` pouzivej jen cilene (deep scan / incident diagnostika).
 - Dashboard ma Performance Monitor panel:
   - globalni vypinac `Turn monitoring OFF (all)` (zachova nastaveni v localStorage),
   - rychly preset `Graphs only, no logging`,
@@ -47,7 +44,6 @@ URL:
 - Refactor note:
   - Frontend process scan cadence je interně přesunut do samostatného hooku `frontend/src/components/dashboard/useProcessScanCadence.ts`.
   - Externí kontrakt zůstává stejný: stejné endpointy `GET /api/health/processes?mode=fast|slow|full` a stejné UI ovládání panelu.
-  - Backend scan pouziva kratkou TTL cache cmdline/exe metadat per PID pro snizeni overheadu.
 
 ## 2.2 Validace monitoringu (2026-04-02)
 - `web-status.cmd`: health `UP`, backend na `127.0.0.1:8012`.
