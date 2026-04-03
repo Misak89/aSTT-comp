@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T02:24:36Z
+- last_updated_utc: 2026-04-03T01:49:10Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -703,23 +703,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Moves v5 from planned to in-progress with auditable event timeline, lower-risk diagnostics, and reproducible checks for event integrity and baseline process-scan performance.
-
----
-
-## Session 2026-04-03T02:10:01Z (utf8-native-webctl)
-
-### Summary
-- Added UTF-8-native web control via scripts/webctl.py and rewired Windows web wrappers away from embedded PowerShell logic.
-
-### Impact
-- Windows start/stop/status/restart can now run through Python UTF-8 execution path (suitable for Nushell/Windows Terminal/WezTerm) with lower CP1250 risk.
-
----
-
-## Session 2026-04-03T02:24:36Z (utf8-webctl-hardening)
-
-### Summary
-- Hardened scripts/webctl.py to stop/start the full uvicorn process tree deterministically and added Nushell wrapper web.nu for UTF-8-native control.
-
-### Impact
-- Windows restart workflow is now stable (down->up-bg/status) and users can run UTF-8-native commands via Python or Nushell without relying on CP1250 shell behavior.

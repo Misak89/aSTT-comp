@@ -144,15 +144,20 @@ def enable_webapp_autostart():
     if sys.platform != "win32":
         raise HTTPException(status_code=400, detail="autostart currently supported on Windows only")
     script_path = _get_startup_script_path()
+    python_path = _get_startup_python_path()
     if not script_path.exists():
         raise HTTPException(status_code=400, detail=f"missing script: {script_path}")
+    if not python_path.exists():
+        raise HTTPException(status_code=400, detail=f"missing python: {python_path}")
 
     startup_dir = _get_startup_dir()
     startup_dir.mkdir(parents=True, exist_ok=True)
     entry = _get_startup_entry_path()
+    repo_root = _get_repo_root_path()
     cmd = (
         "@echo off\r\n"
-        f"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{script_path}\" -SkipFrontendBuild\r\n"
+        f"cd /d \"{repo_root}\"\r\n"
+        f"\"{python_path}\" -X utf8 \"{script_path}\" up-bg\r\n"
     )
     entry.write_text(cmd, encoding="ascii")
     return get_webapp_autostart()
@@ -210,4 +215,12 @@ def _get_startup_entry_path() -> Path:
 
 
 def _get_startup_script_path() -> Path:
-    return (MODEL_STORE_ROOT.parent.parent / "scripts" / "start_web_app_background.ps1").resolve()
+    return (_get_repo_root_path() / "scripts" / "webctl.py").resolve()
+
+
+def _get_startup_python_path() -> Path:
+    return (_get_repo_root_path() / ".venv" / "Scripts" / "pythonw.exe").resolve()
+
+
+def _get_repo_root_path() -> Path:
+    return (MODEL_STORE_ROOT.parent.parent).resolve()

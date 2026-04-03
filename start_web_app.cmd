@@ -1,4 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_web_app.ps1" %*
+if not exist ".venv\Scripts\python.exe" (
+  echo [start_web_app] chyba: .venv\Scripts\python.exe neexistuje
+  exit /b 2
+)
+call .venv\Scripts\python.exe -X utf8 scripts\webctl.py legacy %*

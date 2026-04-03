@@ -1,5 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-call "%~dp0web-down.cmd"
-call "%~dp0web-up.cmd"
+if not exist ".venv\Scripts\python.exe" (
+  echo [web] chyba: .venv\Scripts\python.exe neexistuje
+  exit /b 2
+)
+call .venv\Scripts\python.exe -X utf8 scripts\webctl.py restart %*

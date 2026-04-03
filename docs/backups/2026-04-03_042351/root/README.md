@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T02:24:16Z
+- last_updated_utc: 2026-04-03T02:09:42Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 
@@ -101,23 +101,13 @@ Doporučený první model pro CZ: `whisper.cpp small` nebo `vosk small cs`.
 
 Pro prostředí, kde nechceš řešit systémový `cp1250`, použij nativní UTF-8 běh:
 
-Varianta A: přímé Python řízení
-
 ```powershell
 .venv\Scripts\python.exe -X utf8 scripts\webctl.py up-bg
 .venv\Scripts\python.exe -X utf8 scripts\webctl.py status
 .venv\Scripts\python.exe -X utf8 scripts\webctl.py down
 ```
 
-Varianta B: Nushell wrapper (`web.nu`)
-
-```nu
-nu web.nu up-bg
-nu web.nu status
-nu web.nu down
-```
-
-Doporučené terminály pro tento režim: Windows Terminal nebo WezTerm.
+Stejné příkazy fungují i z Nushell (`nu`) ve Windows Terminal nebo WezTerm.
 
 ## Aktualizace
 
