@@ -116,10 +116,9 @@ def _update_status(status_file: Path, updates: dict) -> None:
 
 
 def _set_progress(status_file: Path, message: str) -> None:
-    from datetime import datetime
     _update_status(status_file, {
         "progress_message": message,
-        "updated_ts": datetime.now().isoformat(),
+        "updated_ts": _now(),
     })
     _emit_event("progress", {"message": message})
     try:

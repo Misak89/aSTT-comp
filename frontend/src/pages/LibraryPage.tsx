@@ -1,8 +1,16 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { LibraryItem, LatestResult, YTSearchResult, LocalFileEntry } from '../types'
+import type {
+  LibraryItem,
+  LatestResult,
+  YTSearchResult,
+  LocalFileEntry,
+  SegmentBundle,
+  SegmentBundlePreviewRequest,
+} from '../types'
 import { WerBadge } from '../components/WerBadge'
 import { listTranscripts, deleteTranscript as deleteLsTranscript, type TranscriptEntry } from '../components/transcribe/useTranscribeStorage'
+import { formatDateTimeShort } from '../lib/time'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +34,16 @@ function fmtDuration(s: number) {
   const sec = Math.floor(s % 60)
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
   return `${m}:${String(sec).padStart(2, '0')}`
+}
+
+function fmtDurationPrecise(s: number) {
+  const total = Math.max(0, Number.isFinite(s) ? s : 0)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const sec = total % 60
+  const secText = sec < 10 ? `0${sec.toFixed(1)}` : sec.toFixed(1)
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${secText}`
+  return `${String(m).padStart(2, '0')}:${secText}`
 }
 
 function fmtViews(n: number) {
@@ -656,6 +674,430 @@ function LocalImportPanel({ onImported }: { onImported: () => void }) {
   )
 }
 
+const SEGMENT_PRESET_MINUTES = [5, 10, 15, 30, 45, 60]
+const SEGMENT_MAX_MANUAL_POINTS = 21
+const SEGMENT_MIN_GAP_S = 0.2
+
+function roundToMs(seconds: number): number {
+  return Math.round(seconds * 1000) / 1000
+}
+
+function buildPresetPoints(durationS: number, presetMinutes: number): number[] {
+  const out: number[] = []
+  const step = Math.max(60, Math.round(presetMinutes * 60))
+  for (let cursor = step; cursor < durationS; cursor += step) out.push(roundToMs(cursor))
+  return out
+}
+
+function normalizeManualPoints(points: number[], durationS: number): number[] {
+  return [...new Set(points.map(p => roundToMs(p)))]
+    .filter(p => p > 0 && p < durationS)
+    .sort((a, b) => a - b)
+}
+
+function SegmentSlicerCard({ item }: { item: LibraryItem }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const durationS = Number(item.audio_duration_seconds ?? item.duration_seconds ?? 0)
+  const [mode, setMode] = useState<'preset' | 'manual'>('preset')
+  const [presetMinutes, setPresetMinutes] = useState<number>(15)
+  const [manualPoints, setManualPoints] = useState<number[]>([])
+  const [toleranceSeconds, setToleranceSeconds] = useState<number>(2.0)
+  const [pauseAware, setPauseAware] = useState(true)
+  const [pauseSilenceDbfs, setPauseSilenceDbfs] = useState(-40.0)
+  const [pauseMinSilenceMs, setPauseMinSilenceMs] = useState(250)
+  const [selectedPointIdx, setSelectedPointIdx] = useState<number | null>(null)
+  const [audioPositionS, setAudioPositionS] = useState(0)
+  const [previewBundle, setPreviewBundle] = useState<SegmentBundle | null>(null)
+  const [loadingExisting, setLoadingExisting] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingExisting(true)
+    setStatus('')
+    setError('')
+    setPreviewBundle(null)
+    setSelectedPointIdx(null)
+    setMode('preset')
+    setPresetMinutes(15)
+    setManualPoints([])
+    ;(async () => {
+      try {
+        const existing = await api.library.getSegmentBundle(item.video_id)
+        if (cancelled) return
+        setPreviewBundle(existing)
+        setMode(existing.mode)
+        setToleranceSeconds(existing.tolerance_seconds || 2.0)
+        if (existing.mode === 'preset') {
+          setPresetMinutes(existing.preset_minutes || 15)
+          setManualPoints([])
+        } else {
+          setManualPoints(normalizeManualPoints(existing.points_seconds || [], durationS).slice(0, SEGMENT_MAX_MANUAL_POINTS))
+          setSelectedPointIdx((existing.points_seconds || []).length > 0 ? 0 : null)
+        }
+        setStatus('Načten uložený segment bundle.')
+      } catch {
+        // bundle nemusí existovat
+      } finally {
+        if (!cancelled) setLoadingExisting(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [item.video_id, durationS])
+
+  const presetPoints = buildPresetPoints(durationS, presetMinutes)
+  const workingPoints = mode === 'manual' ? manualPoints : presetPoints
+  const timelinePoints = previewBundle?.mode === mode ? (previewBundle.points_seconds || workingPoints) : workingPoints
+
+  function buildRequest(): SegmentBundlePreviewRequest {
+    return {
+      source_id: item.video_id,
+      source_type: 'library_item',
+      mode,
+      audio_duration_seconds: durationS,
+      tolerance_seconds: toleranceSeconds,
+      pause_aware: pauseAware,
+      pause_silence_dbfs: pauseSilenceDbfs,
+      pause_min_silence_ms: pauseMinSilenceMs,
+      preset_minutes: mode === 'preset' ? presetMinutes : null,
+      manual_points_seconds: mode === 'manual' ? manualPoints : [],
+    }
+  }
+
+  function seekAudio(seconds: number) {
+    const next = Math.max(0, Math.min(durationS, seconds))
+    setAudioPositionS(next)
+    if (audioRef.current) audioRef.current.currentTime = next
+  }
+
+  function addManualPoint(seconds: number) {
+    if (mode !== 'manual') return
+    setError('')
+    setStatus('')
+    const normalized = normalizeManualPoints([...manualPoints, seconds], durationS)
+    if (normalized.length === manualPoints.length) return
+    if (normalized.length > SEGMENT_MAX_MANUAL_POINTS) {
+      setError(`Manuální režim podporuje max ${SEGMENT_MAX_MANUAL_POINTS} bodů.`)
+      return
+    }
+    setManualPoints(normalized)
+    setSelectedPointIdx(Math.max(0, normalized.findIndex(v => Math.abs(v - roundToMs(seconds)) < 0.0005)))
+  }
+
+  function updateManualPoint(idx: number, nextValue: number) {
+    const prev = idx > 0 ? manualPoints[idx - 1] : 0
+    const next = idx < manualPoints.length - 1 ? manualPoints[idx + 1] : durationS
+    const clamped = Math.max(prev + SEGMENT_MIN_GAP_S, Math.min(next - SEGMENT_MIN_GAP_S, nextValue))
+    const draft = [...manualPoints]
+    draft[idx] = roundToMs(clamped)
+    setManualPoints(normalizeManualPoints(draft, durationS))
+  }
+
+  function removeManualPoint(idx: number) {
+    const next = manualPoints.filter((_, i) => i !== idx)
+    setManualPoints(next)
+    if (!next.length) setSelectedPointIdx(null)
+    else if (selectedPointIdx != null) setSelectedPointIdx(Math.min(selectedPointIdx, next.length - 1))
+  }
+
+  async function preview() {
+    if (!durationS || durationS <= 0) {
+      setError('Tato položka zatím nemá známou délku audia.')
+      return
+    }
+    setPreviewing(true)
+    setError('')
+    setStatus('')
+    try {
+      const bundle = await api.library.previewSegmentBundle(buildRequest())
+      setPreviewBundle(bundle)
+      setStatus(`Preview připraven: ${bundle.segments.length} segmentů.`)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  async function saveBundle() {
+    if (!durationS || durationS <= 0) {
+      setError('Tato položka zatím nemá známou délku audia.')
+      return
+    }
+    setSaving(true)
+    setError('')
+    setStatus('')
+    try {
+      const bundle = await api.library.upsertSegmentBundle(item.video_id, buildRequest())
+      setPreviewBundle(bundle)
+      setStatus(`Uloženo: ${bundle.segments.length} segmentů. Na stránce Přepis lze použít režim "Segment bundle".`)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const segmentDurations = previewBundle?.segments?.map(s => s.duration_s) ?? []
+  const minSegment = segmentDurations.length ? Math.min(...segmentDurations) : null
+  const maxSegment = segmentDurations.length ? Math.max(...segmentDurations) : null
+
+  return (
+    <div className="rounded border border-emerald-200 bg-emerald-50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <h4 className="text-sm font-semibold text-emerald-900">Kráječ dlouhých nahrávek (V6)</h4>
+        <span className="text-xs text-emerald-700">
+          Délka: {durationS > 0 ? fmtDurationPrecise(durationS) : 'neznámá'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 text-xs mb-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-gray-600">Režim:</span>
+          <button
+            type="button"
+            onClick={() => { setMode('preset'); setSelectedPointIdx(null) }}
+            className={`px-2 py-1 rounded border ${mode === 'preset' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-gray-300 text-gray-700'}`}
+          >
+            preset
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('manual')}
+            className={`px-2 py-1 rounded border ${mode === 'manual' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-gray-300 text-gray-700'}`}
+          >
+            manual
+          </button>
+          {mode === 'preset' && (
+            <select
+              value={presetMinutes}
+              onChange={e => setPresetMinutes(parseInt(e.target.value, 10))}
+              className="border rounded px-2 py-1 bg-white"
+            >
+              {SEGMENT_PRESET_MINUTES.map(v => <option key={v} value={v}>{v} min</option>)}
+            </select>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="inline-flex items-center gap-1">
+            <input type="checkbox" checked={pauseAware} onChange={e => setPauseAware(e.target.checked)} />
+            pause-aware
+          </label>
+          <label className="inline-flex items-center gap-1">
+            tolerance ±
+            <input
+              type="number"
+              min={0}
+              max={30}
+              step={0.1}
+              value={toleranceSeconds}
+              onChange={e => setToleranceSeconds(Math.max(0, Math.min(30, Number(e.target.value) || 0)))}
+              className="w-16 border rounded px-1 py-0.5 bg-white"
+            />
+            s
+          </label>
+          <label className="inline-flex items-center gap-1">
+            silence dBFS
+            <input
+              type="number"
+              min={-90}
+              max={-5}
+              step={1}
+              value={pauseSilenceDbfs}
+              onChange={e => setPauseSilenceDbfs(Math.max(-90, Math.min(-5, Number(e.target.value) || -40)))}
+              className="w-16 border rounded px-1 py-0.5 bg-white"
+            />
+          </label>
+          <label className="inline-flex items-center gap-1">
+            min pause
+            <input
+              type="number"
+              min={50}
+              max={5000}
+              step={10}
+              value={pauseMinSilenceMs}
+              onChange={e => setPauseMinSilenceMs(Math.max(50, Math.min(5000, Number(e.target.value) || 250)))}
+              className="w-16 border rounded px-1 py-0.5 bg-white"
+            />
+            ms
+          </label>
+        </div>
+      </div>
+
+      <audio
+        ref={audioRef}
+        controls
+        preload="metadata"
+        src={`/api/transcribe/library-audio/${item.video_id}`}
+        className="w-full mb-2"
+        onTimeUpdate={e => setAudioPositionS((e.target as HTMLAudioElement).currentTime || 0)}
+      />
+
+      <div
+        className={`relative h-12 rounded border ${mode === 'manual' ? 'border-emerald-400 bg-white cursor-crosshair' : 'border-emerald-300 bg-white cursor-pointer'}`}
+        onClick={e => {
+          if (durationS <= 0) return
+          const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+          const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)))
+          const sec = roundToMs(ratio * durationS)
+          seekAudio(sec)
+          if (mode === 'manual') addManualPoint(sec)
+        }}
+        title={mode === 'manual' ? 'Kliknutí přidá bod hranice segmentu' : 'Kliknutí přesune přehrávač'}
+      >
+        <div className="absolute inset-y-0 left-0 right-0 bg-gradient-to-r from-emerald-100 to-cyan-100 opacity-60" />
+        <div
+          className="absolute top-0 bottom-0 w-0.5 bg-red-500"
+          style={{ left: `${durationS > 0 ? (audioPositionS / durationS) * 100 : 0}%` }}
+          title={`Pozice ${fmtDurationPrecise(audioPositionS)}`}
+        />
+        {timelinePoints.map((p, idx) => {
+          const left = durationS > 0 ? (p / durationS) * 100 : 0
+          const selected = mode === 'manual' && idx === selectedPointIdx
+          return (
+            <button
+              key={`${item.video_id}_pt_${idx}_${p}`}
+              type="button"
+              onClick={ev => {
+                ev.stopPropagation()
+                if (mode === 'manual') setSelectedPointIdx(idx)
+                seekAudio(p)
+              }}
+              className={`absolute top-0 bottom-0 w-0.5 ${selected ? 'bg-orange-600' : 'bg-emerald-700'}`}
+              style={{ left: `${Math.max(0, Math.min(100, left))}%` }}
+              title={`Bod ${idx + 1}: ${fmtDurationPrecise(p)}`}
+            />
+          )
+        })}
+      </div>
+
+      {mode === 'manual' && (
+        <div className="mt-2">
+          <div className="flex items-center justify-between text-xs mb-1">
+            <span className="text-gray-600">Body: {manualPoints.length}/{SEGMENT_MAX_MANUAL_POINTS}</span>
+            <button
+              type="button"
+              onClick={() => { setManualPoints([]); setSelectedPointIdx(null) }}
+              className="px-2 py-0.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+            >
+              Vyčistit body
+            </button>
+          </div>
+          {manualPoints.length === 0 ? (
+            <div className="text-xs text-gray-500">Klikněte do timeline pro přidání hranic segmentů.</div>
+          ) : (
+            <div className="max-h-36 overflow-y-auto space-y-1">
+              {manualPoints.map((point, idx) => (
+                <div
+                  key={`${item.video_id}_manual_${idx}_${point}`}
+                  className={`flex items-center gap-2 rounded border px-2 py-1 ${
+                    idx === selectedPointIdx ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-white'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedPointIdx(idx); seekAudio(point) }}
+                    className="font-mono text-xs text-gray-700 min-w-28 text-left"
+                  >
+                    #{idx + 1} {fmtDurationPrecise(point)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateManualPoint(idx, point - 0.1)}
+                    className="px-1.5 py-0.5 rounded border border-gray-300 bg-white hover:bg-gray-50"
+                    title="Posunout o -0.1 s"
+                  >
+                    ←
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateManualPoint(idx, point + 0.1)}
+                    className="px-1.5 py-0.5 rounded border border-gray-300 bg-white hover:bg-gray-50"
+                    title="Posunout o +0.1 s"
+                  >
+                    →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeManualPoint(idx)}
+                    className="ml-auto px-1.5 py-0.5 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                    title="Smazat bod"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 mt-3">
+        <button
+          type="button"
+          onClick={() => void preview()}
+          disabled={previewing || loadingExisting || durationS <= 0}
+          className="px-3 py-1.5 rounded bg-emerald-700 text-white text-xs disabled:opacity-50"
+        >
+          {previewing ? 'Preview...' : 'Preview'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void saveBundle()}
+          disabled={saving || loadingExisting || durationS <= 0}
+          className="px-3 py-1.5 rounded bg-cyan-700 text-white text-xs disabled:opacity-50"
+        >
+          {saving ? 'Ukládám...' : 'Uložit bundle'}
+        </button>
+        {status && <span className="text-xs text-emerald-800">{status}</span>}
+        {error && <span className="text-xs text-red-600">{error}</span>}
+      </div>
+
+      {previewBundle && (
+        <div className="mt-3 rounded border border-emerald-200 bg-white p-2">
+          <div className="text-xs text-gray-700 mb-1">
+            Segmenty: <strong>{previewBundle.segments.length}</strong>
+            {minSegment != null && maxSegment != null && (
+              <span> | min {fmtDurationPrecise(minSegment)} | max {fmtDurationPrecise(maxSegment)}</span>
+            )}
+          </div>
+          <div className="max-h-40 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="text-gray-500">
+                <tr>
+                  <th className="text-left py-0.5">#</th>
+                  <th className="text-left py-0.5">Start</th>
+                  <th className="text-left py-0.5">End</th>
+                  <th className="text-left py-0.5">Délka</th>
+                  <th className="text-left py-0.5">Pause snap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewBundle.segments.map(seg => (
+                  <tr key={`${item.video_id}_seg_${seg.idx}`} className="border-t border-gray-100">
+                    <td className="py-0.5 font-mono">{seg.idx + 1}</td>
+                    <td className="py-0.5 font-mono">{fmtDurationPrecise(seg.start_s)}</td>
+                    <td className="py-0.5 font-mono">{fmtDurationPrecise(seg.end_s)}</td>
+                    <td className="py-0.5 font-mono">{fmtDurationPrecise(seg.duration_s)}</td>
+                    <td className="py-0.5">
+                      {seg.snapped
+                        ? <span className="text-amber-700">ano ({seg.snap_delta_ms != null ? `${seg.snap_delta_ms.toFixed(0)}ms` : ''})</span>
+                        : <span className="text-gray-400">ne</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── LibraryPage ───────────────────────────────────────────────────────────────
 
 export function LibraryPage() {
@@ -1112,7 +1554,12 @@ export function LibraryPage() {
                       </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <span className="truncate" title={item.title}>{item.title}</span>
+                      <span
+                        className={`truncate ${/test/i.test(item.title) ? 'text-red-600 font-semibold' : ''}`}
+                        title={item.title}
+                      >
+                        {item.title}
+                      </span>
                       <button
                         type="button"
                         onClick={e => { e.stopPropagation(); startEditTitle(item) }}
@@ -1244,6 +1691,9 @@ export function LibraryPage() {
                           <div className="text-gray-700">{item.metadata_fetched_at ? item.metadata_fetched_at.replace('T', ' ').slice(0, 19) : '–'}</div>
                         </div>
                       </div>
+                      <div className="mb-3">
+                        <SegmentSlicerCard item={item} />
+                      </div>
                       {results[item.video_id]?.length
                         ? <ResultsTable rows={results[item.video_id]} />
                         : <span className="text-gray-400 text-xs">Zatím žádné výsledky — spusť benchmark.</span>}
@@ -1278,7 +1728,7 @@ export function LibraryPage() {
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-gray-800 truncate">{t.title}</div>
                       <div className="text-xs text-gray-500 flex flex-wrap gap-3 mt-0.5">
-                        <span>🕐 {new Date(t.updated_at).toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                        <span>🕐 {formatDateTimeShort(t.updated_at)}</span>
                         {t.source_label && <span>📹 {t.source_label}</span>}
                         {t.model_id && <span>🤖 {t.model_id}</span>}
                         {t.range_from && t.range_to && <span>⏱ {t.range_from}–{t.range_to}</span>}

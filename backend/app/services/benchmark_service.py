@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse, unquote
 
 from ..config import JOBS_ROOT, RUNS_ROOT, SUBTITLES_ROOT, SCENARIOS_ROOT, MODEL_STORE_ROOT, AUDIO_CACHE_ROOT
 from ..models.benchmark import BenchmarkJobRequest, BenchmarkJobStatus, LiveJobProgress
@@ -361,7 +362,22 @@ def _resolve_sources(req_data: dict) -> list[str]:
             if cached.exists():
                 result.append(str(cached))
             else:
-                result.append(item.url)
+                source_value = item.url
+                # Local importy v knihovně používají file:/// URL.
+                # Worker očekává lokální cestu; bez normalizace by se na Windows
+                # mohlo rozpadnout "C:\\..." na neplatné "C:...".
+                if isinstance(source_value, str) and source_value.lower().startswith("file://"):
+                    parsed = urlparse(source_value)
+                    raw_path = unquote(parsed.path or "")
+                    if parsed.netloc and parsed.netloc not in ("", "localhost"):
+                        raw_path = f"//{parsed.netloc}{raw_path}"
+                    # file:///C:/... -> C:/...
+                    if len(raw_path) >= 3 and raw_path[0] == "/" and raw_path[2] == ":":
+                        raw_path = raw_path[1:]
+                    candidate = Path(raw_path)
+                    if candidate.exists():
+                        source_value = str(candidate)
+                result.append(source_value)
         return result
     return req_data.get("sources") or []
 
@@ -427,7 +443,7 @@ def _poll_progress(job_id: str, progress_file: Path) -> None:
                 _update_job(job_id, **kwargs)
             if msg:
                 # Req 1: přidej zprávu do logu s timestampem (deduplikuj po sobě jdoucí)
-                ts = datetime.now().strftime("%H:%M:%S")
+                ts = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
                 stamped = f"[{ts}] {msg}"
                 with _lock:
                     log = _job_message_log.setdefault(job_id, [])

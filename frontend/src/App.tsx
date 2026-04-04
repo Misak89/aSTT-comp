@@ -16,6 +16,7 @@ export default function App() {
           <Route index element={<Navigate to="/library" replace />} />
           <Route path="library" element={<LibraryPage />} />
           <Route path="benchmark" element={<BenchmarkPage />} />
+          <Route path="benchmark/mic" element={<BenchmarkPage />} />
           <Route path="results" element={<ResultsPage />} />
           <Route path="tuning" element={<TuningPage />} />
           <Route path="models" element={<ModelsPage />} />

@@ -10,6 +10,8 @@ from ..models.library import (
     ScanDirectoryRequest,
     ImportLocalFileRequest,
     LocalFileEntry,
+    SegmentBundle,
+    SegmentBundlePreviewRequest,
 )
 from ..services import library_service
 
@@ -97,3 +99,27 @@ def search_youtube(req: dict):
         content_type=req.get("content_type", "any"),
         categories=req.get("categories") or None,
     )
+
+
+@router.post("/segment-bundles/preview", response_model=SegmentBundle)
+def preview_segment_bundle(req: SegmentBundlePreviewRequest):
+    try:
+        return library_service.preview_segment_bundle(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.put("/segment-bundles/{source_id}", response_model=SegmentBundle)
+def upsert_segment_bundle(source_id: str, req: SegmentBundlePreviewRequest):
+    try:
+        return library_service.upsert_segment_bundle(source_id, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/segment-bundles/{source_id}", response_model=SegmentBundle)
+def get_segment_bundle(source_id: str):
+    try:
+        return library_service.get_segment_bundle(source_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="segment bundle not found")

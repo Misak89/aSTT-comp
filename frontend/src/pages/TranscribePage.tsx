@@ -6,22 +6,40 @@
  * Všechna nastavení (model, rozsah, layout, rychlost, kroky) se pamatují.
  */
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { api } from '../api/client'
 import { TranscribeJobPanel } from '../components/transcribe/TranscribeJobPanel'
 import { TranscribeAudioPlayer, type TranscribeAudioPlayerHandle } from '../components/transcribe/TranscribeAudioPlayer'
 import { TranscribeEditor } from '../components/transcribe/TranscribeEditor'
 import { TranscribePanelLayout } from '../components/transcribe/TranscribePanelLayout'
 import {
-  listTranscripts, saveTranscript, getTranscript, deleteTranscript,
-  loadSettings, saveSettings, type TranscriptEntry,
+  listTranscripts as listLocalTranscripts,
+  saveTranscript,
+  getTranscript as getLocalTranscript,
+  deleteTranscript as deleteLocalTranscript,
+  loadSettings,
+  saveSettings,
 } from '../components/transcribe/useTranscribeStorage'
+import { formatDateTimeShort, formatFileStamp } from '../lib/time'
 
 const AUTOSAVE_INTERVAL_MS = 30_000
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
+interface ArchiveEntry {
+  transcript_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  source_label?: string
+  model_id?: string
+  range_from?: string
+  range_to?: string
+  plain_text?: string
+  plain_text_preview?: string
+}
+
 function buildTranscriptTitle(sourceLabel: string, videoId: string): string {
-  const now = new Date()
-  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+  const ts = formatFileStamp()
   // Pokud sourceLabel === videoId (fallback ve VideoPanel), nepoužívej ho jako název
   const label = (sourceLabel && sourceLabel !== videoId) ? sourceLabel : ''
   const clean = label.replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 20).trim().replace(/\s+/g, '_')
@@ -41,7 +59,7 @@ export function TranscribePage() {
   const [currentVideoId, setCurrentVideoId] = useState('')
   const [transcriptTitle, setTranscriptTitle] = useState('')
   const [showArchive, setShowArchive] = useState(false)
-  const [archiveList, setArchiveList] = useState<TranscriptEntry[]>([])
+  const [archiveList, setArchiveList] = useState<ArchiveEntry[]>([])
   const playerRef = useRef<TranscribeAudioPlayerHandle>(null)
   const editorHtmlRef = useRef('')
   const editorTextRef = useRef('')
@@ -70,12 +88,29 @@ export function TranscribePage() {
 
   // Archiv
   const refreshArchive = useCallback(() => {
-    setArchiveList(listTranscripts())
+    api.transcribe.listTranscripts()
+      .then(rows => setArchiveList(rows))
+      .catch(() => {
+        const local = listLocalTranscripts().map((row) => ({
+          transcript_id: row.transcript_id,
+          title: row.title,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          source_label: row.source_label,
+          model_id: row.model_id,
+          range_from: row.range_from,
+          range_to: row.range_to,
+          plain_text: row.plain_text,
+          plain_text_preview: row.plain_text?.slice(0, 200),
+        }))
+        setArchiveList(local)
+      })
   }, [])
 
   useEffect(() => {
     if (showArchive) refreshArchive()
   }, [showArchive, refreshArchive])
+  useEffect(() => { refreshArchive() }, [refreshArchive])
 
   // Auto-save
   const doSave = useCallback((html: string, plainText: string) => {
@@ -141,18 +176,20 @@ export function TranscribePage() {
 
   const handleTranscriptUpdate = useCallback((text: string, audioSecs?: number) => {
     if (!transcriptStartTimeRef.current) {
-      transcriptStartTimeRef.current = new Date().toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })
+      transcriptStartTimeRef.current = formatDateTimeShort(Date.now())
       lastTsBoundaryRef.current = -1
       // Titul se nastaví při prvním uložení v doSave (kde je správný currentSourceLabel)
     }
 
     // Načti nastavení jednou
     const settings = loadSettings()
+    const hasInlineTimestamps = /\[\d{2}:\d{2}\]/.test(text)
+    const hasStructuredMarkers = text.includes('α START') || text.includes('Ω END')
 
     // Timestamp marker — interval dle nastavení
     const tsEnabled = settings.ts_enabled !== false  // výchozí true
     const tsInterval = settings.ts_interval_s ?? 60
-    if (tsEnabled && audioSecs != null && audioSecs > 0) {
+    if (!hasInlineTimestamps && !hasStructuredMarkers && tsEnabled && audioSecs != null && audioSecs > 0) {
       const boundary = Math.floor(audioSecs / tsInterval) * tsInterval
       if (boundary > lastTsBoundaryRef.current && boundary > 0) {
         const m = Math.floor(boundary / 60)
@@ -161,6 +198,10 @@ export function TranscribePage() {
         accumulatedBodyRef.current += `<p><span style="color:#dc2626;font-size:0.85em">[${ts}]</span></p>`
         lastTsBoundaryRef.current = boundary
       }
+    } else if (hasInlineTimestamps || hasStructuredMarkers) {
+      // Přepis už obsahuje vlastní značky; nevkládej syntetické marker řádky z UI.
+      accumulatedBodyRef.current = ''
+      lastTsBoundaryRef.current = -1
     }
 
     // Streaming runner posílá kumulativní text — nahraď celý textový obsah (za timestamps)
@@ -182,27 +223,43 @@ export function TranscribePage() {
     playerRef.current?.seekTo(seconds)
   }, [])
 
-  const handleOpenTranscript = useCallback((id: string) => {
-    const entry = getTranscript(id)
-    if (!entry) return
-    setTranscriptContent(entry.html)
-    setCurrentTranscriptId(entry.transcript_id)
-    setCurrentSourceLabel(entry.source_label || '')
-    setCurrentModelId(entry.model_id || '')
-    editorHtmlRef.current = entry.html
-    editorTextRef.current = entry.plain_text
-    setShowArchive(false)
+  const handleOpenTranscript = useCallback(async (id: string) => {
+    try {
+      const entry = await api.transcribe.getTranscript(id)
+      setTranscriptContent(entry.html)
+      setCurrentTranscriptId(entry.transcript_id)
+      setCurrentSourceLabel(entry.source_label || '')
+      setCurrentModelId(entry.model_id || '')
+      editorHtmlRef.current = entry.html
+      editorTextRef.current = ''
+      setShowArchive(false)
+      return
+    } catch {
+      const local = getLocalTranscript(id)
+      if (!local) return
+      setTranscriptContent(local.html)
+      setCurrentTranscriptId(local.transcript_id)
+      setCurrentSourceLabel(local.source_label || '')
+      setCurrentModelId(local.model_id || '')
+      editorHtmlRef.current = local.html
+      editorTextRef.current = local.plain_text
+      setShowArchive(false)
+    }
   }, [])
 
-  const handleDeleteTranscript = useCallback((id: string) => {
-    deleteTranscript(id)
+  const handleDeleteTranscript = useCallback(async (id: string) => {
+    try {
+      await api.transcribe.deleteTranscript(id)
+    } catch {
+      // fallback only local delete
+    }
+    deleteLocalTranscript(id)
     setArchiveList(prev => prev.filter(t => t.transcript_id !== id))
     if (currentTranscriptId === id) setCurrentTranscriptId(null)
   }, [currentTranscriptId])
 
   const fmtDate = (iso: string) => {
-    try { return new Date(iso).toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' }) }
-    catch { return iso }
+    return formatDateTimeShort(iso)
   }
 
   const archiveModal = showArchive ? (
@@ -231,18 +288,18 @@ export function TranscribePage() {
                   <div className="font-medium text-gray-800 truncate">{t.title}</div>
                   <div className="text-xs text-gray-500 flex flex-wrap gap-3 mt-0.5">
                     <span>🕐 {fmtDate(t.updated_at)}</span>
-                    {t.source_label && <span>📹 {t.source_label}</span>}
-                    {t.model_id && <span>🤖 {t.model_id}</span>}
+                    {t.source_label && <span className="select-text" title={t.source_label}>📹 {t.source_label}</span>}
+                    {t.model_id && <span className="select-text font-mono" title={t.model_id}>🤖 {t.model_id}</span>}
                     {t.range_from && t.range_to && <span>⏱ {t.range_from}–{t.range_to}</span>}
                   </div>
-                  {t.plain_text && (
-                    <div className="text-xs text-gray-400 mt-1 truncate">{t.plain_text.slice(0, 120)}</div>
+                  {(t.plain_text_preview || t.plain_text) && (
+                    <div className="text-xs text-gray-400 mt-1 truncate select-text">{(t.plain_text_preview || t.plain_text || '').slice(0, 120)}</div>
                   )}
                 </div>
                 <div className="flex gap-1 flex-shrink-0">
-                  <button onClick={() => handleOpenTranscript(t.transcript_id)}
+                  <button onClick={() => { void handleOpenTranscript(t.transcript_id) }}
                     className="px-2.5 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-500">Otevřít</button>
-                  <button onClick={() => { if (confirm(`Smazat "${t.title}"?`)) handleDeleteTranscript(t.transcript_id) }}
+                  <button onClick={() => { if (confirm(`Smazat "${t.title}"?`)) void handleDeleteTranscript(t.transcript_id) }}
                     className="px-2.5 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200">Smazat</button>
                 </div>
               </div>
@@ -308,7 +365,7 @@ export function TranscribePage() {
           <span className="text-xs text-gray-400">Auto-save 30s</span>
           <button onClick={() => { refreshArchive(); setShowArchive(true) }}
             className="px-3 py-1 bg-gray-700 text-gray-100 rounded hover:bg-gray-600 text-xs">
-            📁 Archiv ({listTranscripts().length})
+            📁 Archiv ({archiveList.length})
           </button>
         </div>
       </div>

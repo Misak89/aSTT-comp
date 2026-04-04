@@ -9,6 +9,10 @@ Přidání nového modelu:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+
+SuitabilityGrade = Literal["green", "amber", "red"]
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,8 @@ class ModelDescriptor:
     languages: list[str]            # ["cs", "en"] nebo ["en"]
     supports_streaming: bool        # yt-dlp → ffmpeg pipe → live session
     supports_microphone: bool       # sounddevice mic → live session
+    stream_suitability: SuitabilityGrade = "red"      # 1. slovo preview (live mic stream)
+    transcript_suitability: SuitabilityGrade = "red"  # 2. slovo preview (transcript flow)
     params: list[ParamSpec] = field(default_factory=list)
     notes: str = ""
 
@@ -51,6 +57,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,   # whisper-cli potřebuje soubor
             supports_microphone=True,
+            stream_suitability="amber",
+            transcript_suitability="green",
             notes="Menší Whisper model pro slabší HW. Mic v4 (experimental) jako rychlejší alternativa k whisper_cpp_small.",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs", "Kód jazyka (cs, en, de, ...)"),
@@ -74,6 +82,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
             supports_microphone=True,
+            stream_suitability="amber",
+            transcript_suitability="green",
             notes="Doporučený model pro CZ (~244 MB). Dobrý poměr přesnost/rychlost. Mic v4 (experimental).",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
@@ -97,6 +107,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
             supports_microphone=False,
+            stream_suitability="red",
+            transcript_suitability="green",
             notes="Nejlepší přesnost (~1550 MB), RTF > 1 na většině CPU — nestíhá live přepis.",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
@@ -115,6 +127,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
             supports_microphone=True,
+            stream_suitability="green",
+            transcript_suitability="green",
             notes="Rychlá varianta large-v3 (~547 MB q5_0). Mic v4 (experimental).",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
@@ -138,6 +152,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=True,
             supports_microphone=True,
+            stream_suitability="amber",
+            transcript_suitability="green",
             notes="CTranslate2/faster-whisper v CPU int8 režimu. Vyžaduje lokální CTranslate2 model (bez auto-download v offline režimu).",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
@@ -162,6 +178,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=True,
             supports_microphone=True,
+            stream_suitability="green",
+            transcript_suitability="green",
             notes="CTranslate2/faster-whisper medium v CPU int8 režimu. Vyšší přesnost za cenu vyššího CPU.",
             params=[
                 ParamSpec("language",       "Jazyk",          "str",  "cs",  "Kód jazyka (cs, en, de, ...)"),
@@ -186,6 +204,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs"],
             supports_streaming=True,
             supports_microphone=True,
+            stream_suitability="amber",
+            transcript_suitability="amber",
             notes="Dedikovaný CZ model, velmi nízké nároky na RAM",
             params=[
                 ParamSpec("sample_rate",    "Sample rate",      "int",   16000, "Hz", min=8000, max=48000),
@@ -204,6 +224,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["en"],
             supports_streaming=True,
             supports_microphone=True,
+            stream_suitability="red",
+            transcript_suitability="red",
             notes="Streaming ONNX model, nízká latence",
             params=[
                 ParamSpec("num_threads",        "Vlákna CPU",       "int",    2,              min=1, max=16),
@@ -225,6 +247,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "pl", "sk", "uk"],
             supports_streaming=False,
             supports_microphone=False,
+            stream_suitability="red",
+            transcript_suitability="red",
             notes="Dočasně vypnuto: aktuální sherpa runtime na Windows padá na metadata 'window_size'. Model zůstává připraven pro budoucí kompatibilní verzi.",
             params=[
                 ParamSpec("language",           "Jazyk",            "str",    "cs"),
@@ -247,6 +271,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "zh", "ja"],
             supports_streaming=False,
             supports_microphone=False,
+            stream_suitability="red",
+            transcript_suitability="amber",
             notes="LLM-based ASR, potřebuje soubor. Na Windows: vždy float32 (ne bfloat16 — crash).",
             params=[
                 ParamSpec("language",       "Jazyk",        "str",    "Czech"),
@@ -266,6 +292,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["cs", "en", "de", "fr", "es", "zh", "ja"],
             supports_streaming=False,
             supports_microphone=False,
+            stream_suitability="red",
+            transcript_suitability="amber",
             notes="LLM-based ASR, větší model. Na Windows: vždy float32.",
             params=[
                 ParamSpec("language",       "Jazyk",        "str",    "Czech"),
@@ -284,6 +312,8 @@ REGISTRY: dict[str, ModelDescriptor] = {
             languages=["en"],
             supports_streaming=True,
             supports_microphone=True,
+            stream_suitability="red",
+            transcript_suitability="red",
             notes="Moderní streaming ASR, 245M params, WER 6.65% na EN. Zatím pouze angličtina.",
             params=[
                 ParamSpec("model_arch",             "Architektura",         "select", "medium",

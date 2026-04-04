@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T13:45:13Z
+- last_updated_utc: 2026-04-03T23:02:58Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -858,3 +858,177 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Diagram review is now possible without Markdown Mermaid preview dependency; GitHub links can target direct SVG assets for full-size viewing.
+
+---
+
+## Session 2026-04-03T14:00:34Z (v6-sherpa-streaming-guard-and-smoke-refresh)
+
+### Summary
+- Fixed streaming benchmark sherpa resolver to prefer model-scoped bundle root and reject accidental parakeet mapping for sherpa_onnx_small; added unit tests for scoped/fallback/parakeet guard behavior; reran 13s smoke matrix.
+
+### Impact
+- sherpa_onnx_small changed from failed(crash) to pass in current 13s smoke run; all-installed smoke is now 8 pass / 1 blocked (qwen3_asr_0_6b missing qwen_asr module).
+
+---
+
+## Session 2026-04-03T14:39:20Z (v6-simple-profile-physical-retest)
+
+### Summary
+- Updated scripts/smoke_transcribe_13s.py to print chosen profile settings in report header, defined simple per-model profile runtime/logs/smoke_profile_simple_cz_v1.json, and reran physical all-installed smoke on start=0 and start=60.
+
+### Impact
+- Reports now expose simplified per-model settings at the top and current physical status is stable: 8 models PASS, qwen blocked by missing qwen_asr module.
+
+---
+
+## Session 2026-04-03T17:46:43Z (physical-retest-summary-ts-report)
+
+### Summary
+- Added report triplet for physical STT retest status, simple per-model settings, and top-3 highest-impact next actions:
+  - docs/reports/fyzicke_retesty_stt_modelu_jednoduche_nastaveni_a_tri_rychle_kroky_ts_2026-04-03.md
+  - docs/reports/fyzicke_retesty_stt_modelu_jednoduche_nastaveni_a_tri_rychle_kroky_ts_2026-04-03.json
+  - docs/reports/fyzicke_retesty_stt_modelu_jednoduche_nastaveni_a_tri_rychle_kroky_ts_2026-04-03.jsonl
+
+### Impact
+- Captures current physical model viability and reproducible simple settings in one governance-compliant report triplet.
+
+---
+
+## Session 2026-04-03T18:17:46Z (transcribe-archive-visibility-copyability-and-stream-hints)
+
+### Summary
+- Transcribe archive modal now loads transcript list primarily from backend /api/transcribe/transcripts (fallback to localStorage), so physically saved transcripts outside browser-local storage are visible in UI.
+- Added selectable/copyable source and model identifiers in /transcript panel (Název audia, Model ID) with explicit Kopírovat action.
+- Added non-renaming traffic-light stream usability hints in model section (Stream + Latence) without changing model names.
+- Extended scripts/smoke_transcribe_13s.py with --save-archive and --archive-title-prefix to persist PASS transcripts into archive via API.
+- Executed physical smoke run with archive save: transcript_id 544390c5-97e2-44a4-a2ab-27b0317c26f1.
+
+### Impact
+- User can now verify physical transcript output directly in archive UI and copy source/model names reliably by mouse.
+
+---
+
+## Session 2026-04-03T18:39:03Z (unified-time-source-utc-storage-prague-display)
+
+### Summary
+- Introduced centralized frontend time helper rontend/src/lib/time.ts as single display source (cs-CZ, Europe/Prague) and switched pages/components from ad-hoc time formatting to shared functions.
+- Updated backend/script hotspots with naive timestamps to explicit UTC (enchmark_service progress log stamp, 	uning_worker updated_ts, logger status mtime in Windows/Unix script variants).
+- Preserved storage/API semantics in UTC ISO while standardizing UI rendering through one formatter policy.
+
+### Impact
+- Time rendering and timestamp generation now follow one source/policy instead of mixed local/implicit behavior; UTC persistence and Prague display are explicit and consistent.
+
+---
+
+## Session 2026-04-03T18:49:32Z (transcribe-word-color-cue-and-mouse-copy-fix)
+
+### Summary
+- Updated /transcript panel so stream suitability is indicated by color on words (without renaming model names): first word = stream suitability, second word = latency suitability.
+- Reworked selected source/model display into mouse-selectable read-only input fields (plus copy button) to allow direct text copy from the visible control area.
+- Rebuilt frontend dist and restarted web app to apply changes in running UI.
+
+### Impact
+- Requested visual cue behavior is now aligned with the prompt and selected source/model text is directly copyable by mouse in the panel.
+
+---
+
+## Session 2026-04-03T20:11:56Z (registry-sourced-stream-vs-transcript-suitability)
+
+### Summary
+- Moved model suitability metadata from frontend hardcoded map to backend model registry source-of-truth (packages/adapters/_registry.py).
+- Added two explicit grades per model: stream_suitability (1st word in label preview, live mic stream) and transcript_suitability (2nd word in label preview, transcript flow).
+- Extended /api/models/registry payload and frontend ModelDescriptor typing to carry these fields end-to-end.
+- Updated /transcript model preview to color words from registry fields instead of local constants; legend now states: 1st word = live stream, 2nd word = transcript.
+
+### Impact
+- Suitability semantics are now centralized in one source and propagate consistently across UI/API consumers without divergent frontend overrides.
+
+---
+
+## Session 2026-04-03T21:21:41Z (transcript-alpha-omega-metadata-and-prestart-delay)
+
+### Summary
+- /transcript now writes start metadata line before run start: α START | source | model | effective model params.
+- Added mandatory prestart delay 2s before launching transcription job after metadata line is written.
+- Added completion metadata line on successful completion: Ω END | finished_at (date+hour+minute) | source range from-to.
+- Added larger paragraph separation between sequence blocks in segmented transcription flow.
+
+### Impact
+- Transcript body now contains explicit start/end provenance markers and clearer block boundaries for sequence analysis.
+
+
+---
+
+## Session 2026-04-03T21:51:36Z (transcript-timestamp-placement-and-omega-duration-fix)
+
+### Summary
+- Fixed /transcript timestamp placement issue by preferring live.transcript_ts over synthetic fallback when available.
+- Adjusted fallback audio position calculation to current run range (start-end) so full-source timestamps (e.g. [10:10]) are not injected into short-range runs.
+- Disabled synthetic UI timestamp insertion when transcript already contains inline timestamps or structured markers (α/Ω).
+- Extended Ω END line with wall duration field: Přepis celkem trval MM:SS.
+
+### Impact
+- Transcript output now avoids duplicate/misaligned timestamp markers and includes explicit run duration in end metadata.
+
+
+---
+
+## Session 2026-04-03T22:13:26Z (alpha-placement-lower-and-synthetic-timestamps-in-panel)
+
+### Summary
+- Moved α START marker one line lower in transcript composition for multi-line ASR output (after the first ASR line, before the main text block).
+- Added synthetic timestamp generation directly in TranscribeJobPanel when inline [MM:SS] is missing; markers are emitted by configured interval and inserted into composed transcript block.
+- Keeps 	ranscript_ts as primary source when available and resets synthetic markers when inline timestamps are already present.
+
+### Impact
+- α START placement now matches requested position and timestamp presence is improved even for runs/adapters that do not emit continuous 	ranscript_ts updates.
+
+
+---
+
+## Session 2026-04-03T22:44:56Z (transcribe-split-12-88-and-ts-input-min5)
+
+### Summary
+- Increased /transcript resizable split range to allow both sides up to 88% (min 12%) in horizontal/vertical drag layout.
+- Updated timestamp interval input UX: field can be fully cleared during edit, commit on blur/Enter, and minimum runtime value is now 5s.
+- Step changed to 1s for quicker testing workflows.
+
+### Impact
+- Panel sizing now matches requested wider drag range and timestamp interval editing is less restrictive for fast test iterations.
+
+
+---
+
+## Session 2026-04-03T22:52:40Z (transcribe-drag-resize-global-mousemove-fix)
+
+### Summary
+- Fixed regression in /transcript split drag by moving resize handling to global window.mousemove/mouseup listeners.
+- Divider now keeps responding even when cursor leaves the immediate container during drag.
+
+### Impact
+- Horizontal/vertical panel resize is functional again after the recent split-range changes.
+
+
+---
+
+## Session 2026-04-03T22:57:01Z (transcribe-divider-hitbox-and-drag-reliability)
+
+### Summary
+- Increased horizontal/vertical split divider hitbox (w-3 / h-3) and added border for clearer drag affordance.
+- Kept global mousemove drag handling from prior fix to maintain resize behavior outside container bounds.
+
+### Impact
+- Divider is easier to grab and panel resize is more reliable in real use.
+
+
+---
+
+## Session 2026-04-03T23:02:48Z (transcribe-layout-drag-rollback-build-deploy)
+
+### Summary
+- Rolled back TranscribePanelLayout drag behavior to the prior container-bound implementation (onMouseMove on split container, split range 15-85, original narrow divider classes).
+- Built frontend and verified deployed asset switched to ssets/index-Ch3QvAEn.js on running web app.
+
+### Impact
+- Restored pre-regression drag logic baseline for /transcript layout resizing.
+

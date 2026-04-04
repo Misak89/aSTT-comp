@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ..config import AUDIO_CACHE_ROOT, TRANSCRIPTS_ROOT
+from ..services import library_service
 
 UPLOADS_ROOT = AUDIO_CACHE_ROOT / "uploads"
 UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -64,10 +65,9 @@ def serve_library_audio(video_id: str):
     """Serve cached audio for a library video to the wavesurfer player."""
     if not all(c.isalnum() or c in "-_" for c in video_id):
         raise HTTPException(400, "Invalid video_id")
-    for ext in [".wav", ".mp3", ".mp4", ".m4a", ".ogg", ".webm"]:
-        path = AUDIO_CACHE_ROOT / f"{video_id}{ext}"
-        if path.exists():
-            return FileResponse(str(path))
+    resolved = library_service.resolve_audio_file_for_library_item(video_id)
+    if resolved and resolved.exists():
+        return FileResponse(str(resolved))
     raise HTTPException(404, "Audio not cached for this video. Run a benchmark first to cache the audio.")
 
 

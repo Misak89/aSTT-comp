@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { formatDateTimeMedium } from '../lib/time'
 
 const R = '#dc2626'
 const red = (text: string) => <span style={{color: R}}>{text}</span>
@@ -18,8 +19,7 @@ export function HWFlowPage() {
   }, [])
 
   const fmtDt = (iso: string) => {
-    try { return new Date(iso).toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'medium' }) }
-    catch { return iso }
+    return formatDateTimeMedium(iso)
   }
 
   return (

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import Field
 
 
@@ -77,3 +77,40 @@ class ImportLocalFileRequest(BaseModel):
     path: str
     title: str
     language: str = "cs"
+
+
+class SegmentItem(BaseModel):
+    idx: int
+    start_s: float
+    end_s: float
+    duration_s: float
+    snapped: bool = False
+    snapped_from_s: Optional[float] = None
+    snap_delta_ms: Optional[float] = None
+    snap_reason: Optional[str] = None
+
+
+class SegmentBundle(BaseModel):
+    source_id: str
+    source_type: Literal["library_item", "upload"] = "library_item"
+    mode: Literal["preset", "manual"]
+    audio_duration_seconds: float
+    tolerance_seconds: float = 2.0
+    preset_minutes: Optional[int] = None
+    points_seconds: list[float] = Field(default_factory=list)
+    segments: list[SegmentItem] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class SegmentBundlePreviewRequest(BaseModel):
+    source_id: str
+    source_type: Literal["library_item", "upload"] = "library_item"
+    mode: Literal["preset", "manual"] = "preset"
+    audio_duration_seconds: float = Field(gt=0.0)
+    tolerance_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
+    pause_aware: bool = True
+    pause_silence_dbfs: float = Field(default=-40.0, ge=-90.0, le=-5.0)
+    pause_min_silence_ms: int = Field(default=250, ge=50, le=5000)
+    preset_minutes: Optional[int] = None
+    manual_points_seconds: list[float] = Field(default_factory=list)

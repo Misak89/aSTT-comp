@@ -19,6 +19,7 @@ import type {
 } from '../types'
 import { WerBadge } from '../components/WerBadge'
 import { videoLabel } from '../utils'
+import { formatClockHms, formatFileStampWithSeconds } from '../lib/time'
 
 type Strategy = 'grid' | 'ablation' | 'random' | 'smart'
 
@@ -168,8 +169,7 @@ function formatElapsedShort(totalSeconds: number): string {
 function formatClockHHMMSS(iso: string | null | undefined): string {
   const ms = parseIsoToMs(iso)
   if (ms == null) return '–'
-  const d = new Date(ms)
-  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
+  return formatClockHms(ms)
 }
 
 type LatencyLane = 'strict_live' | 'probe_online' | 'batch_proxy' | 'mixed' | 'unknown'
@@ -245,14 +245,7 @@ function formatEventPayloadShort(payload: Record<string, unknown> | null | undef
 function formatJobHistoryName(job: TuningJobStatus): string {
   const ms = parseIsoToMs(job.created_at)
   if (ms == null) return job.job_id
-  const dt = new Date(ms)
-  const yyyy = dt.getFullYear().toString().padStart(4, '0')
-  const mm = (dt.getMonth() + 1).toString().padStart(2, '0')
-  const dd = dt.getDate().toString().padStart(2, '0')
-  const hh = dt.getHours().toString().padStart(2, '0')
-  const mi = dt.getMinutes().toString().padStart(2, '0')
-  const ss = dt.getSeconds().toString().padStart(2, '0')
-  return `${yyyy}${mm}${dd}_${hh}${mi}${ss}`
+  return formatFileStampWithSeconds(ms)
 }
 
 function estimateRemainingSeconds(job: TuningJobStatus, nowMs: number): number | null {

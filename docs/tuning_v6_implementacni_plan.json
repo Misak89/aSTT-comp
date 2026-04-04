@@ -3,7 +3,7 @@
     "owner": "engineering",
     "status": "active",
     "doc_file": "tuning_v6_implementacni_plan.json",
-    "last_updated_utc": "2026-04-03T03:50:17Z",
+    "last_updated_utc": "2026-04-03T04:21:00Z",
     "review_due_utc": "2026-04-15T00:00:00Z",
     "source_md": "docs/tuning_v6_implementacni_plan.md",
     "format_role": "canonical_structured_snapshot"
@@ -42,7 +42,7 @@
     "fallback_path": "README.md UTF-8 native workflow (webctl.py / web.nu)"
   },
   "one_command_non_physical_gate": {
-    "command": "C:\\Program Files\\PowerShell\\7\\pwsh.exe -Command \"$ErrorActionPreference='Stop'; .venv\\Scripts\\python scripts/supply_chain_guard.py; .venv\\Scripts\\python scripts/verify_docs_guard.py --head (git rev-parse HEAD); .venv\\Scripts\\python -m pytest tests/unit/test_tuning_event_store.py tests/unit/test_tuning_events_service.py tests/unit/test_tuning_event_validation.py -q\"",
+    "command": "C:\\Program Files\\PowerShell\\7\\pwsh.exe -Command \"$ErrorActionPreference='Stop'; .venv\\Scripts\\python scripts/supply_chain_guard.py; .venv\\Scripts\\python scripts/verify_docs_guard.py --head (git rev-parse HEAD); npm --prefix frontend run build; .venv\\Scripts\\python -m pytest tests/unit/test_benchmark_request_model.py tests/unit/test_library_segment_bundle.py tests/unit/test_tuning_event_store.py tests/unit/test_tuning_events_service.py tests/unit/test_tuning_event_validation.py -q\"",
     "covers": [
       "supply-chain guard",
       "docs guard",
@@ -136,6 +136,17 @@
       ]
     }
   ],
+  "implementation_status": {
+    "V6-S0": "done",
+    "V6-S1": "done",
+    "V6-S2": "done",
+    "V6-S3": "done",
+    "V6-S4": "planned",
+    "notes": [
+      "S4 physical long-run checks are owner-executed after full code delivery.",
+      "Non-physical gate now includes frontend build and V6 segment tests."
+    ]
+  },
   "test_checkpoints": [
     {
       "checkpoint": "CP0 contract check",

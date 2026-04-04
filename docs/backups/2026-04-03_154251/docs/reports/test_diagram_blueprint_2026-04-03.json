@@ -1,0 +1,82 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "test_diagram_blueprint_2026-04-03.json",
+    "last_updated_utc": "2026-04-03T12:00:26Z",
+    "review_due_utc": "2026-04-15T00:00:00Z"
+  },
+  "report_id": "test-diagram-blueprint-2026-04-03",
+  "purpose": "diagram-ready basis for general and app-specific testing model",
+  "source_refs": [
+    "CONTRIBUTING.md",
+    "docs/RUNBOOK.md",
+    "docs/tuning_v6_implementacni_plan.md"
+  ],
+  "general_model": {
+    "name": "ABC-loop-with-fidelity-gate",
+    "nodes": [
+      {"id": "change_intake", "label": "Change Intake", "kind": "start"},
+      {"id": "risk_claim", "label": "Risk + Claim Classification", "kind": "decision"},
+      {"id": "fidelity_gap", "label": "Fidelity Gap?", "kind": "decision"},
+      {"id": "loop_a", "label": "Loop A: deterministic checks", "kind": "process"},
+      {"id": "runtime_critical", "label": "Runtime-critical claim?", "kind": "decision"},
+      {"id": "loop_b", "label": "Loop B: physical fidelity", "kind": "process"},
+      {"id": "high_risk", "label": "High-risk release path?", "kind": "decision"},
+      {"id": "loop_c", "label": "Loop C: soak/adversarial", "kind": "process"},
+      {"id": "evidence_pack", "label": "Evidence pack", "kind": "artifact"},
+      {"id": "decision", "label": "Decision", "kind": "end"}
+    ],
+    "edges": [
+      {"from": "change_intake", "to": "risk_claim"},
+      {"from": "risk_claim", "to": "fidelity_gap"},
+      {"from": "fidelity_gap", "to": "loop_a", "when": "yes_or_no"},
+      {"from": "loop_a", "to": "runtime_critical", "when": "pass"},
+      {"from": "loop_a", "to": "loop_a", "when": "fail_fix_rerun"},
+      {"from": "runtime_critical", "to": "loop_b", "when": "yes"},
+      {"from": "runtime_critical", "to": "evidence_pack", "when": "no"},
+      {"from": "loop_b", "to": "high_risk", "when": "pass"},
+      {"from": "loop_b", "to": "loop_a", "when": "fail_fix_rerun"},
+      {"from": "high_risk", "to": "loop_c", "when": "yes"},
+      {"from": "high_risk", "to": "evidence_pack", "when": "no"},
+      {"from": "loop_c", "to": "evidence_pack", "when": "pass"},
+      {"from": "loop_c", "to": "loop_a", "when": "fail_fix_rerun"},
+      {"from": "evidence_pack", "to": "decision"}
+    ]
+  },
+  "app_model": {
+    "name": "aSTT-comp-domain-test-flow",
+    "domains": [
+      "online_mic",
+      "long_transcript_segmentation",
+      "monitoring_dashboard"
+    ],
+    "domain_paths": {
+      "online_mic": {
+        "loop_a": ["unit", "contract", "docs_guard"],
+        "loop_b": ["realtime_chunk_fidelity", "rtf_check"],
+        "loop_c": ["longer_session_stability"]
+      },
+      "long_transcript_segmentation": {
+        "loop_a": ["segment_api_unit", "frontend_build", "docs_guard"],
+        "loop_b": ["library_ui_smoke", "transcript_ui_smoke"],
+        "loop_c": ["cz_model_matrix_30_120_240"]
+      },
+      "monitoring_dashboard": {
+        "loop_a": ["health_contract_tests"],
+        "loop_b": ["runtime_state_parity_check"],
+        "loop_c": []
+      }
+    },
+    "v6_checkpoint_mapping": {
+      "loop_a": ["CP0", "CP1", "CP2"],
+      "loop_b": ["CP3", "CP4"],
+      "loop_c": ["CP5"],
+      "release_gate": ["CP6"]
+    }
+  },
+  "review_gate": {
+    "status": "pending_owner_review",
+    "next_action_after_review": "push_to_github"
+  }
+}

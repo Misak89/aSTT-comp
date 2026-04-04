@@ -357,7 +357,7 @@ def status(out_path: Path) -> None:
     print(f'Log file:          {out_path.resolve()}', flush=True)
     if out_path.exists():
         size_kb = out_path.stat().st_size // 1024
-        mtime = datetime.fromtimestamp(out_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        mtime = datetime.fromtimestamp(out_path.stat().st_mtime, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')
         lines = sum(1 for _ in out_path.open(encoding='utf-8', errors='replace'))
         print(f'  Size:            {size_kb} KB, {lines} records', flush=True)
         print(f'  Last write:      {mtime}', flush=True)

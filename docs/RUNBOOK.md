@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T00:14:00Z
+- last_updated_utc: 2026-04-03T11:54:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## 1. Stabilni start webu
@@ -75,7 +75,56 @@ Pri oprave incidentu:
 1. zapsat co se stalo a fix do `docs/session_log.md`,
 2. pokud se meni start/provozni postup, aktualizovat tento `docs/RUNBOOK.md`.
 
-## 6. Dokumentacni rutina po dokonceni zmeny
+## 6. Physical validation policy (obecne, cross-domain)
+Tato politika plati obecne pro testovani kodu, security, performance i provozu.
+
+### 6.1 Kriticky pohled na jednoduche pravidlo
+Jednoduche pravidlo "vzdy udelej physical test pri runtime zmene" je uzitecne, ale ma slabiny:
+- je prilis siroke a muze zbytecne zpomalit flow,
+- nemodeluje riziko ani dopad (low-risk vs release-critical),
+- snadno micha proof-of-fix a release-gate do jednoho kroku,
+- bez jasneho test typu vede k falesnym zaverum.
+
+Proto se pouziva rizikove-rizeny 3-loop model.
+
+### 6.2 Doporuceny 3-loop model
+- Loop A (Fast deterministic): unit/integration/static-security checks na kazdy commit/PR.
+- Loop B (Physical fidelity): kratky fyzicky test na realne ceste, kdyz je runtime tvrzeni.
+- Loop C (Soak/adversarial): long-run, recovery, abuse/chaos scenare pro release/high-risk zmeny.
+
+Minimalni pravidlo:
+- A je vzdy povinne.
+- B je povinne, pokud je runtime tvrzeni a simulace ma fidelity gap.
+- C je povinne pro release gate a high-risk zmeny.
+
+### 6.3 Kdy je physical test MUST
+- tvrzeni smeruje na realny provoz (`funguje`, `stabilni`, `rychle`, `bezpecne`),
+- a soucasne existuje aspon jedno z:
+  - real I/O/device/timing/race zavislost,
+  - runtime adapter orchestrace nebo procesni behavior,
+  - UX interakce ovlivnujici chovani (drag/drop/resize/player/focus/clipboard),
+  - security enforcement, ktere simulace neoveri dostatecne verne.
+
+### 6.4 Plusy fyzicke validace
+- odhaluje chyby, ktere simulace maskuje (timing, race, device/runtime),
+- potvrzuje skutecny end-to-end tok,
+- snizuje riziko falesneho PASS pred releasem.
+
+### 6.5 Minusy a slaba mista
+- vyssi casova a operacni narocnost,
+- horsi determinismus (flaky vlivy prostredi),
+- riziko "single-run overconfidence",
+- riziko "confirmation bias" u manualnich overeni,
+- neexistuje pokryti vsech HW/OS kombinaci.
+
+### 6.6 Mitigace slabych mist
+- kombinovat physical test s reprodukovatelnym scriptovanym testem (A + B),
+- u release-critical tvrzeni delat minimalne 2 behy (cold/warm nebo odlisny usek/seed),
+- povinne logovat skutecne parametry + artefakty (`run_id`, report, timestamp, prostredi),
+- explicitne oznacit test typ a hranice tvrzeni (`sanity` vs `baseline` vs `capability` vs `release-gate`),
+- pro urgent hotfix lze docasne odlozit C-loop jen s explicitnim "deferred physical validation" zapisem a terminem.
+
+## 7. Dokumentacni rutina po dokonceni zmeny
 1. Pridat strucny zaznam do `docs/session_log.md` (idealne pres `scripts/add_session_log_entry.py`).
 2. V zmenenych core dokumentech aktualizovat `Doc-Meta.last_updated_utc`.
 3. Overit guard lokalne:

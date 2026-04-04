@@ -22,6 +22,7 @@ import Highlight from '@tiptap/extension-highlight'
 import TextAlign from '@tiptap/extension-text-align'
 import { Document, Paragraph, TextRun, Packer, AlignmentType } from 'docx'
 import JSZip from 'jszip'
+import { formatFileStamp } from '../../lib/time'
 
 // Custom FontSize extension built on top of TextStyle
 const FontSize = Extension.create({
@@ -188,8 +189,7 @@ async function buildEpub(html: string, title = 'Přepis'): Promise<Blob> {
 }
 
 function buildFilename(sourceLabel: string, videoId: string, ext: string): string {
-  const now = new Date()
-  const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+  const ts = formatFileStamp()
   const label = (sourceLabel && sourceLabel !== videoId) ? sourceLabel : ''
   const clean = label.replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 20).trim().replace(/\s+/g, '_')
   const ytPart = videoId ? `_${videoId}` : ''

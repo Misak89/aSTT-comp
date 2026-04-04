@@ -540,9 +540,20 @@ def _build_live_session_components(*, adapter: str, config: StreamingRunConfig):
             create_sherpa_live_session, transcribe_sherpa_live_chunk, finalize_sherpa_live_session,
         )
         preferred_language = "cs" if config.model_id == "sherpa_onnx_parakeet_cs_int8" else None
-        bundle = resolve_sherpa_model_bundle(model_store, preferred_language=preferred_language)
+        # Nejprve zkus scoped kořen model_id (zabrání tomu, aby sherpa_onnx_small
+        # omylem sáhl na parakeet bundle nalezený jinde v model_store rootu).
+        scoped_root = model_store / config.model_id
+        resolver_root = scoped_root if scoped_root.exists() else model_store
+        bundle = resolve_sherpa_model_bundle(resolver_root, preferred_language=preferred_language)
+        if bundle is None and resolver_root != model_store:
+            bundle = resolve_sherpa_model_bundle(model_store, preferred_language=preferred_language)
         if not bundle:
             raise RuntimeError("Sherpa model bundle nenalezen v model_store")
+        if config.model_id == "sherpa_onnx_small" and "parakeet" in str(bundle.model_dir).lower():
+            raise RuntimeError(
+                "sherpa_onnx_small mapuje na nekompatibilní Parakeet bundle. "
+                "Ověř runtime/model_store/sherpa_onnx_small."
+            )
         run_config = SherpaRunConfig(
             tokens=bundle.tokens,
             encoder=bundle.encoder,

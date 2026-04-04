@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import type { BenchmarkJobStatus, BenchmarkOptions, LibraryItem, ModelDescriptor, RunDetail } from '../types'
 import { videoLabel } from '../utils'
@@ -7,6 +7,7 @@ import { StatusBadge } from '../components/StatusBadge'
 import { LiveJobPanel } from '../components/LiveJobPanel'
 import { MicSession } from '../components/MicSession'
 import { ModelParamsForm } from '../components/ModelParamsForm'
+import { formatDateTimeDayMonthHm } from '../lib/time'
 
 type Tab = 'benchmark' | 'mic'
 type EvalMode = 'synthetic' | 'streaming' | 'real'
@@ -30,8 +31,15 @@ const VIDEO_SORT_DEFAULT_DIR: Record<VideoSortKey, 'asc' | 'desc'> = {
   view_count: 'desc',
 }
 
+function benchmarkTabFromPath(pathname: string): Tab {
+  const normalized = pathname.replace(/\/+$/, '')
+  return normalized === '/benchmark/mic' ? 'mic' : 'benchmark'
+}
+
 export function BenchmarkPage() {
-  const [tab, setTab] = useState<Tab>('benchmark')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [tab, setTab] = useState<Tab>(() => benchmarkTabFromPath(location.pathname))
   const [options, setOptions] = useState<BenchmarkOptions | null>(null)
   const [library, setLibrary] = useState<LibraryItem[]>([])
   const [registry, setRegistry] = useState<ModelDescriptor[]>([])
@@ -103,6 +111,10 @@ export function BenchmarkPage() {
     loadJobs()
   }, [])
 
+  useEffect(() => {
+    setTab(benchmarkTabFromPath(location.pathname))
+  }, [location.pathname])
+
   async function loadJobs() {
     const { jobs } = await api.benchmark.listJobs()
     setJobs(jobs)
@@ -162,19 +174,25 @@ export function BenchmarkPage() {
     await loadJobs()
   }
 
+  function switchTab(next: Tab) {
+    setTab(next)
+    setMsg('')
+    navigate(next === 'mic' ? '/benchmark/mic' : '/benchmark')
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
         <h1 className="text-xl font-bold">Benchmark</h1>
         <div className="flex gap-1 bg-gray-100 rounded p-1 text-sm">
           <button
-            onClick={() => { setTab('benchmark'); setMsg('') }}
+            onClick={() => switchTab('benchmark')}
             className={`px-3 py-1 rounded ${tab === 'benchmark' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
             Benchmark
           </button>
           <button
-            onClick={() => { setTab('mic'); setMsg('') }}
+            onClick={() => switchTab('mic')}
             className={`px-3 py-1 rounded inline-flex items-center gap-1.5 ${tab === 'mic' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
             <span className="relative inline-flex">
@@ -425,12 +443,7 @@ export function BenchmarkPage() {
 
 function formatJobDate(iso: string | null | undefined): string {
   if (!iso) return '–'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  return d.toLocaleString('cs-CZ', {
-    day: '2-digit', month: '2-digit', year: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  })
+  return formatDateTimeDayMonthHm(iso)
 }
 
 function isCzechLanguage(language: string | null | undefined): boolean {

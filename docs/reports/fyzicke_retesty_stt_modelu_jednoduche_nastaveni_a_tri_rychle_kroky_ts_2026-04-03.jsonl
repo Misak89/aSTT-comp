@@ -1,0 +1,4 @@
+{"doc_meta":{"owner":"engineering","status":"active","doc_file":"fyzicke_retesty_stt_modelu_jednoduche_nastaveni_a_tri_rychle_kroky_ts_2026-04-03.jsonl","last_updated_utc":"2026-04-03T17:44:53Z","review_due_utc":"2026-04-15T00:00:00Z"},"event":"report_opened","ts_utc":"2026-04-03T17:44:53Z","report_id":"fyzicke-retesty-stt-jednoduche-nastaveni-tri-kroky-ts-2026-04-03"}
+{"event":"physical_retests_recorded","ts_utc":"2026-04-03T17:44:53Z","reports":["runtime/logs/smoke_transcribe_13s_20260403_143640.md","runtime/logs/smoke_transcribe_13s_20260403_143846.md","runtime/logs/smoke_transcribe_13s_20260403_143211.md"],"summary":{"pass":8,"blocked":1}}
+{"event":"simple_profile_recorded","ts_utc":"2026-04-03T17:44:53Z","profile_name":"simple-cz-v1","profile_file":"runtime/logs/smoke_profile_simple_cz_v1.json"}
+{"event":"top_steps_recorded","ts_utc":"2026-04-03T17:44:53Z","count":3,"focus":"fastest path to project goals"}

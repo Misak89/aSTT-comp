@@ -2,24 +2,42 @@
 Source library management: CRUD, subtitle download, results storage.
 """
 from __future__ import annotations
+import array
 import json
+import math
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from packages.common.network_access import ensure_online_allowed
 
 from ..config import LIBRARY_ROOT, SUBTITLES_ROOT, RESULTS_ROOT, MODEL_STORE_ROOT, AUDIO_CACHE_ROOT
-from ..models.library import LibraryItem, SubtitleFile, LatestResult, UpsertLibraryItemRequest
+from ..models.library import (
+    LatestResult,
+    LibraryItem,
+    SegmentBundle,
+    SegmentBundlePreviewRequest,
+    SegmentItem,
+    SubtitleFile,
+    UpsertLibraryItemRequest,
+)
 
 _ITEMS_FILE = LIBRARY_ROOT / "items.json"
 _ITEMS_LOCK = threading.Lock()
+_SEGMENTS_ROOT = LIBRARY_ROOT / "segments"
+_SEGMENTS_ROOT.mkdir(parents=True, exist_ok=True)
+_SEGMENT_PRESET_MINUTES = {5, 10, 15, 30, 45, 60}
+_MAX_MANUAL_POINTS = 21
+_SEGMENT_TMP_ROOT = _SEGMENTS_ROOT / "_tmp"
+_SEGMENT_TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +105,339 @@ def list_items() -> list[LibraryItem]:
             audio_duration_seconds=r.get("audio_duration_seconds"),
         ))
     return result
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sanitize_segment_source_id(source_id: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9._-]", "_", str(source_id).strip())
+    clean = clean.strip("._-")
+    if not clean:
+        raise ValueError("Invalid source_id")
+    return clean[:120]
+
+
+def _segment_bundle_file(source_id: str) -> Path:
+    safe = _sanitize_segment_source_id(source_id)
+    return _SEGMENTS_ROOT / f"{safe}.json"
+
+
+def _library_item_exists(source_id: str) -> bool:
+    return any(str(row.get("video_id", "")) == source_id for row in _load_raw())
+
+
+def resolve_audio_file_for_library_item(video_id: str) -> Optional[Path]:
+    for ext in (".wav", ".mp3", ".mp4", ".m4a", ".ogg", ".webm"):
+        cached = AUDIO_CACHE_ROOT / f"{video_id}{ext}"
+        if cached.exists():
+            return cached
+    for item in _load_raw():
+        if str(item.get("video_id", "")) != video_id:
+            continue
+        raw_url = str(item.get("url") or "").strip()
+        if not raw_url:
+            return None
+        if raw_url.startswith("file://"):
+            parsed = urlparse(raw_url)
+            path_str = unquote(parsed.path or "")
+            if re.match(r"^/[A-Za-z]:", path_str):
+                path_str = path_str[1:]
+            local_path = Path(path_str)
+            return local_path if local_path.exists() else None
+        candidate = Path(raw_url)
+        return candidate if candidate.exists() else None
+    return None
+
+
+def _normalize_manual_points(points: list[float], duration_s: float) -> list[float]:
+    normalized: list[float] = []
+    for point in points:
+        value = round(float(point), 3)
+        if value <= 0.0 or value >= duration_s:
+            continue
+        normalized.append(value)
+    normalized = sorted(set(normalized))
+    if len(normalized) > _MAX_MANUAL_POINTS:
+        raise ValueError(f"manual_points_seconds supports max {_MAX_MANUAL_POINTS} points")
+    return normalized
+
+
+def _build_preset_points(*, duration_s: float, preset_minutes: int) -> list[float]:
+    if preset_minutes not in _SEGMENT_PRESET_MINUTES:
+        allowed = ", ".join(str(v) for v in sorted(_SEGMENT_PRESET_MINUTES))
+        raise ValueError(f"preset_minutes must be one of: {allowed}")
+    step_s = preset_minutes * 60.0
+    points: list[float] = []
+    cursor = step_s
+    while cursor < duration_s:
+        points.append(round(cursor, 3))
+        cursor += step_s
+    return points
+
+
+def _ensure_wav_for_silence_scan(path: Path) -> tuple[Path, bool]:
+    out_path = _SEGMENT_TMP_ROOT / f"segscan_{uuid.uuid4().hex[:8]}.wav"
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(path),
+            "-vn", "-ac", "1", "-ar", "16000", "-sample_fmt", "s16",
+            str(out_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if proc.returncode != 0 or not out_path.exists():
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise ValueError(f"Failed to prepare WAV for pause-aware scan: {detail}")
+    return out_path, True
+
+
+def _detect_silence_ranges(
+    wav_path: Path,
+    *,
+    silence_dbfs: float,
+    min_silence_ms: int,
+    frame_ms: int = 20,
+) -> list[tuple[float, float]]:
+    import wave
+
+    with wave.open(str(wav_path), "rb") as wf:
+        sample_width = max(1, int(wf.getsampwidth()))
+        sample_rate = max(1, int(wf.getframerate()))
+        frame_count = max(1, int(sample_rate * frame_ms / 1000.0))
+        max_amp = float((1 << (8 * sample_width - 1)) - 1)
+        threshold_amp = max(1.0, max_amp * (10.0 ** (silence_dbfs / 20.0)))
+
+        silence_ranges: list[tuple[float, float]] = []
+        in_silence = False
+        silence_start_s = 0.0
+        cursor_s = 0.0
+        chunk_dur_s = frame_count / float(sample_rate)
+
+        while True:
+            raw = wf.readframes(frame_count)
+            if not raw:
+                break
+            if sample_width != 2:
+                raise ValueError("pause-aware scanner expects 16-bit PCM WAV")
+            pcm = array.array("h")
+            pcm.frombytes(raw)
+            if not pcm:
+                break
+            sum_sq = 0.0
+            for value in pcm:
+                sum_sq += float(value) * float(value)
+            rms = math.sqrt(sum_sq / float(len(pcm)))
+            is_silence = float(rms) <= threshold_amp
+
+            if is_silence and not in_silence:
+                in_silence = True
+                silence_start_s = cursor_s
+            elif not is_silence and in_silence:
+                in_silence = False
+                end_s = cursor_s
+                if (end_s - silence_start_s) * 1000.0 >= float(min_silence_ms):
+                    silence_ranges.append((round(silence_start_s, 3), round(end_s, 3)))
+
+            cursor_s += chunk_dur_s
+
+        if in_silence:
+            end_s = cursor_s
+            if (end_s - silence_start_s) * 1000.0 >= float(min_silence_ms):
+                silence_ranges.append((round(silence_start_s, 3), round(end_s, 3)))
+
+    return silence_ranges
+
+
+def _pause_aware_snap_points(
+    *,
+    source_audio_path: Path,
+    points: list[float],
+    duration_s: float,
+    tolerance_s: float,
+    silence_dbfs: float,
+    min_silence_ms: int,
+) -> tuple[list[float], list[dict]]:
+    if not points or tolerance_s <= 0.0:
+        meta = [{"original": p, "snapped": p, "delta_ms": 0.0, "changed": False} for p in points]
+        return points, meta
+
+    wav_path, is_temp = _ensure_wav_for_silence_scan(source_audio_path)
+    try:
+        silence_ranges = _detect_silence_ranges(
+            wav_path,
+            silence_dbfs=silence_dbfs,
+            min_silence_ms=min_silence_ms,
+        )
+    finally:
+        if is_temp:
+            wav_path.unlink(missing_ok=True)
+
+    snapped_points: list[float] = []
+    metadata: list[dict] = []
+    prev_boundary = 0.0
+
+    for idx, original in enumerate(points):
+        next_original = points[idx + 1] if idx + 1 < len(points) else duration_s
+        left = max(prev_boundary, original - tolerance_s)
+        right = min(next_original, original + tolerance_s)
+        candidate = original
+
+        nearest_dist = math.inf
+        for start_s, end_s in silence_ranges:
+            if end_s < left or start_s > right:
+                continue
+            clipped_start = max(left, start_s)
+            clipped_end = min(right, end_s)
+            if clipped_end <= clipped_start:
+                continue
+            center = (clipped_start + clipped_end) / 2.0
+            dist = abs(center - original)
+            if dist < nearest_dist:
+                nearest_dist = dist
+                candidate = center
+
+        candidate = round(float(candidate), 3)
+        if candidate <= prev_boundary or candidate >= next_original:
+            candidate = round(float(original), 3)
+        changed = abs(candidate - original) >= 0.001
+        delta_ms = round((candidate - original) * 1000.0, 1)
+        snapped_points.append(candidate)
+        metadata.append(
+            {
+                "original": round(float(original), 3),
+                "snapped": candidate,
+                "delta_ms": delta_ms,
+                "changed": changed,
+            }
+        )
+        prev_boundary = candidate
+
+    return snapped_points, metadata
+
+
+def _build_segments(
+    points: list[float],
+    duration_s: float,
+    *,
+    boundary_metadata: list[dict] | None = None,
+) -> list[SegmentItem]:
+    boundaries = [0.0, *points, duration_s]
+    segments: list[SegmentItem] = []
+    for idx in range(len(boundaries) - 1):
+        start = round(float(boundaries[idx]), 3)
+        end = round(float(boundaries[idx + 1]), 3)
+        if end <= start:
+            continue
+        seg_meta = boundary_metadata[idx] if boundary_metadata and idx < len(boundary_metadata) else None
+        segments.append(
+            SegmentItem(
+                idx=idx,
+                start_s=start,
+                end_s=end,
+                duration_s=round(end - start, 3),
+                snapped=bool(seg_meta and seg_meta.get("changed")),
+                snapped_from_s=float(seg_meta["original"]) if seg_meta and seg_meta.get("changed") else None,
+                snap_delta_ms=float(seg_meta["delta_ms"]) if seg_meta and seg_meta.get("changed") else None,
+                snap_reason="pause-aware" if seg_meta and seg_meta.get("changed") else None,
+            )
+        )
+    if not segments:
+        raise ValueError("No valid segments generated")
+    return segments
+
+
+def _compose_segment_bundle(
+    req: SegmentBundlePreviewRequest,
+    *,
+    created_at: str | None = None,
+) -> SegmentBundle:
+    source_id = str(req.source_id).strip()
+    if not source_id:
+        raise ValueError("source_id is required")
+    if req.source_type == "library_item" and not _library_item_exists(source_id):
+        raise ValueError(f"library item not found: {source_id}")
+
+    duration_s = round(float(req.audio_duration_seconds), 3)
+    if duration_s <= 0:
+        raise ValueError("audio_duration_seconds must be > 0")
+
+    if req.mode == "preset":
+        if req.preset_minutes is None:
+            raise ValueError("preset_minutes is required for preset mode")
+        points = _build_preset_points(duration_s=duration_s, preset_minutes=int(req.preset_minutes))
+    else:
+        points = _normalize_manual_points(req.manual_points_seconds, duration_s)
+    snapped_points = points
+    boundary_meta = [{"original": p, "snapped": p, "delta_ms": 0.0, "changed": False} for p in points]
+
+    if req.pause_aware and points:
+        if req.source_type != "library_item":
+            raise ValueError("pause-aware snapping currently supports source_type=library_item")
+        audio_path = resolve_audio_file_for_library_item(source_id)
+        if audio_path is None:
+            raise ValueError(f"audio file not found for source_id={source_id}")
+        snapped_points, boundary_meta = _pause_aware_snap_points(
+            source_audio_path=audio_path,
+            points=points,
+            duration_s=duration_s,
+            tolerance_s=float(req.tolerance_seconds),
+            silence_dbfs=float(req.pause_silence_dbfs),
+            min_silence_ms=int(req.pause_min_silence_ms),
+        )
+
+    segments = _build_segments(snapped_points, duration_s, boundary_metadata=boundary_meta)
+    now = _utc_now_iso()
+    return SegmentBundle(
+        source_id=source_id,
+        source_type=req.source_type,
+        mode=req.mode,
+        audio_duration_seconds=duration_s,
+        tolerance_seconds=round(float(req.tolerance_seconds), 3),
+        preset_minutes=int(req.preset_minutes) if req.preset_minutes is not None else None,
+        points_seconds=snapped_points,
+        segments=segments,
+        created_at=created_at or now,
+        updated_at=now,
+    )
+
+
+def preview_segment_bundle(req: SegmentBundlePreviewRequest) -> SegmentBundle:
+    return _compose_segment_bundle(req)
+
+
+def upsert_segment_bundle(source_id: str, req: SegmentBundlePreviewRequest) -> SegmentBundle:
+    expected = str(source_id).strip()
+    if expected != str(req.source_id).strip():
+        raise ValueError("source_id in path must match source_id in request body")
+    bundle_file = _segment_bundle_file(expected)
+    existing_created_at: str | None = None
+    if bundle_file.exists():
+        try:
+            existing = json.loads(bundle_file.read_text(encoding="utf-8"))
+            existing_created_at = str(existing.get("created_at") or "") or None
+        except Exception:
+            existing_created_at = None
+    bundle = _compose_segment_bundle(req, created_at=existing_created_at)
+    bundle_file.write_text(
+        json.dumps(bundle.model_dump(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return bundle
+
+
+def get_segment_bundle(source_id: str) -> SegmentBundle:
+    bundle_file = _segment_bundle_file(source_id)
+    if not bundle_file.exists():
+        raise KeyError(source_id)
+    raw = json.loads(bundle_file.read_text(encoding="utf-8"))
+    return SegmentBundle(**raw)
 
 
 def _infer_subtitle_languages_from_files(

@@ -55,6 +55,43 @@ export interface LibraryItem {
   latest_results?: LatestResult[]
 }
 
+export interface SegmentItem {
+  idx: number
+  start_s: number
+  end_s: number
+  duration_s: number
+  snapped: boolean
+  snapped_from_s: number | null
+  snap_delta_ms: number | null
+  snap_reason: string | null
+}
+
+export interface SegmentBundle {
+  source_id: string
+  source_type: 'library_item' | 'upload'
+  mode: 'preset' | 'manual'
+  audio_duration_seconds: number
+  tolerance_seconds: number
+  preset_minutes: number | null
+  points_seconds: number[]
+  segments: SegmentItem[]
+  created_at: string
+  updated_at: string
+}
+
+export interface SegmentBundlePreviewRequest {
+  source_id: string
+  source_type: 'library_item' | 'upload'
+  mode: 'preset' | 'manual'
+  audio_duration_seconds: number
+  tolerance_seconds?: number
+  pause_aware?: boolean
+  pause_silence_dbfs?: number
+  pause_min_silence_ms?: number
+  preset_minutes?: number | null
+  manual_points_seconds?: number[]
+}
+
 export interface ParamSpec {
   name: string
   label: string
@@ -73,6 +110,8 @@ export interface ModelDescriptor {
   languages: string[]
   supports_streaming: boolean
   supports_microphone: boolean
+  stream_suitability: 'green' | 'amber' | 'red'
+  transcript_suitability: 'green' | 'amber' | 'red'
   notes: string
   params: ParamSpec[]
 }

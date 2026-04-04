@@ -4,6 +4,7 @@ import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Responsive
 import { api } from '../api/client'
 import type { RunDetail, RunResult, SourceMetric, ChunkMetric } from '../types'
 import { WerBadge } from '../components/WerBadge'
+import { formatDateTimeDayMonthHm } from '../lib/time'
 
 type RunSummary = { run_id: string; created_at_utc: string; sample_seconds: number; result_count: number; label?: string }
 
@@ -53,7 +54,7 @@ export function ResultsPage() {
                 <button key={r.run_id} onClick={() => { setRunIdInput(r.run_id); loadRun(r.run_id) }}
                   className={`w-full text-left text-xs px-3 py-1.5 rounded flex items-center gap-3 hover:bg-blue-50 ${run?.run_id === r.run_id ? 'bg-blue-100 text-blue-800' : 'text-gray-700'}`}>
                   <span className="font-mono text-gray-400 w-36 shrink-0">{r.run_id.slice(-16)}</span>
-                  <span className="text-gray-500 shrink-0">{new Date(r.created_at_utc).toLocaleString('cs-CZ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                  <span className="text-gray-500 shrink-0">{formatDateTimeDayMonthHm(r.created_at_utc)}</span>
                   <span className="text-gray-400">{r.sample_seconds}s · {r.result_count} výsl.</span>
                   {r.label && <span className="text-gray-600 italic">{r.label}</span>}
                 </button>

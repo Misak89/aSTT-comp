@@ -12,6 +12,7 @@ class BenchmarkJobRequest(BaseModel):
     setting_ids: Optional[list[str]] = None    # None = all default settings
     sample_seconds: int = 120                  # default 120s dle specifikace
     chunk_seconds: int = 15                    # délka jednoho chunku v streaming módu
+    segment_start_seconds: Optional[int] = Field(default=None, ge=0)
     evaluation_mode: Literal["real", "synthetic", "streaming"] = "synthetic"
     clip_strategy: Literal["random", "uniform"] = "random"
     clip_seed: Optional[int] = None

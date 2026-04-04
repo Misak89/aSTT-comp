@@ -4,7 +4,7 @@ Doc-Meta:
 - owner: engineering
 - status: active
 - doc_file: CONTRIBUTING.md
-- last_updated_utc: 2026-04-02T22:02:50Z
+- last_updated_utc: 2026-04-03T11:54:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 
@@ -36,6 +36,40 @@ Tento soubor je zavazny pro vsechny, kdo meni kod nebo dokumentaci.
 - Pri zmene app chovani je overeno, ze Dashboard stale zobrazuje aktualni stav (nebo je explicitne zdokumentovano proc ne).
 - V kazdem zmenenem core dokumentu je aktualizovan `last_updated_utc`.
 - PR prosel `docs-guard` CI checkem.
+
+## 2.1 Validita testu (MUST, plati globalne)
+Pravidlo plati pro vsechny testy: unit, integration, e2e, smoke, performance, security, reliability, manual verification.
+
+Pred testem musi byt explicitne urceno:
+- typ testu (`sanity`, `baseline`, `capability`, `regression`, `security-gate`, `release-gate`),
+- cil testu (co presne overuje),
+- co z vysledku lze a nelze tvrdit.
+
+Povinny obsah kazdeho test reportu:
+- vstupy a rozsah (`source`, casovy usek, dataset, prostredi),
+- skutecne pouzite parametry (ne jen zamyslene),
+- verze/test harness (skript, endpoint, commit/ref),
+- artefakty pro audit (`run_id`, cesta na report/log, cas).
+
+Test je neplatny a nesmi byt pouzit pro produktove rozhodnuti, pokud:
+- konfigurace neodpovida cili testu,
+- chyba harnessu nebo infrastruktury je zamenena za chybu testovane komponenty,
+- chybi dukaz o realne pouzitych parametrech,
+- je vyvozovan sirsi zaver, nez dovoluje typ testu.
+
+Interpretace vysledku:
+- `sanity`: potvrzuje pouze, ze tok bezi; nerika nic o kvalite.
+- `baseline`: porovnava modely/nastroje ve stejne konfiguraci; nerika nic o optimalnim per-model nastaveni.
+- `capability` a `release-gate`: vyzaduji odpovidajici per-system/per-model nastaveni a reprodukovatelne artefakty.
+
+## 2.2 Physical validation gate (MUST when applicable)
+- Pouzivej 3-loop test model:
+  - Loop A: fast deterministic checks (unit/integration/security static checks) na kazdy commit/PR.
+  - Loop B: short physical fidelity checks pro runtime tvrzeni.
+  - Loop C: soak/adversarial checks pro release/high-risk zmeny.
+- Physical gate je `MUST`, pokud je tvrzeni runtime kriticke (`funguje/stabilni/rychle/bezpecne`) a zaroven existuje fidelity gap mezi simulaci a realitou.
+- Simulace/synteticke testy jsou nutne, ale samy o sobe nestaci pro release-level tvrzeni.
+- Detailni rozhodovaci pravidla, plusy/minusy, slaba mista a mitigace jsou v `docs/RUNBOOK.md` (sekce physical validation policy).
 
 ## 3. Povinna Metadata V Core Dokumentech
 Core docs:

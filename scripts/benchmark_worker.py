@@ -221,12 +221,13 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
     from datetime import datetime, timezone
     from collections import defaultdict
     from packages.benchmarks.runners.streaming_runner import StreamingRunConfig, run_streaming_benchmark
-    from packages.ingest.youtube.stream_pipe import stream_youtube_audio
+    from packages.ingest.youtube.stream_pipe import stream_audio_chunks, stream_youtube_audio
     from packages.benchmarks.ground_truth.vtt_reference import extract_vtt_clip_text
     from packages.benchmarks.metrics.text_metrics import word_error_rate, char_error_rate
 
     model_ids = config["model_ids"]
     sample_seconds = config.get("sample_seconds", 120)
+    segment_start_seconds = int(max(0, int(config.get("segment_start_seconds") or 0)))
     model_params_cfg = config.get("model_params") or {}
 
     # Zjisti cestu k audio_cache — použije se pro fallback na lokální WAV
@@ -249,7 +250,11 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
 
     for source in source_entries:
         # VTT reference načti jednou per source
-        ref_text = extract_vtt_clip_text(source.video_id, 0, sample_seconds, subtitles_root) if source.video_id else None
+        ref_text = (
+            extract_vtt_clip_text(source.video_id, segment_start_seconds, sample_seconds, subtitles_root)
+            if source.video_id
+            else None
+        )
 
         for model_id in model_ids:
             # Per-model params
@@ -264,10 +269,10 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                 setting_label = setting.get("label", setting_id)
                 chunk_seconds = int(setting.get("chunk_seconds", 30))
 
-                # Merge: base_params + setting params (threads, beam_size atd.)
+                # Merge: explicit model params mají prioritu před preset settingem.
                 params = {**base_params}
                 for k in ("threads", "beam_size", "best_of", "no_fallback", "language"):
-                    if k in setting:
+                    if k in setting and k not in params:
                         params[k] = setting[k]
 
                 run_num += 1
@@ -283,18 +288,18 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                     progress_cb(msg, _pct if _pct is not None else _p)
 
                 # Lokální WAV: buď zdroj je přímo .wav soubor,
-                # nebo máme cached audio pro toto video_id
+                # nebo máme cached audio pro toto video_id.
+                # Pokud je požadovaný start offset > 0, jedeme přes stream_audio_chunks(start_offset),
+                # aby se opravdu přepisoval jen daný úsek.
                 _cached_wav = _audio_cache_root / f"{source.video_id}.wav" if source.video_id else None
-                is_local_wav = (
-                    (source.origin_type == "local_file" and source.value and source.value.lower().endswith(".wav"))
-                    or (_cached_wav is not None and _cached_wav.exists())
-                )
-                if is_local_wav and _cached_wav and _cached_wav.exists() and not (
-                    source.origin_type == "local_file" and source.value and source.value.lower().endswith(".wav")
-                ):
-                    # Nahraď URL lokálním WAV
+                local_media_path: str | None = None
+                effective_source = source
+                if source.origin_type == "local_file" and source.value:
+                    local_media_path = source.value
+                elif _cached_wav is not None and _cached_wav.exists():
+                    local_media_path = str(_cached_wav)
                     from packages.ingest.source_resolver import SourceEntry as _SE
-                    source = _SE(
+                    effective_source = _SE(
                         source_id=source.source_id,
                         label=source.label,
                         origin_type="local_file",
@@ -303,6 +308,18 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                         canonical_url=source.canonical_url,
                         video_id=source.video_id,
                     )
+
+                # Direct WAV bypass je validní jen pro buffered adaptery
+                # (whisper_cpp, qwen). Live adaptery (vosk/sherpa/faster_whisper)
+                # potřebují audio_generator.
+                _is_buffered_model = model_id.startswith("whisper_cpp") or model_id.startswith("qwen")
+                use_direct_wav = (
+                    _is_buffered_model
+                    and
+                    local_media_path is not None
+                    and str(local_media_path).lower().endswith(".wav")
+                    and segment_start_seconds <= 0
+                )
                 cfg = StreamingRunConfig(
                     model_id=model_id,
                     model_params=params,
@@ -312,17 +329,29 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                     chunk_seconds=chunk_seconds,
                     progress_callback=_run_progress_cb,
                     transcript_callback=transcript_cb,
-                    source_wav_path=source.value if is_local_wav else None,
+                    source_wav_path=local_media_path if use_direct_wav else None,
                 )
 
                 try:
-                    result = run_streaming_benchmark(
-                        source=source,
-                        audio_generator=None if is_local_wav else stream_youtube_audio(
+                    if local_media_path and not use_direct_wav:
+                        audio_gen = stream_audio_chunks(
+                            local_media_path,
+                            chunk_seconds=0.1,
+                            max_seconds=float(sample_seconds),
+                            start_offset_seconds=float(segment_start_seconds),
+                        )
+                    elif local_media_path:
+                        audio_gen = None
+                    else:
+                        audio_gen = stream_youtube_audio(
                             source.canonical_url or source.value,
                             chunk_seconds=0.1,
                             max_seconds=float(sample_seconds),
-                        ),
+                            start_offset_seconds=float(segment_start_seconds),
+                        )
+                    result = run_streaming_benchmark(
+                        source=effective_source,
+                        audio_generator=audio_gen,
                         config=cfg,
                     )
                     result["model_id"] = model_id

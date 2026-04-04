@@ -13,7 +13,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../../api/client'
 import { ModelParamsForm } from '../ModelParamsForm'
 import { loadSettings, saveSettings } from './useTranscribeStorage'
-import type { LibraryItem, ModelDescriptor, BenchmarkJobStatus, LiveJobProgress } from '../../types'
+import type { LibraryItem, ModelDescriptor, BenchmarkJobStatus, LiveJobProgress, SegmentBundle } from '../../types'
+import { formatClockHms, formatDateTimeDayMonthHm, formatDateTimeShort } from '../../lib/time'
 
 /** Seřadí položky knihovny stejně jako LibraryPage (přečte uložené nastavení z localStorage). */
 function sortLibraryItems(items: LibraryItem[]): LibraryItem[] {
@@ -95,7 +96,39 @@ function parseTime(s: string): number | null {
   return null
 }
 
+type SuitabilityGrade = 'green' | 'amber' | 'red'
+
+function toneTextClass(level: SuitabilityGrade): string {
+  if (level === 'green') return 'text-emerald-300'
+  if (level === 'amber') return 'text-amber-300'
+  return 'text-red-300'
+}
+
 const ACTIVE_JOB_KEY = 'astt_active_transcribe_job'
+const PRESTART_DELAY_MS = 2000
+const TRANSCRIPT_BLOCK_SEPARATOR = '\n\n\n'
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function fmtParamValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value == null) return 'null'
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function formatElapsedMmSs(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds))
+  const m = Math.floor(safe / 60)
+  const s = safe % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
 
 export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop, audioDuration, onModelChange, onSourceLabelChange, onVideoIdChange }: Props) {
   // Načti uložená nastavení
@@ -115,8 +148,13 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
   const [rangeFrom, setRangeFrom] = useState(_saved.range_from ?? '00:00')
   const [rangeTo, setRangeTo] = useState(_saved.range_to ?? '')
   const [rangeError, setRangeError] = useState('')
+  const [segmentBundle, setSegmentBundle] = useState<SegmentBundle | null>(null)
+  const [segmentBundleLoading, setSegmentBundleLoading] = useState(false)
+  const [segmentBundleEnabled, setSegmentBundleEnabled] = useState<boolean>(_saved.segment_bundle_enabled ?? true)
   const [tsEnabled, setTsEnabled] = useState(_saved.ts_enabled ?? true)
-  const [tsIntervalS, setTsIntervalS] = useState(_saved.ts_interval_s ?? 60)
+  const initialTsInterval = Math.max(5, Number(_saved.ts_interval_s ?? 60) || 60)
+  const [tsIntervalS, setTsIntervalS] = useState(initialTsInterval)
+  const [tsIntervalDraft, setTsIntervalDraft] = useState(String(initialTsInterval))
 
   // --- Model ---
   const [registry, setRegistry] = useState<ModelDescriptor[]>([])
@@ -131,6 +169,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
   const [live, setLive] = useState<LiveJobProgress | null>(null)
   const [running, setRunning] = useState<boolean>(_savedJob?.status === 'running' || _savedJob?.status === 'pending')
   const [msg, setMsg] = useState('')
+  const [copyMsg, setCopyMsg] = useState('')
   const [finalMetrics, setFinalMetrics] = useState<{
     rtf: number | null; latency_ms: number | null; ram_mb: number | null
     cpu_percent: number | null; wer: number | null
@@ -140,7 +179,16 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
   // --- Live segmenty ---
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
   const [lastTranscript, setLastTranscript] = useState('')
+  const [lastCoreTranscript, setLastCoreTranscript] = useState('')
+  const [segmentedRunActive, setSegmentedRunActive] = useState(false)
+  const [segmentProgressLabel, setSegmentProgressLabel] = useState('')
   const segmentsEndRef = useRef<HTMLDivElement>(null)
+  const runStartLineRef = useRef('')
+  const runEndLineRef = useRef('')
+  const runRangeRef = useRef<{ startS: number; endS: number | null }>({ startS: 0, endS: null })
+  const runWallStartedAtMsRef = useRef<number | null>(null)
+  const syntheticTsLinesRef = useRef<string[]>([])
+  const lastSyntheticBoundaryRef = useRef<number>(-1)
 
   // --- Diagnostika ---
   const [showDiag, setShowDiag] = useState(true)
@@ -148,6 +196,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const cancelRequestedRef = useRef(false)
 
   // Sekundový čítač elapsed pro zobrazení při stagnaci progressu
   useEffect(() => {
@@ -195,6 +244,40 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (sourceTab !== 'library' || !selectedVideoId) {
+      setSegmentBundle(null)
+      setSegmentBundleLoading(false)
+      return
+    }
+    let cancelled = false
+    setSegmentBundleLoading(true)
+    api.library.getSegmentBundle(selectedVideoId).then(bundle => {
+      if (cancelled) return
+      setSegmentBundle(bundle)
+    }).catch(() => {
+      if (cancelled) return
+      setSegmentBundle(null)
+    }).finally(() => {
+      if (!cancelled) setSegmentBundleLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [sourceTab, selectedVideoId])
+
+  useEffect(() => {
+    setTsIntervalDraft(String(tsIntervalS))
+  }, [tsIntervalS])
+
+  const commitTsIntervalDraft = useCallback(() => {
+    const parsed = Number(tsIntervalDraft)
+    const normalized = Number.isFinite(parsed)
+      ? Math.max(5, Math.min(3600, Math.floor(parsed)))
+      : 5
+    setTsIntervalS(normalized)
+    setTsIntervalDraft(String(normalized))
+    saveSettings({ ts_interval_s: normalized })
+  }, [tsIntervalDraft])
+
   // Při změně audioDuration nastavíme výchozí rangeTo
   useEffect(() => {
     if (audioDuration && audioDuration > 0 && !rangeTo) {
@@ -202,39 +285,174 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     }
   }, [audioDuration, rangeTo])
 
+  const selectedLibraryItem = library.find(v => v.video_id === selectedVideoId)
+  const sourceDisplayName = sourceTab === 'library'
+    ? (selectedLibraryItem?.title || '')
+    : (uploadedSource?.original_name || '')
   const selectedModelDesc = registry.find(m => m.model_id === selectedModel)
+  const selectedModelLabel = selectedModelDesc?.label || selectedModel
+  const streamSuitability: SuitabilityGrade = selectedModelDesc?.stream_suitability ?? 'red'
+  const transcriptSuitability: SuitabilityGrade = selectedModelDesc?.transcript_suitability ?? 'red'
+  const modelPreviewWords = (selectedModelLabel || '')
+    .split(/[^A-Za-z0-9-]+/)
+    .map(w => w.trim())
+    .filter(Boolean)
+  const modelWordsForPreview = modelPreviewWords.length > 0 ? modelPreviewWords : [selectedModelLabel]
+  const segmentBundleActive = sourceTab === 'library'
+    && !!segmentBundle
+    && segmentBundleEnabled
+    && segmentBundle.segments.length > 0
 
-  // Přidání nových segmentů z live transcriptu
-  useEffect(() => {
-    if (!live?.transcript || live.transcript === lastTranscript) return
-    const newText = live.transcript
-    setLastTranscript(newText)
+  const composeTranscript = useCallback((coreText: string): string => {
+    const parts: string[] = []
+    const startLine = runStartLineRef.current.trim()
+    const body = coreText.trim()
+    const endLine = runEndLineRef.current.trim()
+    const syntheticTsBlock = syntheticTsLinesRef.current.join('\n').trim()
+    if (startLine) parts.push(startLine)
+    if (body) {
+      const bodyLines = body
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+      if (bodyLines.length > 1) {
+        parts.push(bodyLines[0])
+        parts.push('α START')
+        if (syntheticTsBlock) parts.push(syntheticTsBlock)
+        parts.push(bodyLines.slice(1).join('\n'))
+      } else {
+        parts.push('α START')
+        if (syntheticTsBlock) parts.push(syntheticTsBlock)
+        parts.push(bodyLines[0])
+      }
+    } else if (startLine && syntheticTsBlock) {
+      parts.push('α START')
+      parts.push(syntheticTsBlock)
+    }
+    if (endLine) parts.push(endLine)
+    return parts.join(TRANSCRIPT_BLOCK_SEPARATOR).trim()
+  }, [])
 
-    // Rozdělení na segmenty (řádky nebo odstavce)
-    const newSegments = newText
+  const buildSettingsSummary = useCallback((desc: ModelDescriptor | undefined, overrides: Record<string, unknown>): string => {
+    if (!desc) return '-'
+    const byName = new Map(Object.entries(overrides))
+    const entries = desc.params.map(p => ({
+      name: p.name,
+      value: byName.has(p.name) ? byName.get(p.name) : p.default,
+    }))
+    for (const [name, value] of byName.entries()) {
+      if (!entries.some(e => e.name === name)) entries.push({ name, value })
+    }
+    if (entries.length === 0) return '-'
+    return entries.map(e => `${e.name}=${fmtParamValue(e.value)}`).join(', ')
+  }, [])
+
+  const buildRangeLabel = useCallback((startS: number, endS: number | null): string => {
+    const start = Math.max(0, Math.floor(startS))
+    const end = endS == null ? '?' : fmtTime(Math.max(start, Math.floor(endS)))
+    return `${fmtTime(start)}–${end}`
+  }, [])
+
+  const appendOmegaLine = useCallback(() => {
+    const finished = formatDateTimeDayMonthHm(Date.now())
+    const range = buildRangeLabel(runRangeRef.current.startS, runRangeRef.current.endS)
+    const wallStarted = runWallStartedAtMsRef.current
+    const elapsed = wallStarted != null
+      ? formatElapsedMmSs((Date.now() - wallStarted) / 1000)
+      : '--:--'
+    runEndLineRef.current = `Ω END | Ukončeno: ${finished} | Rozsah zdroje: ${range} | Přepis celkem trval ${elapsed}`
+  }, [buildRangeLabel])
+
+  const copyText = useCallback(async (value: string, label: string) => {
+    const text = value.trim()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopyMsg(`${label} zkopírován.`)
+    } catch {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+        setCopyMsg(`${label} zkopírován.`)
+      } catch {
+        setCopyMsg(`Kopírování selhalo: ${label}.`)
+      }
+    }
+    window.setTimeout(() => setCopyMsg(''), 2200)
+  }, [])
+
+  const publishTranscript = useCallback((coreText: string, audioSecs?: number) => {
+    const normalizedCore = coreText.trim()
+    const hasInlineTimestamps = /\[\d{2}:\d{2}\]/.test(normalizedCore)
+    if (!hasInlineTimestamps && tsEnabled && audioSecs != null && audioSecs > 0) {
+      const boundary = Math.floor(audioSecs / tsIntervalS) * tsIntervalS
+      if (boundary > lastSyntheticBoundaryRef.current && boundary > 0) {
+        const m = Math.floor(boundary / 60)
+        const s = boundary % 60
+        syntheticTsLinesRef.current.push(`[${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}]`)
+        lastSyntheticBoundaryRef.current = boundary
+      }
+    } else if (hasInlineTimestamps) {
+      syntheticTsLinesRef.current = []
+      lastSyntheticBoundaryRef.current = -1
+    }
+    setLastCoreTranscript(normalizedCore)
+    const normalized = composeTranscript(normalizedCore)
+    setLastTranscript(normalized)
+    const lines = normalized
       .split(/\n+/)
       .map(s => s.trim())
       .filter(Boolean)
-
-    setSegments(newSegments.map((text, i) => ({
-      text,
-      timestamp: new Date().toLocaleTimeString(),
-      isNew: i === newSegments.length - 1,
+    setSegments(lines.map((line, i) => ({
+      text: line,
+      timestamp: formatClockHms(Date.now()),
+      isNew: i === lines.length - 1,
     })))
+    onTranscriptUpdate(normalized, audioSecs)
+    setTimeout(() => segmentsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+  }, [composeTranscript, onTranscriptUpdate, tsEnabled, tsIntervalS])
+
+  // Přidání nových segmentů z live transcriptu
+  useEffect(() => {
+    if (segmentedRunActive) return
+    const streamedText = (live?.transcript_ts && live.transcript_ts.trim())
+      ? live.transcript_ts
+      : live?.transcript
+    if (!streamedText || streamedText === lastCoreTranscript) return
+    const newText = streamedText
 
     // Odvoď audio čas pro timestamp:
     // 1) z progress message "Xs zprac." (benchmark mode)
     // 2) z live.percent (10–90 = replay fáze) × délka audia
     const audioMatch = live?.message?.match(/(\d+(?:\.\d+)?)s\s+zprac/)
-    let audioSecs: number | undefined = audioMatch ? parseFloat(audioMatch[1]) : undefined
-    if (audioSecs == null && live?.percent != null && live.percent >= 10 && audioDuration && audioDuration > 0) {
-      audioSecs = ((live.percent - 10) / 80) * audioDuration
+    let audioSecs: number | undefined
+    const runStart = runRangeRef.current.startS
+    const runEnd = runRangeRef.current.endS
+    const runSpan = runEnd != null ? Math.max(1, runEnd - runStart) : null
+    if (audioMatch) {
+      const processedS = parseFloat(audioMatch[1])
+      if (!Number.isNaN(processedS)) {
+        audioSecs = runSpan != null
+          ? Math.min(runStart + processedS, runEnd ?? (runStart + processedS))
+          : runStart + processedS
+      }
     }
-    onTranscriptUpdate(newText, audioSecs)
-
-    // Auto-scroll
-    setTimeout(() => segmentsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
-  }, [live?.transcript, live?.message, lastTranscript, onTranscriptUpdate])
+    if (audioSecs == null && live?.percent != null && live.percent >= 10) {
+      if (runSpan != null) {
+        audioSecs = runStart + ((live.percent - 10) / 80) * runSpan
+      } else if (audioDuration && audioDuration > 0) {
+        audioSecs = ((live.percent - 10) / 80) * audioDuration
+      }
+    }
+    publishTranscript(newText, audioSecs)
+  }, [live?.transcript, live?.transcript_ts, live?.message, live?.percent, lastCoreTranscript, audioDuration, segmentedRunActive, publishTranscript])
 
   const handleUpload = useCallback(async (file: File) => {
     setUploading(true)
@@ -254,6 +472,27 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     }
   }, [onAudioReady])
 
+  const loadRunMetrics = useCallback((runId: string) => {
+    api.runs.get(runId).then(run => {
+      const res = run.results?.[0]
+      if (!res) return
+      const agg = res.aggregate
+      const chunks = res.source_metrics?.[0]?.chunk_metrics ?? []
+      const rtfs = chunks.map(c => c.rtf).filter((v): v is number => v != null).sort((a, b) => a - b)
+      const p50idx = Math.floor(rtfs.length * 0.5)
+      const p95idx = Math.floor(rtfs.length * 0.95)
+      setFinalMetrics({
+        rtf: agg.rtf,
+        latency_ms: agg.latency_ms,
+        ram_mb: agg.ram_mb,
+        cpu_percent: agg.cpu_percent,
+        wer: agg.wer,
+        chunk_p50_ms: rtfs.length > 0 ? (rtfs[p50idx] ?? null) : null,
+        chunk_p95_ms: rtfs.length > 0 ? (rtfs[p95idx] ?? null) : null,
+      })
+    }).catch(() => {})
+  }, [])
+
   const startPoll = useCallback((jobId: string) => {
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(async () => {
@@ -267,35 +506,21 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         if (liveData) setLive(liveData)
         if (['completed', 'failed', 'cancelled'].includes(jobStatus.status)) {
           clearInterval(pollRef.current!)
+          if (jobStatus.status === 'completed') {
+            appendOmegaLine()
+            publishTranscript(lastCoreTranscript, runRangeRef.current.endS ?? undefined)
+          }
           setRunning(false)
           localStorage.removeItem(ACTIVE_JOB_KEY)
           onJobStop?.()
           // Po dokončení načti finální metriky z run výsledku
           if (jobStatus.status === 'completed' && jobStatus.run_id) {
-            api.runs.get(jobStatus.run_id).then(run => {
-              const res = run.results?.[0]
-              if (!res) return
-              const agg = res.aggregate
-              // P50/P95 latence z chunk_metrics
-              const chunks = res.source_metrics?.[0]?.chunk_metrics ?? []
-              const rtfs = chunks.map(c => c.rtf).filter((v): v is number => v != null).sort((a, b) => a - b)
-              const p50idx = Math.floor(rtfs.length * 0.5)
-              const p95idx = Math.floor(rtfs.length * 0.95)
-              setFinalMetrics({
-                rtf: agg.rtf,
-                latency_ms: agg.latency_ms,
-                ram_mb: agg.ram_mb,
-                cpu_percent: agg.cpu_percent,
-                wer: agg.wer,
-                chunk_p50_ms: rtfs.length > 0 ? (rtfs[p50idx] ?? null) : null,
-                chunk_p95_ms: rtfs.length > 0 ? (rtfs[p95idx] ?? null) : null,
-              })
-            }).catch(() => {})
+            loadRunMetrics(jobStatus.run_id)
           }
         }
       } catch {}
     }, 1200)
-  }, [onJobStop])
+  }, [onJobStop, loadRunMetrics, appendOmegaLine, publishTranscript, lastCoreTranscript])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
@@ -310,35 +535,202 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     return { startS: from, durationS: to - from }
   }
 
+  const runSegmentBundle = useCallback(async (opts: {
+    bundle: SegmentBundle
+    videoId: string
+    sourceLabel: string
+  }) => {
+    const { bundle, videoId, sourceLabel } = opts
+    const total = bundle.segments.length
+    if (total === 0) throw new Error('Segment bundle neobsahuje žádné segmenty.')
+
+    cancelRequestedRef.current = false
+    setSegmentedRunActive(true)
+    setSegmentProgressLabel('')
+    const completedTexts: string[] = []
+
+    try {
+      for (let idx = 0; idx < total; idx += 1) {
+        if (cancelRequestedRef.current) throw new Error('cancelled_by_user')
+        const seg = bundle.segments[idx]
+        const segStart = Math.max(0, Math.floor(seg.start_s))
+        const segDuration = Math.max(1, Math.ceil(seg.duration_s))
+        setSegmentProgressLabel(`Segment ${idx + 1}/${total} (${fmtTime(seg.start_s)}–${fmtTime(seg.end_s)})`)
+
+        const jobStatus = await api.benchmark.createJob({
+          video_ids: [videoId],
+          model_ids: [selectedModel],
+          setting_ids: ['balanced'],
+          evaluation_mode: 'streaming',
+          sample_seconds: segDuration,
+          segment_start_seconds: segStart,
+          model_params: Object.keys(modelParams).length > 0 ? { [selectedModel]: modelParams } : undefined,
+          label: `Přepis segment ${idx + 1}/${total}: ${selectedModelDesc?.label || selectedModel}`,
+        })
+        setJob(jobStatus)
+        setLive(null)
+        localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(jobStatus))
+
+        let finalSegmentText = ''
+        while (true) {
+          if (cancelRequestedRef.current) {
+            await api.benchmark.cancelJob(jobStatus.job_id).catch(() => {})
+            throw new Error('cancelled_by_user')
+          }
+          const [currentJob, liveData] = await Promise.all([
+            api.benchmark.getJob(jobStatus.job_id),
+            api.benchmark.getLive(jobStatus.job_id).catch(() => null),
+          ])
+          setJob(currentJob)
+          localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(currentJob))
+          if (liveData) {
+            setLive(liveData)
+            const partial = ((liveData.transcript_ts && liveData.transcript_ts.trim())
+              ? liveData.transcript_ts
+              : liveData.transcript || '').trim()
+            if (partial) {
+              finalSegmentText = partial
+              const combined = [...completedTexts, partial].filter(Boolean).join(TRANSCRIPT_BLOCK_SEPARATOR)
+              const pct = Math.max(0, Math.min(100, liveData.percent || 0)) / 100
+              publishTranscript(combined, seg.start_s + seg.duration_s * pct)
+            }
+          }
+
+          if (['completed', 'failed', 'cancelled'].includes(currentJob.status)) {
+            if (currentJob.status === 'completed') {
+              if (currentJob.run_id) loadRunMetrics(currentJob.run_id)
+              if (!finalSegmentText && liveData?.transcript) {
+                finalSegmentText = ((liveData.transcript_ts && liveData.transcript_ts.trim())
+                  ? liveData.transcript_ts
+                  : liveData.transcript).trim()
+              }
+              completedTexts.push(finalSegmentText)
+              const combinedFinal = completedTexts.filter(Boolean).join(TRANSCRIPT_BLOCK_SEPARATOR)
+              if (combinedFinal) publishTranscript(combinedFinal, seg.end_s)
+            } else if (currentJob.status === 'cancelled') {
+              throw new Error('cancelled_by_user')
+            } else {
+              throw new Error(currentJob.error || `Segment ${idx + 1} selhal.`)
+            }
+            break
+          }
+          await sleep(1200)
+        }
+      }
+      appendOmegaLine()
+      publishTranscript(completedTexts.filter(Boolean).join(TRANSCRIPT_BLOCK_SEPARATOR), runRangeRef.current.endS ?? undefined)
+      setMsg(`Segment bundle dokončen: ${total} segmentů (${sourceLabel}).`)
+      setSegmentProgressLabel(`Hotovo ${total}/${total}`)
+    } finally {
+      setSegmentedRunActive(false)
+      localStorage.removeItem(ACTIVE_JOB_KEY)
+    }
+  }, [
+    selectedModel,
+    modelParams,
+    selectedModelDesc,
+    publishTranscript,
+    loadRunMetrics,
+    appendOmegaLine,
+  ])
+
   const handleStart = useCallback(async () => {
     if (!selectedModel) { setMsg('Vyberte model'); return }
-    const range = validateRange()
-    if (!range) return
     setMsg('')
     setRunning(true)
     setSegments([])
     setLastTranscript('')
+    setLastCoreTranscript('')
+    setFinalMetrics(null)
+    cancelRequestedRef.current = false
+    runStartLineRef.current = ''
+    runEndLineRef.current = ''
+    runRangeRef.current = { startS: 0, endS: null }
+    runWallStartedAtMsRef.current = null
+    syntheticTsLinesRef.current = []
+    lastSyntheticBoundaryRef.current = -1
 
     let sources: string[] | undefined
     let videoIds: string[] | undefined
-    let audioUrl = ''
+    let sourceLabel = ''
+    let resolvedSourceDurationS: number | null = null
 
     if (sourceTab === 'library') {
       if (!selectedVideoId) { setMsg('Vyberte video'); setRunning(false); return }
       videoIds = [selectedVideoId]
-      audioUrl = `/api/transcribe/library-audio/${selectedVideoId}`
-      onAudioReady(audioUrl, '')
+      onAudioReady(`/api/transcribe/library-audio/${selectedVideoId}`, '')
       const vid = library.find(v => v.video_id === selectedVideoId)
-      onSourceLabelChange?.(vid?.title || '')
+      sourceLabel = vid?.title || ''
+      resolvedSourceDurationS = typeof vid?.duration_seconds === 'number' ? vid.duration_seconds : null
+      onSourceLabelChange?.(sourceLabel)
       onVideoIdChange?.(selectedVideoId)
     } else {
       if (!uploadedSource) { setMsg('Nahrajte soubor'); setRunning(false); return }
       sources = [uploadedSource.source_path]
-      audioUrl = uploadedSource.url
-      onSourceLabelChange?.(uploadedSource.original_name)
+      sourceLabel = uploadedSource.original_name
+      resolvedSourceDurationS = typeof audioDuration === 'number' && audioDuration > 0 ? audioDuration : null
+      onSourceLabelChange?.(sourceLabel)
       onVideoIdChange?.('')
     }
     onModelChange?.(selectedModel)
+
+    if (segmentBundleActive && segmentBundle) {
+      runRangeRef.current = {
+        startS: segmentBundle.segments[0]?.start_s ?? 0,
+        endS: segmentBundle.segments[segmentBundle.segments.length - 1]?.end_s ?? null,
+      }
+    } else if (rangeMode === 'segment') {
+      const parsedStart = parseTime(rangeFrom)
+      const parsedEnd = parseTime(rangeTo)
+      runRangeRef.current = {
+        startS: parsedStart ?? 0,
+        endS: parsedEnd ?? null,
+      }
+    } else {
+      runRangeRef.current = {
+        startS: 0,
+        endS: resolvedSourceDurationS,
+      }
+    }
+
+    const settingsSummary = buildSettingsSummary(selectedModelDesc, modelParams)
+    runStartLineRef.current = `α START | Zdroj: ${sourceLabel || '-'} | Model: ${selectedModelLabel || selectedModel} | Nastavení: ${settingsSummary}`
+
+    const validatedRange = segmentBundleActive ? null : validateRange()
+    if (!segmentBundleActive && !validatedRange) {
+      setRunning(false)
+      return
+    }
+
+    publishTranscript('', runRangeRef.current.startS)
+    setMsg('Příprava přepisu (start za 2s)...')
+    await sleep(PRESTART_DELAY_MS)
+    if (cancelRequestedRef.current) {
+      setMsg('Přepis zastaven před spuštěním.')
+      setRunning(false)
+      return
+    }
+    runWallStartedAtMsRef.current = Date.now()
+    setMsg('')
+
+    if (segmentBundleActive && selectedVideoId && segmentBundle) {
+      try {
+        await runSegmentBundle({
+          bundle: segmentBundle,
+          videoId: selectedVideoId,
+          sourceLabel: sourceLabel || selectedVideoId,
+        })
+      } catch (e: unknown) {
+        const text = e instanceof Error ? e.message : String(e)
+        if (text.includes('cancelled_by_user')) setMsg('Přepis zastaven uživatelem.')
+        else setMsg(text || 'Segmentovaný přepis selhal.')
+      } finally {
+        setSegmentProgressLabel('')
+        setRunning(false)
+        onJobStop?.()
+      }
+      return
+    }
 
     try {
       const jobStatus = await api.benchmark.createJob({
@@ -347,8 +739,8 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         model_ids: [selectedModel],
         setting_ids: ['balanced'],
         evaluation_mode: 'streaming',
-        sample_seconds: rangeMode === 'segment' ? range.durationS : 99999,
-        segment_start_seconds: rangeMode === 'segment' && range.startS > 0 ? range.startS : undefined,
+        sample_seconds: rangeMode === 'segment' ? (validatedRange?.durationS ?? 99999) : 99999,
+        segment_start_seconds: rangeMode === 'segment' && (validatedRange?.startS ?? 0) > 0 ? validatedRange?.startS : undefined,
         model_params: Object.keys(modelParams).length > 0 ? { [selectedModel]: modelParams } : undefined,
         label: `Přepis: ${selectedModelDesc?.label || selectedModel}${rangeMode === 'segment' ? ` (${rangeFrom}-${rangeTo})` : ''}`,
       })
@@ -359,15 +751,49 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
       setMsg(e instanceof Error ? e.message : 'Chyba při spuštění')
       setRunning(false)
     }
-  }, [selectedModel, sourceTab, selectedVideoId, uploadedSource, modelParams, selectedModelDesc, rangeMode, rangeFrom, rangeTo, onAudioReady, startPoll])
+  }, [
+    selectedModel,
+    sourceTab,
+    selectedVideoId,
+    uploadedSource,
+    modelParams,
+    selectedModelDesc,
+    rangeMode,
+    rangeFrom,
+    rangeTo,
+    onAudioReady,
+    onSourceLabelChange,
+    onVideoIdChange,
+    onModelChange,
+    startPoll,
+    validateRange,
+    segmentBundleEnabled,
+    segmentBundle,
+    segmentBundleActive,
+    runSegmentBundle,
+    library,
+    audioDuration,
+    publishTranscript,
+    buildSettingsSummary,
+    selectedModelLabel,
+    onJobStop,
+  ])
 
   const handleCancel = useCallback(async () => {
-    if (!job) return
+    cancelRequestedRef.current = true
+    if (!job) {
+      setRunning(false)
+      return
+    }
     await api.benchmark.cancelJob(job.job_id).catch(() => {})
+    if (segmentedRunActive) {
+      setMsg('Ruším běžící segment...')
+      return
+    }
     setRunning(false)
     localStorage.removeItem(ACTIVE_JOB_KEY)
     onJobStop?.()
-  }, [job, onJobStop])
+  }, [job, onJobStop, segmentedRunActive])
 
   const statusColor = (s?: string) => {
     if (s === 'completed') return 'text-green-400'
@@ -409,7 +835,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
 
       {/* ── 1. Zdroj audia ── */}
       <section className="bg-gray-750 rounded border border-gray-700 p-3">
-        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Zdroj audia</h3>
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 select-text">Zdroj audia</h3>
         <div className="flex gap-1 mb-2">
           {(['library', 'upload'] as const).map(t => (
             <button key={t} onClick={() => { setSourceTab(t); saveSettings({ source_tab: t }) }}
@@ -453,6 +879,26 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
             {uploadError && <div className="text-red-400 text-xs mt-1">{uploadError}</div>}
           </div>
         )}
+        {sourceDisplayName && (
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <span className="text-gray-400 whitespace-nowrap">Kopírovatelné:</span>
+            <input
+              value={sourceDisplayName}
+              readOnly
+              onFocus={(e) => e.currentTarget.select()}
+              onClick={(e) => e.currentTarget.select()}
+              className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 font-mono select-text"
+              title={sourceDisplayName}
+            />
+            <button
+              type="button"
+              onClick={() => { void copyText(sourceDisplayName, 'Název audia') }}
+              className="ml-auto px-2 py-0.5 rounded border border-gray-600 text-gray-200 hover:bg-gray-700"
+            >
+              Kopírovat
+            </button>
+          </div>
+        )}
       </section>
 
       {/* ── 2. Rozsah přepisu ── */}
@@ -469,7 +915,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
           </button>
         </div>
 
-        {rangeMode === 'segment' && (
+        {rangeMode === 'segment' && !segmentBundleActive && (
           <div className="flex items-center gap-2">
             <div className="flex flex-col gap-0.5">
               <label className="text-xs text-gray-400">Od</label>
@@ -494,8 +940,51 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
           </div>
         )}
         {rangeError && <div className="text-red-400 text-xs mt-1">{rangeError}</div>}
-        {rangeMode === 'segment' && (
+        {rangeMode === 'segment' && !segmentBundleActive && (
           <div className="text-xs text-gray-500 mt-1">Formát: MM:SS nebo H:MM:SS</div>
+        )}
+
+        {sourceTab === 'library' && (
+          <div className="mt-2 pt-2 border-t border-gray-700 space-y-1">
+            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-gray-300">
+              <input
+                type="checkbox"
+                checked={segmentBundleEnabled}
+                disabled={segmentBundleLoading || !segmentBundle}
+                onChange={e => {
+                  setSegmentBundleEnabled(e.target.checked)
+                  saveSettings({ segment_bundle_enabled: e.target.checked })
+                }}
+                className="accent-cyan-500 w-3.5 h-3.5"
+              />
+              Použít uložený segment bundle z Library
+            </label>
+            {segmentBundleLoading && (
+              <div className="text-xs text-gray-400">Načítám segment bundle...</div>
+            )}
+            {!segmentBundleLoading && !segmentBundle && (
+              <div className="text-xs text-gray-500">Pro vybrané video není uložený bundle. Nastavte ho v Library.</div>
+            )}
+            {segmentBundle && (
+              <div className="text-xs text-gray-400">
+                {segmentBundle.segments.length} segmentů
+                {' | '}
+                režim {segmentBundle.mode}
+                {' | '}
+                tolerance ±{segmentBundle.tolerance_seconds.toFixed(1)}s
+                {' | '}
+                aktualizace {formatDateTimeShort(segmentBundle.updated_at)}
+              </div>
+            )}
+            {segmentBundleActive && (
+              <div className="text-xs text-cyan-300">
+                Aktivní segment bundle: při startu poběží segmenty postupně jako jeden logický přepis.
+              </div>
+            )}
+            {segmentProgressLabel && (
+              <div className="text-xs text-cyan-300">{segmentProgressLabel}</div>
+            )}
+          </div>
         )}
 
         {/* Časové značky */}
@@ -510,9 +999,17 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
             <div className="flex items-center gap-1.5 text-xs text-gray-400">
               <span>každých</span>
               <input
-                type="number" min={10} max={3600} step={10}
-                value={tsIntervalS}
-                onChange={e => { const v = Math.max(10, parseInt(e.target.value) || 60); setTsIntervalS(v); saveSettings({ ts_interval_s: v }) }}
+                type="number" min={5} max={3600} step={1}
+                value={tsIntervalDraft}
+                onChange={e => setTsIntervalDraft(e.target.value)}
+                onBlur={commitTsIntervalDraft}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitTsIntervalDraft()
+                    ;(e.currentTarget as HTMLInputElement).blur()
+                  }
+                }}
                 className="bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-xs text-gray-100 w-16 text-center"
               />
               <span>s</span>
@@ -523,7 +1020,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
 
       {/* ── 3. Model ── */}
       <section className="bg-gray-750 rounded border border-gray-700 p-3">
-        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Model STT</h3>
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 select-text">Model STT</h3>
         <select value={selectedModel} onChange={e => {
           const mid = e.target.value
           setSelectedModel(mid)
@@ -534,6 +1031,45 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
           className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100 mb-2">
           {registry.map(m => <option key={m.model_id} value={m.model_id}>{m.label}</option>)}
         </select>
+        {selectedModel && (
+          <div className="mb-2 space-y-1">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-400 whitespace-nowrap">Kopírovatelné:</span>
+              <input
+                value={selectedModelLabel}
+                readOnly
+                onFocus={(e) => e.currentTarget.select()}
+                onClick={(e) => e.currentTarget.select()}
+                className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 font-mono select-text"
+                title={selectedModelLabel}
+              />
+              <button
+                type="button"
+                onClick={() => { void copyText(selectedModelLabel, 'Model STT') }}
+                className="ml-auto px-2 py-0.5 rounded border border-gray-600 text-gray-200 hover:bg-gray-700"
+              >
+                Kopírovat
+              </button>
+            </div>
+            <div className="text-sm font-mono select-text" title={selectedModelLabel}>
+              {modelWordsForPreview.map((word, idx) => (
+                <span
+                  key={`${word}-${idx}`}
+                  className={idx === 0
+                    ? toneTextClass(streamSuitability)
+                    : idx === 1
+                      ? toneTextClass(transcriptSuitability)
+                      : 'text-gray-200'}
+                >
+                  {idx > 0 ? ' ' : ''}{word}
+                </span>
+              ))}
+            </div>
+            <div className="text-[11px] text-gray-500">
+              1. slovo = vhodnost pro live stream, 2. slovo = vhodnost pro přepis.
+            </div>
+          </div>
+        )}
         {selectedModelDesc && selectedModelDesc.params.length > 0 && (
           <ModelParamsForm modelId={selectedModel} params={selectedModelDesc.params}
             values={modelParams} onChange={p => {
@@ -563,6 +1099,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
           ⏹ Zastavit
         </button>
       </div>
+      {copyMsg && <div className="text-emerald-300 text-xs">{copyMsg}</div>}
       {msg && <div className="text-red-400 text-xs">{msg}</div>}
 
       {/* ── Progress bar ── */}

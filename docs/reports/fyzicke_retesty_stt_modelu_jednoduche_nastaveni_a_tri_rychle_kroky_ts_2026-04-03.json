@@ -1,0 +1,79 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "fyzicke_retesty_stt_modelu_jednoduche_nastaveni_a_tri_rychle_kroky_ts_2026-04-03.json",
+    "last_updated_utc": "2026-04-03T17:44:53Z",
+    "review_due_utc": "2026-04-15T00:00:00Z"
+  },
+  "report_id": "fyzicke-retesty-stt-jednoduche-nastaveni-tri-kroky-ts-2026-04-03",
+  "scope": "physical retest status for transcript stt models plus simple profile and top impact actions",
+  "artifacts": {
+    "smoke_reports": [
+      "runtime/logs/smoke_transcribe_13s_20260403_143640.md",
+      "runtime/logs/smoke_transcribe_13s_20260403_143846.md",
+      "runtime/logs/smoke_transcribe_13s_20260403_143211.md"
+    ],
+    "profile_file": "runtime/logs/smoke_profile_simple_cz_v1.json"
+  },
+  "simple_profile": {
+    "name": "simple-cz-v1",
+    "whisper_cpp": {
+      "language": "cs",
+      "threads": 4,
+      "beam_size": 2,
+      "best_of": 2,
+      "no_fallback": true
+    },
+    "faster_whisper": {
+      "language": "cs",
+      "threads": 4,
+      "beam_size": 1,
+      "best_of": 1,
+      "compute_type": "int8",
+      "device": "cpu"
+    },
+    "vosk_small_cs_0_4": {
+      "sample_rate": 16000,
+      "chunk_seconds": 0.2,
+      "set_words": false
+    },
+    "sherpa_onnx_small": {
+      "num_threads": 2,
+      "decoding_method": "greedy_search",
+      "provider": "cpu",
+      "sample_rate": 16000
+    },
+    "qwen3_asr_0_6b": {
+      "language": "Czech",
+      "dtype": "float32",
+      "device_map": "cpu",
+      "max_new_tokens": 128
+    }
+  },
+  "model_status": {
+    "good": [
+      "whisper_cpp_large_v3_turbo",
+      "whisper_cpp_large_v3",
+      "faster_whisper_medium_cs_int8"
+    ],
+    "works_with_quality_limits": [
+      "faster_whisper_small_cs_int8",
+      "whisper_cpp_small",
+      "whisper_cpp_base",
+      "vosk_small_cs_0_4",
+      "sherpa_onnx_small"
+    ],
+    "blocked": [
+      {
+        "model_id": "qwen3_asr_0_6b",
+        "reason": "No module named 'qwen_asr'"
+      }
+    ]
+  },
+  "top_3_impact_steps": [
+    "Default model gate: keep only high-quality CZ trio as default and mark others experimental/blocked.",
+    "Finish V6-S4 long-run gate (30/120/240 min plus recovery/restart) as hard release criterion.",
+    "Add runtime readiness gate before job start for dependencies and bundle compatibility; return blocked instead of crash."
+  ]
+}

@@ -4,7 +4,7 @@ Doc-Meta:
 - owner: engineering
 - status: active
 - doc_file: tuning_v6_implementacni_plan.md
-- last_updated_utc: 2026-04-03T03:50:17Z
+- last_updated_utc: 2026-04-03T11:10:30Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Navazuje na:
@@ -41,11 +41,24 @@ Navazuje na:
 - V6 implementace bezi po fazich, ale ne-fyzicky gate je definovan jednim prikazem:
 
 ```powershell
-C:\Program Files\PowerShell\7\pwsh.exe -Command "$ErrorActionPreference='Stop'; .venv\Scripts\python scripts/supply_chain_guard.py; .venv\Scripts\python scripts/verify_docs_guard.py --head (git rev-parse HEAD); .venv\Scripts\python -m pytest tests/unit/test_tuning_event_store.py tests/unit/test_tuning_events_service.py tests/unit/test_tuning_event_validation.py -q"
+C:\Program Files\PowerShell\7\pwsh.exe -Command "$ErrorActionPreference='Stop'; .venv\Scripts\python scripts/supply_chain_guard.py; .venv\Scripts\python scripts/verify_docs_guard.py --head (git rev-parse HEAD); npm --prefix frontend run build; .venv\Scripts\python -m pytest tests/unit/test_benchmark_request_model.py tests/unit/test_library_segment_bundle.py tests/unit/test_tuning_event_store.py tests/unit/test_tuning_events_service.py tests/unit/test_tuning_event_validation.py -q"
 ```
 
 - Tento prikaz pokryva guard/test cast bez fyzickeho hands-on audia.
 - Fyzicke testy (realny poslech + ovladani hranic mysi/klavesami) provadi owner po kompletni implementaci.
+
+## Stav realizace (2026-04-03)
+1. `V6-S0 done`: intake + UTF-8 kontrakt + one-command gate.
+2. `V6-S1 done`: backend segment bundle API + pause-aware snapping + validace + unit testy.
+3. `V6-S2 done`: `/library` slicer UI (preset 5/10/15/30/45/60, manual body max 21, mysi timeline, micro-shift sipkami, audio preview).
+4. `V6-S3 done`: `/transcript` umi segment bundle jako jeden logicky prepis (sekvencni segment processing + agregovany vystup).
+5. `V6-S4 planned`: fyzicka long-run validace 30/120/240 min pro 3 CZ modely zustava na navazujici run.
+
+## Follow-up poznamky (operacni)
+1. Transient artefakt `Zdroj` v rootu repo:
+   - muze byt vytvaren bezicim externim procesem/shellem,
+   - neprovadet automaticke mazani behem aktivnich behu,
+   - nejdriv overit puvod (PID/proces, cas vzniku) a teprve potom cistit.
 
 ## Implementacni faze
 

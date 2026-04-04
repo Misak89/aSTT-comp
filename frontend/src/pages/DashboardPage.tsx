@@ -14,6 +14,7 @@ import { api } from '../api/client'
 import { listTranscripts } from '../components/transcribe/useTranscribeStorage'
 import { useProcessScanCadence } from '../components/dashboard/useProcessScanCadence'
 import type { AppProcessInfo, AppProcessSnapshot, BenchmarkJobStatus, LibraryItem, SpecstoryLiveStatus } from '../types'
+import { formatClockHms, formatDateTimeMedium } from '../lib/time'
 
 interface HealthState {
   startedAt: string
@@ -163,8 +164,7 @@ function UsageTooltip({ active, label, payload }: UsageTooltipProps) {
 }
 
 function fmtDt(iso: string) {
-  try { return new Date(iso).toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'medium' }) }
-  catch { return iso }
+  return formatDateTimeMedium(iso)
 }
 
 function fmtUptime(startedAt: string) {
@@ -347,7 +347,7 @@ function buildUsageSample(snapshot: AppProcessSnapshot | null, health: HealthSta
   if (!snapshot || !health) return null
   const running = (snapshot.processes ?? []).filter((p) => typeof p.pid === 'number' && p.pid > 0)
   const now = Date.now()
-  const t = new Date(now).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const t = formatClockHms(now)
   if (running.length === 0) {
     return {
       ts: now,

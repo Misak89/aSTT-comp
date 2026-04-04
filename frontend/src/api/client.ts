@@ -19,6 +19,8 @@ import type {
   MicMobileLoopPackageDeleteResponse,
   MicSequenceReport,
   LocalFileEntry,
+  SegmentBundle,
+  SegmentBundlePreviewRequest,
 } from '../types'
 
 const BASE = '/api'
@@ -100,6 +102,12 @@ export const api = {
       post<LocalFileEntry[]>('/library/scan-directory', { path }),
     importLocalFile: (path: string, title: string, language: string) =>
       post<LibraryItem>('/library/import-local-file', { path, title, language }),
+    previewSegmentBundle: (req: SegmentBundlePreviewRequest) =>
+      post<SegmentBundle>('/library/segment-bundles/preview', req),
+    upsertSegmentBundle: (sourceId: string, req: SegmentBundlePreviewRequest) =>
+      put<SegmentBundle>(`/library/segment-bundles/${encodeURIComponent(sourceId)}`, req),
+    getSegmentBundle: (sourceId: string) =>
+      get<SegmentBundle>(`/library/segment-bundles/${encodeURIComponent(sourceId)}`),
   },
   benchmark: {
     options: () => get<BenchmarkOptions>('/benchmark/options'),

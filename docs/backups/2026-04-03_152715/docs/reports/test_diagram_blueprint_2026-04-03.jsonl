@@ -1,0 +1,4 @@
+{"doc_meta":{"owner":"engineering","status":"active","doc_file":"test_diagram_blueprint_2026-04-03.jsonl","last_updated_utc":"2026-04-03T12:00:26Z","review_due_utc":"2026-04-15T00:00:00Z"},"event":"report_opened","ts_utc":"2026-04-03T12:00:26Z","report_id":"test-diagram-blueprint-2026-04-03","branch":"feature/tuning-v6-docs"}
+{"event":"general_diagram_defined","ts_utc":"2026-04-03T12:00:26Z","model":"ABC-loop-with-fidelity-gate","source":"CONTRIBUTING.md+RUNBOOK.md"}
+{"event":"app_diagram_defined","ts_utc":"2026-04-03T12:00:26Z","model":"aSTT-comp-domain-test-flow","domains":["online_mic","long_transcript_segmentation","monitoring_dashboard"],"checkpoint_mapping":{"loop_a":["CP0","CP1","CP2"],"loop_b":["CP3","CP4"],"loop_c":["CP5"],"release_gate":["CP6"]}}
+{"event":"review_status","ts_utc":"2026-04-03T12:00:26Z","status":"pending_owner_review","next_action":"push_after_review"}

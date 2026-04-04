@@ -24,6 +24,7 @@ import type {
 import { api } from '../api/client'
 import { ModelParamsForm } from './ModelParamsForm'
 import { videoLabel } from '../utils'
+import { formatDateTimeMedium } from '../lib/time'
 
 interface Props {
   /** Modely které podporují mic (supports_microphone: true) */
@@ -2365,7 +2366,7 @@ export function MicSession({ availableModels, library }: Props) {
                               <Fragment key={pkg.package_id}>
                                 <tr className="border-b border-gray-800/80 align-top">
                                   <td className="py-1 pr-2 whitespace-nowrap text-gray-400">
-                                    {new Date(pkg.created_at).toLocaleString()}
+                                    {formatDateTimeMedium(pkg.created_at)}
                                   </td>
                                   <td className="py-1 pr-2 font-mono text-gray-200">
                                     {pkg.package_id}
@@ -2814,7 +2815,7 @@ export function MicSession({ availableModels, library }: Props) {
                         key={r.record_id}
                         className={`${separatorBefore ? 'border-t-2 border-red-600' : ''} border-b border-gray-800/80 align-top`}
                       >
-                        <td className="py-1 pr-3 text-gray-400 whitespace-nowrap">{new Date(r.saved_at).toLocaleString()}</td>
+                        <td className="py-1 pr-3 text-gray-400 whitespace-nowrap">{formatDateTimeMedium(r.saved_at)}</td>
                         <td className="py-1 pr-3 whitespace-nowrap">{r.model_id}</td>
                         <td className="py-1 pr-3 whitespace-nowrap">
                           {r.mic_test_mode === 'free_speech' ? 'volný' : r.mic_test_mode === 'reference_video' ? 'referenční' : '—'}

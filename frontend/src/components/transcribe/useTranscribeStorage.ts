@@ -30,6 +30,7 @@ export interface TranscribeSettings {
   range_mode?: 'full' | 'segment'
   range_from?: string
   range_to?: string
+  segment_bundle_enabled?: boolean
   ts_enabled?: boolean      // vkládat časové značky do přepisu
   ts_interval_s?: number    // interval v sekundách (výchozí 60)
   model_params?: Record<string, Record<string, unknown>>  // { [model_id]: { threads: 8, ... } }

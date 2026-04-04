@@ -48,6 +48,8 @@ def get_registry():
             "languages": m.languages,
             "supports_streaming": m.supports_streaming,
             "supports_microphone": m.supports_microphone,
+            "stream_suitability": m.stream_suitability,
+            "transcript_suitability": m.transcript_suitability,
             "notes": m.notes,
             "params": get_params_schema(m.model_id),
         }

@@ -9,7 +9,7 @@
  * Důležité: všechny tři módy jsou vždy přítomny v DOM (jen skryté),
  * aby nedocházelo k odmontování komponent a ztrátě stavu při přepnutí.
  */
-import { useRef, useState, useCallback, type ReactNode } from 'react'
+import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
 
 type LayoutMode = 'horizontal' | 'vertical' | 'tabs'
 
@@ -69,6 +69,19 @@ export function TranscribePanelLayout({
       onLayoutChange?.(mode, split)
     }
   }, [mode, split, onLayoutChange])
+
+  useEffect(() => {
+    const stopDrag = () => onMouseUp()
+    window.addEventListener('mouseup', stopDrag)
+    window.addEventListener('blur', stopDrag)
+    return () => {
+      window.removeEventListener('mouseup', stopDrag)
+      window.removeEventListener('blur', stopDrag)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      dragging.current = false
+    }
+  }, [onMouseUp])
 
   const modeBtn = (m: LayoutMode, icon: string, label: string) => (
     <button
