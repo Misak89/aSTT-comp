@@ -1,0 +1,105 @@
+aSTT-comp - quick install guide (macOS only)
+
+Doc-Meta:
+- owner: engineering
+- status: active
+- doc_file: install_help_mac.txt
+- last_updated_utc: 2026-04-04T08:22:00Z
+- review_due_utc: 2026-04-15T00:00:00Z
+
+Global Authority (Repository-wide): AGENTS.md is the only top-level Source of Truth for all project rules and interpretation.
+Mandatory Start (in this repository): README.md -> AGENTS.md -> docs/PLAN_TRACKER.md.
+
+------------------------------------------------------------
+1) Prerequisites (macOS)
+------------------------------------------------------------
+- git
+- python 3.13+ (or compatible 3.x)
+- node.js 18+
+- ffmpeg
+- recommended: Homebrew
+
+Quick check:
+  git --version
+  python3 --version
+  npm --version
+  ffmpeg -version
+
+------------------------------------------------------------
+2) Install app
+------------------------------------------------------------
+From Terminal:
+
+  git clone https://github.com/Misak89/aSTT-comp.git
+  cd aSTT-comp
+
+  python3.13 -m venv .venv
+  .venv/bin/pip install -r backend/requirements.txt
+
+  npm --prefix frontend install
+  npm --prefix frontend run build
+
+  ./web-up.sh
+
+Open:
+  http://127.0.0.1:8012
+
+------------------------------------------------------------
+3) Fast interactive script (macOS)
+------------------------------------------------------------
+Included script:
+  scripts/install_astt_macos.sh
+
+Run:
+  chmod +x scripts/install_astt_macos.sh
+  ./scripts/install_astt_macos.sh
+
+Script does:
+- checks prerequisites
+- optional venv/backend/frontend setup
+- whisper runtime setup
+- for each core whisper model shows approx size and asks Download/Skip
+
+------------------------------------------------------------
+4) Core model minimum
+------------------------------------------------------------
+Required minimum:
+- whisper.cpp base
+- whisper.cpp small
+- whisper.cpp large-v3
+- whisper.cpp large-v3-turbo
+
+Expected target files:
+- runtime/model_store/whisper_cpp_base/ggml-base.bin
+- runtime/model_store/whisper_cpp_small/ggml-small.bin
+- runtime/model_store/whisper_cpp_large_v3/ggml-large-v3-q5_0.bin
+- runtime/model_store/whisper_cpp_large_v3_turbo/ggml-large-v3-turbo-q5_0.bin
+
+Optional:
+- vosk_small_cs_0_4
+- faster_whisper_small_cs_int8
+- faster_whisper_medium_cs_int8
+- qwen3_asr_0_6b
+- sherpa_onnx_small (bundle-based)
+
+------------------------------------------------------------
+5) Verify that app + models communicate correctly
+------------------------------------------------------------
+Run checks:
+  .venv/bin/python scripts/check_health.py
+  .venv/bin/python scripts/check_model.py whisper_cpp_small
+
+UI checks:
+- http://127.0.0.1:8012/models
+- model appears as installed
+- model detail has no critical runtime error
+
+------------------------------------------------------------
+6) Where this guide is
+------------------------------------------------------------
+Repo path:
+- docs/install_help_mac.txt
+
+From running app:
+- http://127.0.0.1:8012/api/docs/install-help.txt  (full guide)
+- http://127.0.0.1:8012/models

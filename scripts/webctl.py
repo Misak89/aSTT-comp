@@ -448,14 +448,23 @@ def _cmd_up_bg(*, build_mode: str, reload: bool, wait_s: float) -> int:
     cmd = _uvicorn_cmd(reload=reload)
     out_fh, out_path_actual = _open_log(out_path, "out")
     err_fh, err_path_actual = _open_log(err_path, "err")
+    popen_kwargs: dict[str, object] = {
+        "cwd": str(ROOT),
+        "env": _utf8_env(),
+        "stdout": out_fh,
+        "stderr": err_fh,
+    }
+    if os.name == "nt":
+        # Keep bg server alive even when launcher exits from a managed/job shell.
+        creationflags = 0
+        for flag_name in ("CREATE_NEW_PROCESS_GROUP", "DETACHED_PROCESS", "CREATE_BREAKAWAY_FROM_JOB"):
+            flag_value = getattr(subprocess, flag_name, 0)
+            creationflags |= int(flag_value)
+        popen_kwargs["creationflags"] = creationflags
+    else:
+        popen_kwargs["start_new_session"] = True
     with out_fh as out_f, err_fh as err_f:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(ROOT),
-            env=_utf8_env(),
-            stdout=out_f,
-            stderr=err_f,
-        )
+        proc = subprocess.Popen(cmd, **popen_kwargs)
 
     if _wait_for_health_up(timeout_s=float(wait_s)):
         listeners = _listener_pids(PORT)

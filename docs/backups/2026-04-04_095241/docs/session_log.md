@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T08:11:31Z
+- last_updated_utc: 2026-04-03T23:02:58Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -1032,23 +1032,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 ### Impact
 - Restored pre-regression drag logic baseline for /transcript layout resizing.
 
-
----
-
-## Session 2026-04-04T07:57:53Z (install-onboarding-win-mac)
-
-### Summary
-- Pridany centralni install onboarding (TXT + triplet), nove interaktivni instalacni skripty pro Windows/macOS, backend endpoint /api/docs/install-help.txt a odkaz na navod v /models.
-
-### Impact
-- Novy uzivatel ma jednotny postup pro instalaci cele app i modelu; /models primo odkazuje na navod; instalace core whisper modelu je prompt-driven se zobrazenim velikosti balicku a volbou download/skip.
-
----
-
-## Session 2026-04-04T08:11:31Z (web-up-bg-detached-process-fix)
-
-### Summary
-- V webctl up-bg byl upraven spawn uvicornu do oddelene session/process group (Windows: CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS + CREATE_BREAKAWAY_FROM_JOB; Unix: start_new_session=True), aby backend prezil ukonceni launcher shellu a job-control prostredi.
-
-### Impact
-- Snizuje riziko okamziteho padu backendu po web-up-bg v managed shell prostredich; endpointy (vcetne /api/docs/install-help.txt) maji zustat dostupne po startu na pozadi.

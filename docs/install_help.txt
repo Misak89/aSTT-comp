@@ -1,0 +1,275 @@
+aSTT-comp - install_help.txt
+
+Doc-Meta:
+- owner: engineering
+- status: active
+- doc_file: install_help.txt
+- last_updated_utc: 2026-04-04T08:05:00Z
+- review_due_utc: 2026-04-15T00:00:00Z
+
+Global Authority (Repository-wide): AGENTS.md is the only top-level Source of Truth for all project rules and interpretation.
+Mandatory Start (in this repository): README.md -> AGENTS.md -> docs/PLAN_TRACKER.md.
+
+=====================================================================
+1) What this guide covers
+=====================================================================
+- Full onboarding for the whole app (not only models):
+  1. system prerequisites
+  2. app install
+  3. app start
+  4. STT model install
+  5. end-to-end verification
+- Target OS: Windows + macOS.
+
+Quick links:
+- Models page: http://127.0.0.1:8012/models
+- Direct guide endpoint from running app: http://127.0.0.1:8012/api/docs/install-help.txt
+
+=====================================================================
+2) Required software
+=====================================================================
+Windows:
+- Git
+- Python 3.13+ (recommended: 3.13.x)
+- Node.js 18+ (LTS)
+- ffmpeg in PATH
+- (optional but recommended) PowerShell 7
+
+macOS:
+- Git
+- Python 3.13+ (or 3.x where project dependencies are supported)
+- Node.js 18+ (LTS)
+- ffmpeg
+- (recommended) Homebrew
+
+Runtime Python packages installed by backend requirements include adapters such as:
+- vosk
+- faster-whisper
+- sherpa-onnx (as configured in backend requirements / your venv)
+- qwen-asr toolchain components when used
+
+=====================================================================
+3) Install whole app (Windows)
+=====================================================================
+From repository root:
+
+1) Clone:
+   git clone https://github.com/Misak89/aSTT-comp.git
+   cd aSTT-comp
+
+2) Create venv + backend deps:
+   py -3.13 -m venv .venv
+   .venv\Scripts\pip install -r backend/requirements.txt
+
+3) Frontend deps + build:
+   npm --prefix frontend install
+   npm --prefix frontend run build
+
+4) Start app:
+   web-up.cmd
+   (or web-up-build.cmd for build+start)
+
+5) Open:
+   http://127.0.0.1:8012
+
+=====================================================================
+4) Install whole app (macOS)
+=====================================================================
+From repository root:
+
+1) Clone:
+   git clone https://github.com/Misak89/aSTT-comp.git
+   cd aSTT-comp
+
+2) Create venv + backend deps:
+   python3.13 -m venv .venv
+   .venv/bin/pip install -r backend/requirements.txt
+
+3) Frontend deps + build:
+   npm --prefix frontend install
+   npm --prefix frontend run build
+
+4) Start app:
+   ./web-up.sh
+   (or ./web-up-build.sh for build+start)
+
+5) Open:
+   http://127.0.0.1:8012
+
+=====================================================================
+5) Recommended install scripts
+=====================================================================
+Interactive scripts included in repo:
+- Windows: scripts/install_astt_windows.ps1
+- macOS:  scripts/install_astt_macos.sh
+
+What scripts do:
+- check prerequisites
+- create venv and install dependencies (optional prompts)
+- install/build frontend (optional prompts)
+- install whisper runtime (whisper-cli + whisper-server)
+- for each core whisper model: show approx download size, ask Download/Skip
+- optional installs for VOSK and selected HuggingFace models
+
+Run scripts:
+- Windows:
+  powershell -ExecutionPolicy Bypass -File scripts/install_astt_windows.ps1
+
+- macOS:
+  chmod +x scripts/install_astt_macos.sh
+  ./scripts/install_astt_macos.sh
+
+=====================================================================
+6) Core STT model install (required minimum)
+=====================================================================
+Core minimum requested by project:
+- whisper.cpp base
+- whisper.cpp small
+- whisper.cpp large-v3
+- whisper.cpp large-v3-turbo
+
+Important:
+- whisper.cpp requires runtime binary (whisper-cli; for mic also whisper-server).
+- In this project, runtime/model layout is expected under:
+  runtime/model_store/<model_id>/
+
+Core files expected by app:
+- runtime/model_store/whisper_cpp_base/ggml-base.bin
+- runtime/model_store/whisper_cpp_small/ggml-small.bin
+- runtime/model_store/whisper_cpp_large_v3/ggml-large-v3-q5_0.bin (or compatible large-v3 file)
+- runtime/model_store/whisper_cpp_large_v3_turbo/ggml-large-v3-turbo-q5_0.bin
+
+=====================================================================
+7) Optional models (how to install)
+=====================================================================
+1) sherpa-onnx small:
+- place a complete transducer bundle to runtime/model_store/sherpa_onnx_small
+- bundle must include tokens + encoder/decoder/joiner ONNX files
+
+2) VOSK small cs-0.4:
+- unzip model folder to runtime/model_store/vosk_small_cs_0_4
+- required files include conf/model.conf and acoustic model files
+
+3) faster-whisper small/medium (CZ int8):
+- place CTranslate2 model in:
+  - runtime/model_store/faster_whisper_small_cs_int8/
+  - runtime/model_store/faster_whisper_medium_cs_int8/
+- expected file: model.bin (+ tokenizer/config files)
+
+4) Qwen3-ASR 0.6B:
+- place HF snapshot in runtime/model_store/qwen3_asr_0_6b/
+- required files include config/tokenizer/preprocessor + model weights
+
+=====================================================================
+8) Current STT models in app (CZ support + approx download size)
+=====================================================================
+Note: sizes are approximate and can change by upstream release.
+
+- whisper.cpp base
+  - CZ support: YES
+  - approx download: ~148 MB
+
+- whisper.cpp small
+  - CZ support: YES
+  - approx download: ~466 MB (multilingual ggml-small.bin)
+
+- whisper.cpp large-v3 (q5_0 variant recommended)
+  - CZ support: YES
+  - approx download: ~1.55 GB (q5_0)
+
+- whisper.cpp large-v3-turbo (q5_0)
+  - CZ support: YES
+  - approx download: ~547 MB
+
+- faster-whisper small (CZ int8 profile in app)
+  - CZ support: YES
+  - approx download: ~1.1 GB
+
+- faster-whisper medium (CZ int8 profile in app)
+  - CZ support: YES
+  - approx download: ~2.5 GB
+
+- VOSK small cs-0.4
+  - CZ support: YES
+  - approx download: ~40-60 MB
+
+- sherpa-onnx small
+  - CZ support: DEPENDS ON BUNDLE (default small bundle can be EN-only)
+  - approx download: ~50-200 MB (bundle dependent)
+
+- sherpa-onnx Parakeet 0.6B int8 (CZ)
+  - CZ support: YES
+  - approx download: ~700 MB to ~1.5 GB (bundle dependent)
+  - note: currently marked as temporarily disabled on Windows in registry notes
+
+- Qwen3-ASR 0.6B
+  - CZ support: YES
+  - approx download: ~1.6 GB
+
+- Qwen3-ASR 1.7B
+  - CZ support: YES
+  - approx download: ~4-5 GB
+
+- Moonshine Medium (EN)
+  - CZ support: NO (EN only)
+  - approx download: ~0.5-1.0 GB (variant dependent)
+
+=====================================================================
+9) Verification (must pass)
+=====================================================================
+1) Health:
+   python scripts/check_health.py
+
+2) Model readiness check (example):
+   python scripts/check_model.py whisper_cpp_small
+
+3) Open app:
+   http://127.0.0.1:8012/models
+   - model should be visible as installed
+   - required files should exist under runtime/model_store
+
+4) Optional smoke:
+   python scripts/smoke_transcribe_13s.py --models whisper_cpp_small
+
+=====================================================================
+10) Troubleshooting
+=====================================================================
+- "Model missing":
+  Check exact expected file names and directories in section 6 and 7.
+
+- "whisper runtime missing":
+  Install/copy whisper-cli (and preferably whisper-server) into:
+  runtime/model_store/whisper_cpp/
+
+- "ffmpeg missing":
+  Install ffmpeg and verify command:
+  ffmpeg -version
+
+- "frontend changes not visible":
+  Rebuild frontend:
+  npm --prefix frontend run build
+
+- "Python package missing":
+  Reinstall backend dependencies in venv:
+  .venv\Scripts\pip install -r backend/requirements.txt
+  or
+  .venv/bin/pip install -r backend/requirements.txt
+
+=====================================================================
+11) Where exactly this guide and scripts are
+=====================================================================
+Primary guide file:
+- docs/install_help.txt
+
+Triplet companion docs:
+- docs/install_help_2026-04-04.md
+- docs/install_help_2026-04-04.json
+- docs/install_help_2026-04-04.jsonl
+
+Interactive scripts:
+- scripts/install_astt_windows.ps1
+- scripts/install_astt_macos.sh
+
+Direct links from running app:
+- http://127.0.0.1:8012/api/docs/install-help.txt
+- http://127.0.0.1:8012/models

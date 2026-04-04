@@ -1,0 +1,136 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "install_help_2026-04-04.json",
+    "last_updated_utc": "2026-04-04T08:05:00Z",
+    "review_due_utc": "2026-04-15T00:00:00Z"
+  },
+  "scope": {
+    "goal": "Complete onboarding for aSTT-comp app installation and STT model setup on Windows and macOS.",
+    "platforms": [
+      "windows",
+      "macos"
+    ]
+  },
+  "prerequisites": {
+    "windows": [
+      "git",
+      "python>=3.13",
+      "nodejs>=18",
+      "ffmpeg"
+    ],
+    "macos": [
+      "git",
+      "python>=3.13",
+      "nodejs>=18",
+      "ffmpeg",
+      "homebrew (recommended)"
+    ]
+  },
+  "app_install": {
+    "windows": [
+      "git clone https://github.com/Misak89/aSTT-comp.git",
+      "cd aSTT-comp",
+      "py -3.13 -m venv .venv",
+      ".venv\\Scripts\\pip install -r backend/requirements.txt",
+      "npm --prefix frontend install",
+      "npm --prefix frontend run build",
+      "web-up.cmd"
+    ],
+    "macos": [
+      "git clone https://github.com/Misak89/aSTT-comp.git",
+      "cd aSTT-comp",
+      "python3.13 -m venv .venv",
+      ".venv/bin/pip install -r backend/requirements.txt",
+      "npm --prefix frontend install",
+      "npm --prefix frontend run build",
+      "./web-up.sh"
+    ]
+  },
+  "scripts": {
+    "windows": "scripts/install_astt_windows.ps1",
+    "macos": "scripts/install_astt_macos.sh",
+    "features": [
+      "prerequisite checks",
+      "optional env/bootstrap steps",
+      "whisper runtime setup",
+      "download-size preview + download/skip per model",
+      "optional VOSK and HF model flows"
+    ]
+  },
+  "core_models": [
+    {
+      "model_id": "whisper_cpp_base",
+      "label": "whisper.cpp base",
+      "supports_czech": true,
+      "approx_download_size": "~148 MB",
+      "target_file": "runtime/model_store/whisper_cpp_base/ggml-base.bin"
+    },
+    {
+      "model_id": "whisper_cpp_small",
+      "label": "whisper.cpp small",
+      "supports_czech": true,
+      "approx_download_size": "~466 MB",
+      "target_file": "runtime/model_store/whisper_cpp_small/ggml-small.bin"
+    },
+    {
+      "model_id": "whisper_cpp_large_v3",
+      "label": "whisper.cpp large-v3 (q5_0)",
+      "supports_czech": true,
+      "approx_download_size": "~1.55 GB",
+      "target_file": "runtime/model_store/whisper_cpp_large_v3/ggml-large-v3-q5_0.bin"
+    },
+    {
+      "model_id": "whisper_cpp_large_v3_turbo",
+      "label": "whisper.cpp large-v3-turbo (q5_0)",
+      "supports_czech": true,
+      "approx_download_size": "~547 MB",
+      "target_file": "runtime/model_store/whisper_cpp_large_v3_turbo/ggml-large-v3-turbo-q5_0.bin"
+    }
+  ],
+  "optional_models": [
+    {
+      "model_id": "sherpa_onnx_small",
+      "label": "sherpa-onnx small",
+      "supports_czech": "bundle-dependent",
+      "install_hint": "Place complete transducer bundle in runtime/model_store/sherpa_onnx_small"
+    },
+    {
+      "model_id": "vosk_small_cs_0_4",
+      "label": "VOSK small cs-0.4",
+      "supports_czech": true,
+      "install_hint": "Unzip into runtime/model_store/vosk_small_cs_0_4"
+    },
+    {
+      "model_id": "faster_whisper_small_cs_int8",
+      "label": "faster-whisper small (CZ int8)",
+      "supports_czech": true,
+      "install_hint": "Place CTranslate2 model folder in runtime/model_store/faster_whisper_small_cs_int8"
+    },
+    {
+      "model_id": "faster_whisper_medium_cs_int8",
+      "label": "faster-whisper medium (CZ int8)",
+      "supports_czech": true,
+      "install_hint": "Place CTranslate2 model folder in runtime/model_store/faster_whisper_medium_cs_int8"
+    },
+    {
+      "model_id": "qwen3_asr_0_6b",
+      "label": "Qwen3-ASR 0.6B",
+      "supports_czech": true,
+      "install_hint": "Place HF snapshot in runtime/model_store/qwen3_asr_0_6b"
+    }
+  ],
+  "verification": {
+    "commands": [
+      "python scripts/check_health.py",
+      "python scripts/check_model.py whisper_cpp_small"
+    ],
+    "ui": "http://127.0.0.1:8012/models"
+  },
+  "links": {
+    "help_txt_repo_path": "docs/install_help.txt",
+    "help_txt_api_url": "http://127.0.0.1:8012/api/docs/install-help.txt",
+    "models_page_url": "http://127.0.0.1:8012/models"
+  }
+}

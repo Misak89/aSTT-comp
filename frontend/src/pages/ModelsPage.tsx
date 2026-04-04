@@ -126,9 +126,34 @@ export function ModelsPage() {
 
       {msg && <p className="text-sm text-red-600">{msg}</p>}
 
-      {/* === Jak spustit / restartovat === */}
+      {/* === Instalace / spusteni / restart === */}
       <div className="bg-slate-900 rounded-lg border border-slate-700 p-4 space-y-4 text-sm">
-        <h2 className="font-bold text-white text-base">Spuštění a restart</h2>
+        <h2 className="font-bold text-white text-base">Instalace, spusteni a modely</h2>
+        <div className="rounded border border-sky-700 bg-sky-950/40 p-3 space-y-2">
+          <p className="text-sky-100 font-semibold">Kompletni onboarding (Windows + macOS + modely)</p>
+          <p className="text-sky-200/90 text-xs">
+            Pouzij centralni navod a skripty v dokumentaci. Tento panel je zkraceny operacni prehled.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <a
+              href="/api/docs/install-help.txt"
+              target="_blank"
+              rel="noreferrer"
+              className="px-2.5 py-1 rounded border border-sky-300/70 text-sky-100 hover:bg-sky-900/40"
+            >
+              Otevrit install_help.txt
+            </a>
+            <a
+              href="/api/docs/install-help"
+              target="_blank"
+              rel="noreferrer"
+              className="px-2.5 py-1 rounded border border-sky-400/50 text-sky-200 hover:bg-sky-900/30"
+            >
+              Alternativni link /api/docs/install-help
+            </a>
+            <span className="text-slate-400">Soubory: docs/install_help.txt, scripts/install_astt_windows.ps1, scripts/install_astt_macos.sh</span>
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-1">
