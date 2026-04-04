@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T08:26:57Z
+- last_updated_utc: 2026-04-04T08:11:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ---
@@ -1052,13 +1052,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - Snizuje riziko okamziteho padu backendu po web-up-bg v managed shell prostredich; endpointy (vcetne /api/docs/install-help.txt) maji zustat dostupne po startu na pozadi.
-
----
-
-## Session 2026-04-04T08:26:57Z (macos-bootstrap-installer)
-
-### Summary
-- Added macOS bootstrap installer script that clones/updates repository and executes full onboarding installer.
-
-### Impact
-- Users can install the whole app from one script and start setup without manual repository preparation.
