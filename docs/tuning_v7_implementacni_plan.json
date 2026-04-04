@@ -1,0 +1,106 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "tuning_v7_implementacni_plan.json",
+    "last_updated_utc": "2026-04-04T10:26:47Z",
+    "review_due_utc": "2026-04-15T00:00:00Z",
+    "source_md": "docs/tuning_v7_implementacni_plan.md",
+    "format_role": "canonical_structured_snapshot"
+  },
+  "plan_id": "cs-online-mic-orchestrator-v7",
+  "scope": "online_mic_only_cs_first",
+  "main_goal": "Sequentially evaluate multiple STT models/profiles on one live microphone stream with a continuous global timeline and precise timestamped metadata for quality-latency-hardware comparison.",
+  "constraints": {
+    "language_code": "cs",
+    "flow": "live_online_only",
+    "timeline": "global_time_no_reset",
+    "runner_mode": "single_stream_sequential"
+  },
+  "in_scope": [
+    "Sequential runner on one stream: run_i stop then run_i+1 start",
+    "Timestamped events with model/settings/diag/start/end/reason/segment_id/run_id/sequence_id",
+    "Dual output: human transcript plus machine event log",
+    "KPI triad: quality, latency, hardware",
+    "Comparison table export without manual cleanup",
+    "Validation scenario with 3-5 models"
+  ],
+  "out_of_scope": [
+    "Presenting simulation output as online stream output",
+    "Long-file transcript batch orchestration handled by v6",
+    "Parallel multi-stream orchestration"
+  ],
+  "latency_target": {
+    "ideal_seconds": "5-8",
+    "hard_limit_seconds": 12
+  },
+  "phases": [
+    {
+      "id": "V7-S0",
+      "title": "Data contract and event schema",
+      "status": "planned",
+      "deliverables": [
+        "Canonical IDs: run_id, sequence_id, segment_id",
+        "Global timeline monotonicity rule",
+        "Transition reason taxonomy"
+      ]
+    },
+    {
+      "id": "V7-S1",
+      "title": "Backend sequential orchestrator on single live stream",
+      "status": "planned",
+      "deliverables": [
+        "State machine for sequential model/profile switching",
+        "No-reset global timeline across runs",
+        "Per-run metadata capture"
+      ]
+    },
+    {
+      "id": "V7-S2",
+      "title": "Precise timestamped event logs",
+      "status": "planned",
+      "deliverables": [
+        "State transition events with reasons",
+        "Monotonic timestamp validation",
+        "Audit-ready diagnostics"
+      ]
+    },
+    {
+      "id": "V7-S3",
+      "title": "Dual output time consistency",
+      "status": "planned",
+      "deliverables": [
+        "Human transcript with run provenance",
+        "Machine event log from same timeline",
+        "Consistency checks between transcript and events"
+      ]
+    },
+    {
+      "id": "V7-S4",
+      "title": "KPI computation and unified comparison table",
+      "status": "planned",
+      "deliverables": [
+        "Per-run quality-latency-hardware KPIs",
+        "Per-model/profile aggregation",
+        "Exportable unified comparison table"
+      ]
+    },
+    {
+      "id": "V7-S5",
+      "title": "Validation run with 3-5 models",
+      "status": "planned",
+      "deliverables": [
+        "One real online scenario with 3-5 models",
+        "DoD verification artifacts",
+        "Latency hard-limit compliance evidence"
+      ]
+    }
+  ],
+  "definition_of_done": [
+    "Single online run contains multiple models sequentially without time reset",
+    "Every state transition has auditable event metadata",
+    "Transcript and event log are time-consistent",
+    "KPI table is exportable and comparable without manual intervention",
+    "Latency does not exceed hard limit 12 seconds and ideally stays in 5-8 seconds"
+  ]
+}

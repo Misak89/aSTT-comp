@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T10:38:32Z
+- last_updated_utc: 2026-04-03T11:54:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## 1. Stabilni start webu
@@ -74,33 +74,6 @@ URL:
 Pri oprave incidentu:
 1. zapsat co se stalo a fix do `docs/session_log.md`,
 2. pokud se meni start/provozni postup, aktualizovat tento `docs/RUNBOOK.md`.
-
-## 5.1 Code rollback playbook (step-by-step)
-Pouzivej tento postup, kdyz runtime pada a fix se nedari rychle stabilizovat.
-
-1. Stabilizuj beh aplikace:
-   - `web-status.cmd` -> over stav.
-   - `web-restart.cmd` -> over, zda pad reprodukovatelne trva i po cistem restartu.
-2. Zastav dalsi rizikove zmeny:
-   - nevydavej dalsi experimenty na stejne vetvi bez checkpointu,
-   - zapis `incident_start_utc` a posledni potvrzene funkcni commit (`last_known_good`).
-3. Vyber rollback strategii bez prepisu historie:
-   - preferuj `git revert <bad_commit>` (nebo postupne vice commitu),
-   - `git reset --hard` nepouzivej jako standardni incident postup.
-4. Proved rollback v samostatnem recovery kroku:
-   - vytvor recovery branch (`git switch -c recovery/<datum>-<tema>`), pokud jsi na sdilene vetvi,
-   - proved `git revert ...`,
-   - rebuild a restart (`npm --prefix frontend run build`, `web-restart.cmd`).
-5. Over funkcnost po rollbacku:
-   - health endpoint `GET /api/health` musi byt `200`,
-   - minimalni smoke relevantni k incidentu (A-loop + dle potreby B-loop).
-6. Upevni `last known good`:
-   - uloz commit SHA, cas a artefakty validace do `docs/session_log.md`,
-   - pokud incident menil provozni postup, zaktualizuj i tento runbook.
-
-Poznamky:
-- Pri vice rizikovych commitech rollbackuj inkrementalne (od nejnovejsiho k nejstarsimu) a po kazdem kroku validuj.
-- Pokud rollback sam nestaci, otevri follow-up fix jako novy, oddeleny commit nad vratkou.
 
 ## 6. Physical validation policy (obecne, cross-domain)
 Tato politika plati obecne pro testovani kodu, security, performance i provozu.

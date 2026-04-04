@@ -3,38 +3,8 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T12:23:09Z
+- last_updated_utc: 2026-04-04T10:26:47Z
 - review_due_utc: 2026-04-15T00:00:00Z
-
----
-
-## Session 2026-04-04T12:23:09Z (supply-chain-threat-intel-and-aging-window)
-
-### Summary
-- Pred docs editaci byl vytvoren centralni backup do `docs/backups/2026-04-04_142301/`.
-- `docs/SECURITY_SUPPLY_CHAIN.md` byl rozsireny o povinny `Threat-intel + release-aging gate` pred stazenim:
-  - povinny internetovy incident/advisory check pred kazdym stazenim nebo aktualizaci,
-  - zakaz immediate adoption novych verzi mimo bezpecnostni vyjimku,
-  - maturity okno: minimalne 7 dni, preferovane 14 dni.
-- Doplnena vyjimka pro urgentni security update s povinnou evidenci zdroje advisory a navaznou validaci.
-
-### Impact
-- Supply-chain policy je vic odolna proti cerstvym kompromitovanym release a zaroven zustava operacne pouzitelna (jasna vyjimka jen pro prokazatelne security opravy).
-
----
-
-## Session 2026-04-04T10:38:32Z (runbook-code-rollback-playbook)
-
-### Summary
-- Pred docs editaci byl vytvoren centralni backup do `docs/backups/2026-04-04_123827/`.
-- Do `docs/RUNBOOK.md` byl doplnen explicitni incidentni `Code rollback playbook (step-by-step)`:
-  - stabilizace behu (`web-status`, `web-restart`),
-  - urceni `last_known_good`,
-  - rollback bez prepisu historie (`git revert` jako default),
-  - post-rollback validace a evidence v `docs/session_log.md`.
-
-### Impact
-- Projekt ma formalni, auditovatelny postup navratu k funkcni verzi pri havarii v souladu s bezpecnou git praxi (bez standardniho pouzivani historie rewrite).
 
 ---
 

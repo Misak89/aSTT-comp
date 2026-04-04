@@ -15,6 +15,7 @@ runtime/**
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+.npm-cache/
 
 # IDE
 .vscode/

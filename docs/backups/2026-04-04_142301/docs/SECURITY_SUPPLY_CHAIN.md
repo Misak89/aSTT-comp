@@ -3,22 +3,12 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T12:23:09Z
+- last_updated_utc: 2026-04-02T07:11:11Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## Cíl
 - Zabránit zavlečení škodlivého kódu při inspiraci, stahování a build procesu.
 - Držet pouze licence vhodné pro možné komerční nasazení.
-
-## 0) Threat-intel + release-aging gate (MUST pred stazenim)
-- Pred kazdym stazenim/aktualizaci dependency, scriptu nebo externiho dokumentu s potencialnimi instrukcemi:
-  - proverit aktualni bezpecnostni incidenty (advisory/CVE/malware report) pro dany balicek, verzi a maintainera.
-- Zakaz immediate adoption cerstve vydanych verzi:
-  - pokud nejde o prokazatelnou bezpecnostni aktualizaci, nova verze musi "dozrat" minimalne 7 dni,
-  - preferovane okno je 14 dni.
-- Vyjimka pro urgentni security update:
-  - musi byt dolozeno, ze jde o bezpecnostni opravu,
-  - povinny je zapis vyjimky (duvod, zdroj advisory, datum) + navazna validace a rollback pripravenost.
 
 ## 1) Inspirace (research gate)
 - Každý nový OSS kandidát zapsat do `docs/reports/oss_intake_register.json`.

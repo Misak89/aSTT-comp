@@ -1,0 +1,4 @@
+{"doc_meta":{"owner":"engineering","status":"active","doc_file":"tuning_v7_implementacni_plan.jsonl","last_updated_utc":"2026-04-04T10:26:47Z","review_due_utc":"2026-04-15T00:00:00Z","source_md":"docs/tuning_v7_implementacni_plan.md","source_json":"docs/tuning_v7_implementacni_plan.json","format_role":"event_log"},"event":"doc_created","event_utc":"2026-04-04T10:26:47Z"}
+{"event":"plan_initialized","event_utc":"2026-04-04T10:26:47Z","plan_id":"cs-online-mic-orchestrator-v7","scope":"online_mic_only_cs_first","latency_target":{"ideal_seconds":"5-8","hard_limit_seconds":12}}
+{"event":"phase_schedule_declared","event_utc":"2026-04-04T10:26:47Z","phases":["V7-S0","V7-S1","V7-S2","V7-S3","V7-S4","V7-S5"]}
+{"event":"acceptance_minimum_declared","event_utc":"2026-04-04T10:26:47Z","requirements":{"model_count":"3-5","single_scenario":true,"single_comparison_table":true,"manual_cleanup_required":false}}

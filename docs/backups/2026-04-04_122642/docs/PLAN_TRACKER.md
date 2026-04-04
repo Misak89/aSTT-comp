@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T10:26:47Z
+- last_updated_utc: 2026-04-03T04:21:00Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -66,20 +66,6 @@ Navazne dokumenty:
 - roadmapa (JSON): `docs/tuning_v6_implementacni_plan.json`
 - roadmapa (JSONL): `docs/tuning_v6_implementacni_plan.jsonl`
 
-### E) CS Online Mic Orchestrator plan
-- Plan ID: `cs-online-mic-orchestrator-v7`
-- Status: `in_progress`
-- Scope:
-  - online mic only (`cs` first)
-  - sekvencni runner na jednom streamu bez resetu globalniho casu
-  - presne event logy + dual output (human transcript + machine log)
-  - KPI `kvalita x latence x HW` + jednotna porovnavaci tabulka
-
-Navazne dokumenty:
-- roadmapa (MD): `docs/tuning_v7_implementacni_plan.md`
-- roadmapa (JSON): `docs/tuning_v7_implementacni_plan.json`
-- roadmapa (JSONL): `docs/tuning_v7_implementacni_plan.jsonl`
-
 ## 2. Stav milniku
 
 | Milnik | Stav | Zdroj |
@@ -104,18 +90,12 @@ Navazne dokumenty:
 | V6-S2 `/library` slicer UI (preset + max 21 bodu) | done | `docs/tuning_v6_implementacni_plan.md` |
 | V6-S3 `/transcript` bundle orchestration (one logical row) | done | `docs/tuning_v6_implementacni_plan.md` |
 | V6-S4 3x CZ model stability + long-run validation | planned | `docs/tuning_v6_implementacni_plan.md` |
-| V7-S0 data contract + event schema (`run_id`, `sequence_id`, globalni cas) | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S1 backend sekvencni orchestrator (single live stream) | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S2 presne timestampovane event logy + transition reasons | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S3 dual output + casova konzistence transcript/log | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S4 KPI vypocet + jednotna porovnavaci tabulka | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S5 validacni run 3-5 modelu + DoD kontrola | planned | `docs/tuning_v7_implementacni_plan.md` |
 
 Operational note (2026-04-03): P4 (long-run/race/recovery validace dlouhych prepisu) je vedome odlozena do navazujici iterace `long-transcript-v6`.
 
 ## 3. Kam co zapisovat (zavazne)
 1. Aktivni plan + stav: `docs/PLAN_TRACKER.md`
-2. Dlouhodoba roadmapa: `docs/tuning_v4_implementacni_plan.md`, `docs/tuning_v5_implementacni_plan.md`, `docs/tuning_v6_implementacni_plan.md`, `docs/tuning_v7_implementacni_plan.md`
+2. Dlouhodoba roadmapa: `docs/tuning_v4_implementacni_plan.md`, `docs/tuning_v5_implementacni_plan.md`, `docs/tuning_v6_implementacni_plan.md`
 3. Operacni tasky: `docs/tuning_v4_tasky.md`
 4. Co se realne provedlo: `docs/session_log.md`
 
