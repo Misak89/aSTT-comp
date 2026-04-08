@@ -165,6 +165,12 @@ export interface MicSessionState {
   chunk_count?: number | null
   dropped_chunks?: number | null
   sequence_timing?: Record<string, unknown> | null
+  orchestrator_mode?: 'legacy_sequence' | 'v7_cs_online' | null
+  run_id?: string | null
+  sequence_id?: string | null
+  sequence_index?: number | null
+  sequence_total?: number | null
+  global_timeline_ms?: number | null
   reason_code?: string | null
   elapsed_s: number
   rtf: number

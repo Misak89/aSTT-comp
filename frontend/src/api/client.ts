@@ -198,7 +198,7 @@ export const api = {
   mic: {
     devices: () => get<AudioDevice[]>('/mic/devices'),
     createSession: (model_id: string, model_params?: Record<string, unknown>) =>
-      post<{ session_id: string; model_id: string; created_at: string }>('/mic/sessions', { model_id, model_params }),
+      post<{ session_id: string; model_id: string; created_at: string; orchestrator_mode?: string | null }>('/mic/sessions', { model_id, model_params }),
     getSession: (id: string) => get<MicSessionState>(`/mic/sessions/${id}`),
     stopSession: (id: string) => post<MicSessionState>(`/mic/sessions/${id}/stop`),
     listManualRecords: (opts?: { limit?: number; model_id?: string }) => {

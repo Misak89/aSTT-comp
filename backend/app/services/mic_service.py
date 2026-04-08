@@ -42,6 +42,16 @@ WS_AUDIO_FRAME_MAGIC = b"ASTT"
 MOBILE_LOOP_ROOT = MIC_SESSIONS_ROOT / "mobile_loops"
 MIC_EVENTS_LOG_PATH = RUNTIME_ROOT / "logs" / "mic_sequence_events.jsonl"
 _AUTO_SEQUENCE_MAX_TRACKED = 256
+_V7_SEQUENCE_MAX_TRACKED = 256
+ORCHESTRATOR_MODE_LEGACY = "legacy_sequence"
+ORCHESTRATOR_MODE_V7 = "v7_cs_online"
+_ORCHESTRATOR_MODE_ALIASES = {
+    "legacy": ORCHESTRATOR_MODE_LEGACY,
+    "legacy_sequence": ORCHESTRATOR_MODE_LEGACY,
+    "v7": ORCHESTRATOR_MODE_V7,
+    "v7_preview": ORCHESTRATOR_MODE_V7,
+    "v7_cs_online": ORCHESTRATOR_MODE_V7,
+}
 _STATUS_TRANSITIONS: dict[str, set[str]] = {
     "idle": {"recording", "stopped"},
     "recording": {"stopped"},
@@ -91,6 +101,12 @@ class MicSessionState:
     rtf: float = 0.0
     total_audio_s: float = 0.0
     sequence_timing: dict[str, Any] = field(default_factory=dict)
+    orchestrator_mode: str = ORCHESTRATOR_MODE_LEGACY
+    run_id: str | None = None
+    sequence_id: str | None = None
+    sequence_index: int | None = None
+    sequence_total: int | None = None
+    global_timeline_anchor_epoch_ms: float | None = None
     error: str | None = None
     _session_obj: Any = field(default=None, repr=False)
     _started_perf: float = field(default=0.0, repr=False)
@@ -111,6 +127,8 @@ _sessions: dict[str, MicSessionState] = {}
 _sessions_lock = threading.Lock()
 _auto_sequence_timing: dict[str, dict[str, Any]] = {}
 _auto_sequence_lock = threading.Lock()
+_v7_sequence_timing: dict[str, dict[str, float]] = {}
+_v7_sequence_lock = threading.Lock()
 
 
 def _slugify_filename(value: str, *, fallback: str = "manual") -> str:
@@ -191,6 +209,13 @@ def _safe_float(value: Any) -> float | None:
     return None
 
 
+def _orchestrator_mode_from_params(model_params: dict[str, Any]) -> str:
+    raw = str(model_params.get("mic_orchestrator_mode") or "").strip().lower()
+    if not raw:
+        return ORCHESTRATOR_MODE_LEGACY
+    return _ORCHESTRATOR_MODE_ALIASES.get(raw, ORCHESTRATOR_MODE_LEGACY)
+
+
 def _parse_auto_sequence_meta(model_params: dict[str, Any]) -> dict[str, Any]:
     token_raw = model_params.get("auto_model_sequence_token")
     token = str(token_raw).strip() if token_raw is not None else ""
@@ -208,6 +233,53 @@ def _parse_auto_sequence_meta(model_params: dict[str, Any]) -> dict[str, Any]:
         "cycle_s": cycle_s,
         "mobile_loop_enabled": bool(model_params.get("mobile_loop_enabled")),
     }
+
+
+def _prune_v7_sequence_cache_unlocked() -> None:
+    if len(_v7_sequence_timing) <= _V7_SEQUENCE_MAX_TRACKED:
+        return
+    ordered = sorted(
+        _v7_sequence_timing.items(),
+        key=lambda kv: float(kv[1].get("last_update_ms", 0.0)),
+    )
+    to_drop = len(_v7_sequence_timing) - _V7_SEQUENCE_MAX_TRACKED
+    for key, _ in ordered[:to_drop]:
+        _v7_sequence_timing.pop(key, None)
+
+
+def _compute_global_timeline_ms_unlocked(
+    state: MicSessionState,
+    *,
+    now_epoch_ms: float | None = None,
+) -> float | None:
+    if state.orchestrator_mode != ORCHESTRATOR_MODE_V7:
+        return None
+    anchor_ms = _safe_float(state.global_timeline_anchor_epoch_ms)
+    if not isinstance(anchor_ms, float):
+        anchor_ms = _iso_to_epoch_ms(state.started_at) or _iso_to_epoch_ms(state.created_at)
+    if not isinstance(anchor_ms, float):
+        return None
+    now_ms = float(now_epoch_ms) if isinstance(now_epoch_ms, (int, float)) else time.time() * 1000.0
+    return round(max(0.0, now_ms - anchor_ms), 1)
+
+
+def _build_orchestrator_payload(state: MicSessionState, *, now_epoch_ms: float | None = None) -> dict[str, Any]:
+    with state._lock:
+        payload = {
+            "orchestrator_mode": state.orchestrator_mode,
+        }
+        if state.orchestrator_mode != ORCHESTRATOR_MODE_V7:
+            return payload
+        payload.update(
+            {
+                "run_id": state.run_id,
+                "sequence_id": state.sequence_id,
+                "sequence_index": state.sequence_index,
+                "sequence_total": state.sequence_total,
+                "global_timeline_ms": _compute_global_timeline_ms_unlocked(state, now_epoch_ms=now_epoch_ms),
+            }
+        )
+        return payload
 
 
 def _prune_auto_sequence_cache_unlocked() -> None:
@@ -344,6 +416,51 @@ def _update_sequence_timing_on_stop(state: MicSessionState) -> dict[str, Any]:
     return timing
 
 
+def _update_v7_timing_on_start(state: MicSessionState) -> dict[str, Any]:
+    with state._lock:
+        if state.orchestrator_mode != ORCHESTRATOR_MODE_V7:
+            return {}
+        started_ms = _iso_to_epoch_ms(state.started_at)
+        sequence_id = str(state.sequence_id or "").strip()
+        sequence_index = state.sequence_index
+        sequence_total = state.sequence_total
+        run_id = state.run_id
+        if not run_id:
+            run_id = f"run_{state.session_id}"
+            state.run_id = run_id
+        if not sequence_id:
+            sequence_id = state.session_id
+            state.sequence_id = sequence_id
+
+    anchor_ms: float | None = None
+    if isinstance(started_ms, (int, float)):
+        with _v7_sequence_lock:
+            seq_entry = _v7_sequence_timing.get(sequence_id)
+            if seq_entry is None or (isinstance(sequence_index, int) and sequence_index <= 1):
+                seq_entry = {
+                    "anchor_epoch_ms": float(started_ms),
+                    "last_update_ms": time.time() * 1000.0,
+                }
+                _v7_sequence_timing[sequence_id] = seq_entry
+            else:
+                seq_entry["last_update_ms"] = time.time() * 1000.0
+            _prune_v7_sequence_cache_unlocked()
+            anchor_ms = _safe_float(seq_entry.get("anchor_epoch_ms"))
+
+    with state._lock:
+        if isinstance(anchor_ms, float):
+            state.global_timeline_anchor_epoch_ms = anchor_ms
+        elif state.global_timeline_anchor_epoch_ms is None and isinstance(started_ms, (int, float)):
+            state.global_timeline_anchor_epoch_ms = float(started_ms)
+        return {
+            "run_id": state.run_id,
+            "sequence_id": state.sequence_id,
+            "sequence_index": sequence_index,
+            "sequence_total": sequence_total,
+            "global_timeline_ms": _compute_global_timeline_ms_unlocked(state, now_epoch_ms=started_ms),
+        }
+
+
 # ---------------------------------------------------------------------------
 # Trial classification & sequence report persistence
 # ---------------------------------------------------------------------------
@@ -417,11 +534,16 @@ def _build_sequence_trial_entry(
     seq_total: int | None,
 ) -> dict[str, Any]:
     p = payload or {}
+    orchestrator = _build_orchestrator_payload(state)
     return {
         "seq_index": seq_index,
         "seq_total": seq_total,
         "session_id": state.session_id,
         "model_id": state.model_id,
+        "orchestrator_mode": orchestrator.get("orchestrator_mode"),
+        "run_id": orchestrator.get("run_id"),
+        "sequence_id": orchestrator.get("sequence_id"),
+        "global_timeline_ms": orchestrator.get("global_timeline_ms"),
         "phase": str(phase),
         "status": state.status,
         "created_at": state.created_at,
@@ -575,6 +697,10 @@ def _persist_sequence_report(
         "seq_index",
         "seq_total",
         "model_id",
+        "orchestrator_mode",
+        "run_id",
+        "sequence_id",
+        "global_timeline_ms",
         "phase",
         "status",
         "trial_status",
@@ -678,6 +804,7 @@ def _append_mic_event(
         "ts": _iso_now(),
         "event": str(event),
     }
+    now_epoch_ms = time.time() * 1000.0
     if state is not None:
         with state._lock:
             payload.update(
@@ -690,8 +817,19 @@ def _append_mic_event(
                     "created_at": state.created_at,
                     "started_at": state.started_at,
                     "stopped_at": state.stopped_at,
+                    "orchestrator_mode": state.orchestrator_mode,
                 }
             )
+            if state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
+                payload.update(
+                    {
+                        "run_id": state.run_id,
+                        "sequence_id": state.sequence_id,
+                        "sequence_index": state.sequence_index,
+                        "sequence_total": state.sequence_total,
+                        "global_timeline_ms": _compute_global_timeline_ms_unlocked(state, now_epoch_ms=now_epoch_ms),
+                    }
+                )
     if extra:
         payload.update(extra)
     try:
@@ -753,6 +891,12 @@ def _build_session_snapshot(
             "rtf": state.rtf,
             "total_audio_s": state.total_audio_s,
             "sequence_timing": dict(state.sequence_timing or {}),
+            "orchestrator_mode": state.orchestrator_mode,
+            "run_id": state.run_id,
+            "sequence_id": state.sequence_id,
+            "sequence_index": state.sequence_index,
+            "sequence_total": state.sequence_total,
+            "global_timeline_ms": _compute_global_timeline_ms_unlocked(state),
             "reason_code": state.reason_code,
             "error": state.error,
         }
@@ -786,15 +930,23 @@ def _persist_session_snapshot(
 
 def create_session(model_id: str, model_params: dict | None = None) -> str:
     session_id = f"mic_{uuid.uuid4().hex[:8]}"
+    params = dict(model_params or {})
     state = MicSessionState(
         session_id=session_id,
         model_id=model_id,
-        model_params=model_params or {},
+        model_params=params,
         created_at=_iso_now(),
     )
+    seq_meta = _parse_auto_sequence_meta(state.model_params)
+    state.orchestrator_mode = _orchestrator_mode_from_params(state.model_params)
+    if state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
+        state.run_id = f"run_{session_id}"
+        state.sequence_id = str(seq_meta.get("token") or session_id)
+        state.sequence_index = _safe_int(seq_meta.get("index"))
+        state.sequence_total = _safe_int(seq_meta.get("total"))
+
     with _sessions_lock:
         _sessions[session_id] = state
-    seq_meta = _parse_auto_sequence_meta(state.model_params)
     _persist_session_snapshot(state, phase="created")
     _append_mic_event(
         "created",
@@ -807,6 +959,10 @@ def create_session(model_id: str, model_params: dict | None = None) -> str:
             "mobile_loop_speech_s": seq_meta["speech_s"],
             "mobile_loop_pause_s": seq_meta["pause_s"],
             "mobile_loop_cycle_s": seq_meta["cycle_s"],
+            "run_id": state.run_id,
+            "sequence_id": state.sequence_id,
+            "sequence_index": state.sequence_index,
+            "sequence_total": state.sequence_total,
         },
     )
     _maybe_persist_sequence_progress(state, phase="created", force=True)
@@ -816,6 +972,10 @@ def create_session(model_id: str, model_params: dict | None = None) -> str:
 def get_session(session_id: str) -> MicSessionState | None:
     with _sessions_lock:
         return _sessions.get(session_id)
+
+
+def get_orchestrator_payload(state: MicSessionState) -> dict[str, Any]:
+    return _build_orchestrator_payload(state)
 
 
 def log_transport_event(session_id: str, event: str, extra: dict[str, Any] | None = None) -> None:
@@ -1573,8 +1733,17 @@ def start_recording(session_id: str) -> None:
         state.transcript = ""
         state.partial = ""
         state.sequence_timing = {}
+        if state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
+            if not state.run_id:
+                state.run_id = f"run_{state.session_id}"
+            if not state.sequence_id:
+                meta = _parse_auto_sequence_meta(state.model_params or {})
+                state.sequence_id = str(meta.get("token") or state.session_id)
+                state.sequence_index = _safe_int(meta.get("index"))
+                state.sequence_total = _safe_int(meta.get("total"))
         _set_status(state, "recording")
     sequence_timing = _update_sequence_timing_on_start(state)
+    orchestrator_payload = _update_v7_timing_on_start(state)
     _persist_session_snapshot(state, phase="started")
     _append_mic_event(
         "started",
@@ -1585,6 +1754,7 @@ def start_recording(session_id: str) -> None:
             "queue_high_watermark_s": state.queue_high_watermark_s,
             "queue_low_watermark_s": state.queue_low_watermark_s,
             "sequence_timing": sequence_timing,
+            **orchestrator_payload,
         },
     )
     _maybe_persist_sequence_progress(state, phase="started", force=True)
@@ -1612,7 +1782,11 @@ def record_session_start_failure(
     _append_mic_event(
         "start_failed",
         state=state,
-        extra={"failure_reason_code": str(reason_code), "failure_error": str(error)},
+        extra={
+            "failure_reason_code": str(reason_code),
+            "failure_error": str(error),
+            **_build_orchestrator_payload(state),
+        },
     )
     _maybe_persist_sequence_progress(state, phase="start_failed", force=True)
 
@@ -1700,6 +1874,7 @@ def process_audio_chunk(
                 "dropped_by_backpressure": True,
             }
     if backpressure_payload is not None:
+        backpressure_payload.update(_build_orchestrator_payload(state))
         _maybe_persist_sequence_progress(state, phase="partial")
         return backpressure_payload
 
@@ -1730,7 +1905,9 @@ def process_audio_chunk(
             },
         )
         _maybe_persist_sequence_progress(state, phase="chunk_error", force=True)
-        return {"error": str(exc), "reason_code": state.reason_code}
+        error_payload = {"error": str(exc), "reason_code": state.reason_code}
+        error_payload.update(_build_orchestrator_payload(state))
+        return error_payload
 
     processing_ms = max(0.0, (time.perf_counter() - chunk_started) * 1000.0)
     rss_now = _current_process_rss_mb()
@@ -1775,7 +1952,7 @@ def process_audio_chunk(
 
     _maybe_persist_sequence_progress(state, phase="partial")
 
-    return {
+    partial_payload = {
         "type": "partial",
         "text": result.get("text", ""),
         "text_delta": result.get("text_delta", ""),
@@ -1793,6 +1970,8 @@ def process_audio_chunk(
         "backpressure_events": state.backpressure_events,
         "dropped_by_backpressure": False,
     }
+    partial_payload.update(_build_orchestrator_payload(state))
+    return partial_payload
 
 
 def stop_recording(session_id: str) -> dict[str, Any]:
@@ -1905,6 +2084,7 @@ def stop_recording(session_id: str) -> dict[str, Any]:
         "reason_code": state.reason_code,
         "error": state.error,
     }
+    final_payload.update(_build_orchestrator_payload(state))
     _persist_session_snapshot(state, phase="final", extra={"final": final_payload})
     _persist_sequence_report(state, final_payload, phase="final")
     _append_mic_event(

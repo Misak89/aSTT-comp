@@ -35,6 +35,7 @@ interface Props {
 
 type Status = 'idle' | 'connecting' | 'recording' | 'stopping' | 'done' | 'error'
 type MicTestMode = 'free_speech' | 'reference_video'
+type MicOrchestratorMode = 'legacy_sequence' | 'v7_cs_online'
 
 type MicMetrics = {
   latency_ms?: number
@@ -79,6 +80,7 @@ type SavedWebMicResult = {
   mobile_loop_package_id?: string | null
   sequence_token?: string | null
   sequence_index?: number | null
+  orchestrator_mode?: MicOrchestratorMode | null
 }
 
 type AutoModelSequenceMeta = {
@@ -280,6 +282,7 @@ type MicUiPersistedState = {
   autoModelSelectedIds: string[]
   autoModelGraceSeconds: number
   autoModelSilenceStopSeconds: number
+  orchestratorMode: MicOrchestratorMode
 }
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -326,6 +329,11 @@ function normalizeStringArray(value: unknown): string[] {
     out.push(trimmed)
   }
   return out
+}
+
+function normalizeMicOrchestratorMode(value: unknown): MicOrchestratorMode {
+  if (value === 'v7_cs_online') return 'v7_cs_online'
+  return 'legacy_sequence'
 }
 
 function normalizeModelParamsById(value: unknown): Record<string, Record<string, unknown>> {
@@ -417,6 +425,9 @@ export function MicSession({ availableModels, library }: Props) {
   )
   const [autoModelSilenceStopSeconds, setAutoModelSilenceStopSeconds] = useState(
     Math.max(2, Math.min(60, asFiniteNumberOr(persistedUi.autoModelSilenceStopSeconds, 15))),
+  )
+  const [orchestratorMode, setOrchestratorMode] = useState<MicOrchestratorMode>(
+    normalizeMicOrchestratorMode(persistedUi.orchestratorMode),
   )
   const [autoModelSequenceActive, setAutoModelSequenceActive] = useState(false)
   const [autoModelSequenceIds, setAutoModelSequenceIds] = useState<string[]>([])
@@ -677,6 +688,7 @@ export function MicSession({ availableModels, library }: Props) {
               ? metrics.auto_model_sequence_token.trim()
               : null,
             sequence_index: asFiniteNumber(metrics.auto_model_sequence_index) ?? null,
+            orchestrator_mode: normalizeMicOrchestratorMode(metrics.mic_orchestrator_mode),
           }]
         } catch (e) {
           console.error('[loadSavedHistory] chyba při mapování záznamu', r.record_id, e)
@@ -754,6 +766,7 @@ export function MicSession({ availableModels, library }: Props) {
       autoModelSelectedIds,
       autoModelGraceSeconds,
       autoModelSilenceStopSeconds,
+      orchestratorMode,
     }
     writeMicUiState(payload)
   }, [
@@ -781,6 +794,7 @@ export function MicSession({ availableModels, library }: Props) {
     autoModelSelectedIds,
     autoModelGraceSeconds,
     autoModelSilenceStopSeconds,
+    orchestratorMode,
   ])
 
   // Načti dostupná audio zařízení
@@ -1076,6 +1090,10 @@ export function MicSession({ availableModels, library }: Props) {
       auto_model_sequence_token: autoSequenceMeta?.sequence_token ?? null,
       auto_model_sequence_index: autoSequenceMeta ? autoSequenceMeta.sequence_index + 1 : null,
       auto_model_sequence_total: autoSequenceMeta?.sequence_total ?? null,
+      mic_orchestrator_mode: orchestratorMode,
+      run_id: finalMsg.run_id,
+      sequence_id: finalMsg.sequence_id,
+      global_timeline_ms: finalMsg.global_timeline_ms,
       first_word_latency_ms: finalMsg.first_word_latency_ms,
       first_word_wall_ms: finalMsg.first_word_wall_ms,
       first_word_audio_ms: finalMsg.first_word_audio_ms,
@@ -1101,9 +1119,10 @@ export function MicSession({ availableModels, library }: Props) {
     const note = loopCfg.enabled
       ? `web_mic | mode=${testMode} | ref=${referenceLabel} | loop=${loopCfg.speechS ?? '-'}-${loopCfg.earlyStopS ?? 0}+${loopCfg.pauseS ?? '-'}s | sync1=${loopCfg.syncFirstRound ? 'on' : 'off'} | rounds=${loopCfg.measuredRounds ?? '-'} | pkg=${loopCfg.packageId ?? '-'}`
       : `web_mic | mode=${testMode} | ref=${referenceLabel}`
+    const noteWithOrchestrator = `${note} | orchestrator=${orchestratorMode}`
     const noteWithSequence = autoSequenceMeta
-      ? `${note} | seq=${autoSequenceMeta.sequence_index + 1}/${autoSequenceMeta.sequence_total}`
-      : note
+      ? `${noteWithOrchestrator} | seq=${autoSequenceMeta.sequence_index + 1}/${autoSequenceMeta.sequence_total}`
+      : noteWithOrchestrator
     const rtfVal = typeof finalMsg.rtf === 'number' ? finalMsg.rtf : null
     const dropVal = typeof finalMsg.drop_rate === 'number' ? finalMsg.drop_rate : null
     const hasError = typeof finalMsg.error === 'string' && finalMsg.error.trim().length > 0
@@ -1180,6 +1199,7 @@ export function MicSession({ availableModels, library }: Props) {
       const sessionParams: Record<string, unknown> = {
         ...activeParams,
         mic_test_mode: testMode,
+        mic_orchestrator_mode: orchestratorMode,
       }
       const activeLoopSyncFirstRound = mobileLoopEnabled ? (autoSequenceMeta ? false : mobileLoopSyncFirstRound) : null
       const activeLoopMeasuredRounds = mobileLoopEnabled ? (autoSequenceMeta ? 1 : loopRepeatCount) : null
@@ -1556,6 +1576,7 @@ export function MicSession({ availableModels, library }: Props) {
     autoModelHardTrialSeconds,
     autoModelLatencyGuardSeconds,
     autoModelAdaptiveMaxCutSeconds,
+    orchestratorMode,
     selectedReferenceTextId,
     selectedReferenceText,
     referenceTexts,
@@ -1957,6 +1978,36 @@ export function MicSession({ availableModels, library }: Props) {
               {' '}| uloženo {Math.min(autoModelSavedCount, autoModelSequenceIds.length)}/{autoModelSequenceIds.length}
             </span>
           )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="text-gray-400">Orchestrátor režim:</span>
+          <button
+            type="button"
+            onClick={() => setOrchestratorMode('legacy_sequence')}
+            disabled={uiLocked}
+            className={`px-2 py-1 rounded border ${
+              orchestratorMode === 'legacy_sequence'
+                ? 'border-blue-500 text-blue-200 bg-blue-900/30'
+                : 'border-gray-700 text-gray-300 hover:text-white'
+            }`}
+          >
+            Legacy (stávající)
+          </button>
+          <button
+            type="button"
+            onClick={() => setOrchestratorMode('v7_cs_online')}
+            disabled={uiLocked}
+            className={`px-2 py-1 rounded border ${
+              orchestratorMode === 'v7_cs_online'
+                ? 'border-blue-500 text-blue-200 bg-blue-900/30'
+                : 'border-gray-700 text-gray-300 hover:text-white'
+            }`}
+          >
+            V7 (nový kontrakt)
+          </button>
+          <span className="text-gray-500">
+            Legacy je výchozí; V7 přidá `run_id/sequence_id/global_timeline_ms`.
+          </span>
         </div>
         {autoModelCycleEnabled && (
           <>

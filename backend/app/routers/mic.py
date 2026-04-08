@@ -35,6 +35,7 @@ class CreateSessionResponse(BaseModel):
     session_id: str
     model_id: str
     created_at: str
+    orchestrator_mode: str | None = None
 
 
 class ManualMicRecordRequest(BaseModel):
@@ -159,6 +160,7 @@ def create_session(req: CreateSessionRequest):
         session_id=session_id,
         model_id=state.model_id,
         created_at=state.created_at,
+        orchestrator_mode=state.orchestrator_mode,
     )
 
 
@@ -332,6 +334,12 @@ def get_session(session_id: str):
         "rtf": state.rtf,
         "total_audio_s": state.total_audio_s,
         "sequence_timing": dict(state.sequence_timing or {}),
+        "orchestrator_mode": state.orchestrator_mode,
+        "run_id": state.run_id,
+        "sequence_id": state.sequence_id,
+        "sequence_index": state.sequence_index,
+        "sequence_total": state.sequence_total,
+        "global_timeline_ms": mic_service.get_orchestrator_payload(state).get("global_timeline_ms"),
         "reason_code": state.reason_code,
         "error": state.error,
     }
@@ -377,7 +385,17 @@ async def ws_mic_stream(websocket: WebSocket, session_id: str):
     try:
         mic_service.start_recording(session_id)
         mic_service.log_transport_event(session_id, "ws_start_ok")
-        await websocket.send_text(json.dumps({"type": "started", "session_id": session_id}))
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "started",
+                    "session_id": session_id,
+                    "orchestrator_mode": state.orchestrator_mode,
+                    "run_id": state.run_id,
+                    "sequence_id": state.sequence_id,
+                }
+            )
+        )
     except Exception as exc:
         reason_code = "start_recording_failed"
         mic_service.record_session_start_failure(
