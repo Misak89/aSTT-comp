@@ -11,6 +11,8 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from ..services import mic_service
+
 router = APIRouter()
 
 _STARTED_AT = datetime.now(timezone.utc).isoformat()
@@ -715,3 +717,15 @@ def specstory_health() -> dict[str, Any]:
         "runs_failed": raw.get("runs_failed"),
         "stale_seconds_threshold": stale_threshold,
     }
+
+
+@router.get("/api/health/mic-orchestrator-v7")
+def mic_orchestrator_v7_health(
+    max_reports: int = Query(default=80, ge=1, le=500),
+    max_events: int = Query(default=2500, ge=100, le=20000),
+) -> dict[str, Any]:
+    payload = mic_service.get_v7_runtime_mapping_status(
+        max_reports=max_reports,
+        max_events=max_events,
+    )
+    return payload

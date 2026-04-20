@@ -4,7 +4,7 @@ Doc-Meta:
 - owner: engineering
 - status: active
 - doc_file: CONTRIBUTING.md
-- last_updated_utc: 2026-04-03T11:54:31Z
+- last_updated_utc: 2026-04-20T18:50:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 
@@ -70,6 +70,22 @@ Interpretace vysledku:
 - Physical gate je `MUST`, pokud je tvrzeni runtime kriticke (`funguje/stabilni/rychle/bezpecne`) a zaroven existuje fidelity gap mezi simulaci a realitou.
 - Simulace/synteticke testy jsou nutne, ale samy o sobe nestaci pro release-level tvrzeni.
 - Detailni rozhodovaci pravidla, plusy/minusy, slaba mista a mitigace jsou v `docs/RUNBOOK.md` (sekce physical validation policy).
+
+## 2.3 Stuck-loop handling (MUST)
+- Na stejnou hypotezu max 3 pokusy (vyjimecne 4 jen s novym dukazem).
+- Po 3-4 neuspesnych pokusech zastav retry stejne cesty (`no-loop rule`).
+- Povinne zapsat: co bylo zkouseno, co selhalo, jaky je blocker.
+- Dalsi krok: navrhnout max 2 bezpecne varianty nebo oznacit stav `blocked` a cekat na rozhodnuti ownera.
+- Neni dovoleno "tocit dalsi pokusy" bez nove evidence nebo noveho vstupu.
+
+## 2.4 State-sync hard rules (MUST)
+1. `Code+state atomicita`: zmena milniku je platna jen kdyz je v tom samem commitu i update `docs/PLAN_TRACKER.md`.
+2. `Evidence-gated status`: nelze nastavit milnik na `implemented`/`passed` bez explicitni evidence (`test`, `endpoint`, `artefakt`).
+3. `CI anti-drift`: pokud se meni V7 orchestrator kod/testy nebo se do `docs/session_log.md` pridava V7 completion claim, musi byt soucasne aktualizovan `docs/PLAN_TRACKER.md`.
+
+Pravidlo pro nedokonceny posledni krok:
+- stav ved vzdy dvojici `implementation` + `validation` (ne jednim stavem).
+- dokud validace neni `passed`, readiness zustava `amber`/`red`.
 
 ## 3. Povinna Metadata V Core Dokumentech
 Core docs:
@@ -146,6 +162,7 @@ Priklady:
 Povinne:
 - `docs/PLAN_TRACKER.md`
 - `docs/session_log.md`
+- pokud jde o V7, aktualizuj i V7 matrix (`implementation`, `validation`, `readiness`, `evidence`) v `docs/PLAN_TRACKER.md`.
 
 ### E) Zmena app stavu/monitoringu (health, jobs, processy, long-running loops)
 Priklady:

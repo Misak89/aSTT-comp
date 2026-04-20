@@ -8,6 +8,7 @@ import type {
   WebAppAutostartStatus,
   SpecstoryLiveStatus,
   AppProcessSnapshot,
+  MicOrchestratorV7Health,
   MicManualRecordRequest,
   MicManualRecordResponse,
   MicManualRecordListResponse,
@@ -18,6 +19,7 @@ import type {
   MicMobileLoopPackageListResponse,
   MicMobileLoopPackageDeleteResponse,
   MicSequenceReport,
+  MicSequenceReadinessResponse,
   LocalFileEntry,
   SegmentBundle,
   SegmentBundlePreviewRequest,
@@ -74,6 +76,13 @@ export const api = {
     specstory: () => get<SpecstoryLiveStatus>('/health/specstory'),
     processes: (mode?: 'fast' | 'slow' | 'full') =>
       get<AppProcessSnapshot>(`/health/processes${mode ? `?mode=${encodeURIComponent(mode)}` : ''}`),
+    micOrchestratorV7: (opts?: { max_reports?: number; max_events?: number }) => {
+      const q = new URLSearchParams()
+      if (opts?.max_reports != null) q.set('max_reports', String(opts.max_reports))
+      if (opts?.max_events != null) q.set('max_events', String(opts.max_events))
+      const suffix = q.toString() ? `?${q.toString()}` : ''
+      return get<MicOrchestratorV7Health>(`/health/mic-orchestrator-v7${suffix}`)
+    },
     cleanupStalePids: () =>
       post<{ status: string; removed_count: number; kept_count: number; error_count: number; removed: string[]; kept: string[]; errors: string[] }>(
         '/health/processes/cleanup-stale-pids'
@@ -135,6 +144,7 @@ export const api = {
     modelsLog: () => post<{ path: string }>('/open-dir/models_log'),
     loggerLogs: () => post<{ path: string }>('/open-dir/logger_logs'),
     subtitles: () => post<{ path: string }>('/open-dir/subtitles'),
+    audioCache: () => post<{ path: string }>('/open-dir/audio_cache'),
     subtitlesVideo: (videoId: string) => post<{ path: string }>(`/open-dir/subtitles/${videoId}`),
   },
   models: {
@@ -198,7 +208,20 @@ export const api = {
   mic: {
     devices: () => get<AudioDevice[]>('/mic/devices'),
     createSession: (model_id: string, model_params?: Record<string, unknown>) =>
-      post<{ session_id: string; model_id: string; created_at: string; orchestrator_mode?: string | null }>('/mic/sessions', { model_id, model_params }),
+      post<{
+        session_id: string
+        model_id: string
+        created_at: string
+        orchestrator_mode?: string | null
+        run_id?: string | null
+        sequence_id?: string | null
+        sequence_index?: number | null
+        sequence_total?: number | null
+        event_contract_version?: string | null
+        preflight_ok?: boolean
+        preflight_errors?: string[]
+        preflight_warnings?: string[]
+      }>('/mic/sessions', { model_id, model_params }),
     getSession: (id: string) => get<MicSessionState>(`/mic/sessions/${id}`),
     stopSession: (id: string) => post<MicSessionState>(`/mic/sessions/${id}/stop`),
     listManualRecords: (opts?: { limit?: number; model_id?: string }) => {
@@ -232,5 +255,11 @@ export const api = {
       delJson<MicMobileLoopPackageDeleteResponse>(`/mic/mobile-loop-packages/${encodeURIComponent(packageId)}`),
     getSequenceReport: (token: string) =>
       get<MicSequenceReport>(`/mic/sequences/${encodeURIComponent(token)}`),
+    getSequenceReadiness: (token: string, min_models = 3) =>
+      get<MicSequenceReadinessResponse>(
+        `/mic/sequences/${encodeURIComponent(token)}/readiness?min_models=${encodeURIComponent(String(min_models))}`
+      ),
+    getContract: () =>
+      get<{ schema: string; version: string; required_fields_v7: string[]; reason_codes: string[] }>('/mic/contract'),
   },
 }

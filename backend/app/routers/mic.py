@@ -36,6 +36,14 @@ class CreateSessionResponse(BaseModel):
     model_id: str
     created_at: str
     orchestrator_mode: str | None = None
+    run_id: str | None = None
+    sequence_id: str | None = None
+    sequence_index: int | None = None
+    sequence_total: int | None = None
+    event_contract_version: str | None = None
+    preflight_ok: bool = True
+    preflight_errors: list[str] = Field(default_factory=list)
+    preflight_warnings: list[str] = Field(default_factory=list)
 
 
 class ManualMicRecordRequest(BaseModel):
@@ -156,11 +164,20 @@ def create_session(req: CreateSessionRequest):
     """Vytvoří novou mic session. Vrátí session_id pro WebSocket připojení."""
     session_id = mic_service.create_session(req.model_id, req.model_params or {})
     state = mic_service.get_session(session_id)
+    orchestrator = mic_service.get_orchestrator_payload(state)
     return CreateSessionResponse(
         session_id=session_id,
         model_id=state.model_id,
         created_at=state.created_at,
         orchestrator_mode=state.orchestrator_mode,
+        run_id=state.run_id,
+        sequence_id=state.sequence_id,
+        sequence_index=state.sequence_index,
+        sequence_total=state.sequence_total,
+        event_contract_version=orchestrator.get("event_contract_version"),
+        preflight_ok=state.preflight_ok,
+        preflight_errors=list(state.preflight_errors or []),
+        preflight_warnings=list(state.preflight_warnings or []),
     )
 
 
@@ -280,6 +297,22 @@ def get_sequence_report(token: str):
     return report
 
 
+@router.get("/sequences/{token}/readiness")
+def get_sequence_readiness(
+    token: str,
+    min_models: int = Query(default=3, ge=1, le=20),
+):
+    readiness = mic_service.get_sequence_readiness(token, min_models=min_models)
+    if readiness is None:
+        raise HTTPException(status_code=404, detail="sequence report not found")
+    return readiness
+
+
+@router.get("/contract")
+def get_v7_contract():
+    return mic_service.get_v7_contract_metadata()
+
+
 @router.get("/sequences/{token}/export.csv")
 def export_sequence_report_csv(token: str):
     """Vrátí sequence report jako CSV soubor ke stažení."""
@@ -299,6 +332,7 @@ def get_session(session_id: str):
     state = mic_service.get_session(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="session not found")
+    orchestrator = mic_service.get_orchestrator_payload(state)
     return {
         "session_id": state.session_id,
         "model_id": state.model_id,
@@ -339,7 +373,12 @@ def get_session(session_id: str):
         "sequence_id": state.sequence_id,
         "sequence_index": state.sequence_index,
         "sequence_total": state.sequence_total,
-        "global_timeline_ms": mic_service.get_orchestrator_payload(state).get("global_timeline_ms"),
+        "global_timeline_ms": orchestrator.get("global_timeline_ms"),
+        "event_contract_schema": orchestrator.get("event_contract_schema"),
+        "event_contract_version": orchestrator.get("event_contract_version"),
+        "preflight_ok": state.preflight_ok,
+        "preflight_errors": list(state.preflight_errors or []),
+        "preflight_warnings": list(state.preflight_warnings or []),
         "reason_code": state.reason_code,
         "error": state.error,
     }
@@ -393,11 +432,14 @@ async def ws_mic_stream(websocket: WebSocket, session_id: str):
                     "orchestrator_mode": state.orchestrator_mode,
                     "run_id": state.run_id,
                     "sequence_id": state.sequence_id,
+                    "sequence_index": state.sequence_index,
+                    "sequence_total": state.sequence_total,
+                    "event_contract_version": mic_service.get_orchestrator_payload(state).get("event_contract_version"),
                 }
             )
         )
     except Exception as exc:
-        reason_code = "start_recording_failed"
+        reason_code = mic_service.classify_error_reason(exc, fallback="start_recording_failed")
         mic_service.record_session_start_failure(
             session_id,
             error=str(exc),

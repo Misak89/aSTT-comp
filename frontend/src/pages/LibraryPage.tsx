@@ -1432,6 +1432,20 @@ export function LibraryPage() {
             {showLocalImport ? '▲ Skrýt import' : '📂 Ze složky'}
           </button>
           <button
+            onClick={() => {
+              void api.openDir.audioCache().catch((e: unknown) => {
+                setMsg(`Chyba při otevření Down Audio: ${e instanceof Error ? e.message : String(e)}`)
+              })
+            }}
+            className="text-sm px-3 py-1.5 rounded border bg-white text-amber-700 border-amber-300 hover:bg-amber-50"
+            title="Otevře složku runtime/audio_cache"
+          >
+            📁 Down Audio
+          </button>
+          <span className="text-xs font-mono text-gray-400" title="Relativní cesta v projektu">
+            runtime/audio_cache
+          </span>
+          <button
             onClick={() => { setLsArchive(listTranscripts()); setShowLsArchive(true) }}
             className="text-sm px-3 py-1.5 rounded border bg-white text-purple-700 border-purple-300 hover:bg-purple-50"
             title="Uložené přepisy v LocalStorage prohlížeče"

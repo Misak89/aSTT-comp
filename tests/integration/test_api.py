@@ -94,10 +94,12 @@ def test_benchmark_options_has_settings():
 # Jobs
 # ---------------------------------------------------------------------------
 
-def test_jobs_list_returns_list():
+def test_jobs_list_returns_jobs_envelope():
     status, body = _get("/api/benchmark/jobs")
     assert status == 200
-    assert isinstance(body, list)
+    assert isinstance(body, dict)
+    assert "jobs" in body
+    assert isinstance(body["jobs"], list)
 
 
 def test_create_job_missing_sources_returns_422():

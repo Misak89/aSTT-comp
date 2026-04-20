@@ -7,9 +7,12 @@
 - [ ] I followed start order: `AGENTS.md -> PLAN_TRACKER -> session_log`.
 - [ ] I updated `docs/session_log.md` with a new `## Session YYYY-MM-DDTHH:MM:SSZ ...` entry (for every code change).
 - [ ] I updated `docs/PLAN_TRACKER.md` (if any plan/roadmap docs changed).
+- [ ] Milestone state is synchronized in `docs/PLAN_TRACKER.md` (`implementation` + `validation` + `readiness` + `evidence`).
 - [ ] I updated `docs/ARCHITECTURE.md` (if architecture/logic changed).
 - [ ] I updated `docs/RUNBOOK.md` (if run/start/ops behavior changed).
 - [ ] If app behavior changed, I verified Dashboard is synchronized with current app state (or I documented why not).
+- [ ] For V7 completion claim or V7 code/test change, `docs/PLAN_TRACKER.md` was updated in the same commit series (anti-drift rule).
+- [ ] Milestone status marked as `implemented` or `passed` has explicit evidence in tracker (test/endpoint/artifact link).
 - [ ] Every changed core doc has updated `Doc-Meta.last_updated_utc`.
 - [ ] `CLAUDE.md` remains stub-only and points to `AGENTS.md`.
 - [ ] Documentation updates are concise, logical, and unambiguous.

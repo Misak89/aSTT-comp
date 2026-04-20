@@ -31,6 +31,18 @@ from pathlib import Path
 from typing import Any
 
 from ..config import AUDIO_CACHE_ROOT, MIC_SEQUENCES_ROOT, MIC_SESSIONS_ROOT, MODEL_STORE_ROOT, RUNTIME_ROOT, SUBTITLES_ROOT
+from .mic_v7_contract import (
+    MIC_V7_EVENT_SCHEMA,
+    MIC_V7_EVENT_VERSION,
+    MIC_V7_REASON_CODES,
+    apply_v7_event_contract,
+    build_contract_metadata,
+    compute_kpi_summary,
+    compute_trial_kpi,
+    evaluate_v7_readiness,
+    normalize_reason_code,
+    validate_timeline_monotonic,
+)
 
 try:
     import psutil
@@ -45,6 +57,7 @@ _AUTO_SEQUENCE_MAX_TRACKED = 256
 _V7_SEQUENCE_MAX_TRACKED = 256
 ORCHESTRATOR_MODE_LEGACY = "legacy_sequence"
 ORCHESTRATOR_MODE_V7 = "v7_cs_online"
+_V7_LATENCY_HARD_LIMIT_MS = 12_000.0
 _ORCHESTRATOR_MODE_ALIASES = {
     "legacy": ORCHESTRATOR_MODE_LEGACY,
     "legacy_sequence": ORCHESTRATOR_MODE_LEGACY,
@@ -107,6 +120,9 @@ class MicSessionState:
     sequence_index: int | None = None
     sequence_total: int | None = None
     global_timeline_anchor_epoch_ms: float | None = None
+    preflight_ok: bool = True
+    preflight_errors: list[str] = field(default_factory=list)
+    preflight_warnings: list[str] = field(default_factory=list)
     error: str | None = None
     _session_obj: Any = field(default=None, repr=False)
     _started_perf: float = field(default=0.0, repr=False)
@@ -209,6 +225,26 @@ def _safe_float(value: Any) -> float | None:
     return None
 
 
+def _normalize_reason_code(raw_reason: Any, *, allow_none: bool = True, fallback: str = "unknown") -> str | None:
+    return normalize_reason_code(
+        raw_reason,
+        allow_none=allow_none,
+        allow_unknown=False,
+        fallback=fallback,
+    )
+
+
+def _set_reason_code(state: MicSessionState, raw_reason: Any, *, allow_none: bool = True, fallback: str = "unknown") -> str | None:
+    reason = _normalize_reason_code(raw_reason, allow_none=allow_none, fallback=fallback)
+    state.reason_code = reason
+    return reason
+
+
+def _session_segment_id(state: MicSessionState) -> str:
+    chunk_no = max(0, int(state.chunk_count))
+    return f"{state.session_id}:seg:{chunk_no}"
+
+
 def _orchestrator_mode_from_params(model_params: dict[str, Any]) -> str:
     raw = str(model_params.get("mic_orchestrator_mode") or "").strip().lower()
     if not raw:
@@ -232,6 +268,105 @@ def _parse_auto_sequence_meta(model_params: dict[str, Any]) -> dict[str, Any]:
         "pause_s": pause_s,
         "cycle_s": cycle_s,
         "mobile_loop_enabled": bool(model_params.get("mobile_loop_enabled")),
+    }
+
+
+def _evaluate_session_preflight(
+    *,
+    model_id: str,
+    model_params: dict[str, Any],
+    orchestrator_mode: str,
+    run_id: str | None,
+    sequence_id: str | None,
+    sequence_index: int | None,
+    sequence_total: int | None,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    try:
+        _adapter_key(model_id)
+        checks.append({"id": "adapter_known", "status": "ok", "detail": model_id})
+    except Exception:
+        errors.append("model_not_supported")
+        checks.append({"id": "adapter_known", "status": "error", "detail": model_id})
+
+    if str(model_id).startswith("qwen"):
+        errors.append("model_not_mic_capable")
+        checks.append({"id": "mic_capable", "status": "error", "detail": "qwen_asr is batch-only"})
+    else:
+        checks.append({"id": "mic_capable", "status": "ok", "detail": "adapter supports mic mode"})
+
+    sample_rate = _safe_int(model_params.get("sample_rate"))
+    if sample_rate is not None and (sample_rate < 8000 or sample_rate > 48000):
+        errors.append("sample_rate_out_of_range")
+        checks.append({"id": "sample_rate_range", "status": "error", "detail": sample_rate})
+    else:
+        checks.append({"id": "sample_rate_range", "status": "ok", "detail": sample_rate or "default"})
+
+    lang_raw = model_params.get("language")
+    if lang_raw is None:
+        lang_raw = model_params.get("lang")
+    lang = str(lang_raw or "").strip().lower()
+    if lang and lang not in {"cs", "cs-cz"}:
+        warnings.append("language_not_cs")
+        checks.append({"id": "language_code", "status": "warn", "detail": lang})
+    else:
+        checks.append({"id": "language_code", "status": "ok", "detail": lang or "implicit"})
+
+    if orchestrator_mode == ORCHESTRATOR_MODE_V7:
+        if not str(run_id or "").strip():
+            errors.append("v7_missing_run_id")
+            checks.append({"id": "v7_run_id", "status": "error", "detail": None})
+        else:
+            checks.append({"id": "v7_run_id", "status": "ok", "detail": run_id})
+
+        if not str(sequence_id or "").strip():
+            errors.append("v7_missing_sequence_id")
+            checks.append({"id": "v7_sequence_id", "status": "error", "detail": None})
+        else:
+            checks.append({"id": "v7_sequence_id", "status": "ok", "detail": sequence_id})
+
+        if sequence_index is None:
+            warnings.append("v7_missing_sequence_index")
+            checks.append({"id": "v7_sequence_index", "status": "warn", "detail": None})
+        elif sequence_index < 1:
+            errors.append("v7_sequence_index_invalid")
+            checks.append({"id": "v7_sequence_index", "status": "error", "detail": sequence_index})
+        else:
+            checks.append({"id": "v7_sequence_index", "status": "ok", "detail": sequence_index})
+
+        if sequence_total is None:
+            warnings.append("v7_missing_sequence_total")
+            checks.append({"id": "v7_sequence_total", "status": "warn", "detail": None})
+        elif sequence_total < 1:
+            errors.append("v7_sequence_total_invalid")
+            checks.append({"id": "v7_sequence_total", "status": "error", "detail": sequence_total})
+        else:
+            checks.append({"id": "v7_sequence_total", "status": "ok", "detail": sequence_total})
+
+        if (
+            isinstance(sequence_index, int)
+            and isinstance(sequence_total, int)
+            and sequence_index > sequence_total
+        ):
+            errors.append("v7_sequence_index_gt_total")
+            checks.append(
+                {
+                    "id": "v7_sequence_order",
+                    "status": "error",
+                    "detail": f"{sequence_index}>{sequence_total}",
+                }
+            )
+        else:
+            checks.append({"id": "v7_sequence_order", "status": "ok", "detail": "valid"})
+
+    return {
+        "ok": len(errors) == 0,
+        "errors": sorted(set(errors)),
+        "warnings": sorted(set(warnings)),
+        "checks": checks,
     }
 
 
@@ -267,6 +402,8 @@ def _build_orchestrator_payload(state: MicSessionState, *, now_epoch_ms: float |
     with state._lock:
         payload = {
             "orchestrator_mode": state.orchestrator_mode,
+            "event_contract_schema": MIC_V7_EVENT_SCHEMA,
+            "event_contract_version": MIC_V7_EVENT_VERSION,
         }
         if state.orchestrator_mode != ORCHESTRATOR_MODE_V7:
             return payload
@@ -453,6 +590,8 @@ def _update_v7_timing_on_start(state: MicSessionState) -> dict[str, Any]:
         elif state.global_timeline_anchor_epoch_ms is None and isinstance(started_ms, (int, float)):
             state.global_timeline_anchor_epoch_ms = float(started_ms)
         return {
+            "event_contract_schema": MIC_V7_EVENT_SCHEMA,
+            "event_contract_version": MIC_V7_EVENT_VERSION,
             "run_id": state.run_id,
             "sequence_id": state.sequence_id,
             "sequence_index": sequence_index,
@@ -479,7 +618,7 @@ def classify_trial(state: MicSessionState) -> str:
     rtf = float(state.rtf or 0.0)
     fw_ms = state.first_word_wall_ms
     q_peak = float(state.queue_depth_peak_s or 0.0)
-    reason = state.reason_code or ""
+    reason = _normalize_reason_code(state.reason_code, allow_none=True, fallback="unknown") or ""
     error = state.error or ""
 
     if (
@@ -522,6 +661,12 @@ def _sequence_identity(state: MicSessionState) -> tuple[str, int | None, int | N
         seq_index = meta.get("index")
     if seq_total is None:
         seq_total = meta.get("total")
+    if not token and state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
+        token = str(state.sequence_id or state.session_id or "").strip()
+    if seq_index is None and state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
+        seq_index = _safe_int(state.sequence_index)
+    if seq_total is None and state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
+        seq_total = _safe_int(state.sequence_total)
     return token, seq_index, seq_total
 
 
@@ -535,7 +680,8 @@ def _build_sequence_trial_entry(
 ) -> dict[str, Any]:
     p = payload or {}
     orchestrator = _build_orchestrator_payload(state)
-    return {
+    reason_code = _normalize_reason_code(p.get("reason_code", state.reason_code), allow_none=True)
+    entry = {
         "seq_index": seq_index,
         "seq_total": seq_total,
         "session_id": state.session_id,
@@ -563,9 +709,15 @@ def _build_sequence_trial_entry(
         "queue_depth_peak_s": p.get("queue_depth_peak_s", state.queue_depth_peak_s),
         "backpressure_events": p.get("backpressure_events", state.backpressure_events),
         "worker_rss_peak_mb": p.get("worker_rss_peak_mb", state.worker_rss_peak_mb),
-        "reason_code": p.get("reason_code", state.reason_code),
+        "reason_code": reason_code,
         "error": p.get("error", state.error),
+        "segment_id": _session_segment_id(state),
+        "event_contract_schema": MIC_V7_EVENT_SCHEMA,
+        "event_contract_version": MIC_V7_EVENT_VERSION,
+        "reason_known": reason_code in MIC_V7_REASON_CODES if reason_code else True,
     }
+    entry.update(compute_trial_kpi(entry, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS))
+    return entry
 
 
 def _build_sequence_summary(trials: list[dict[str, Any]]) -> dict[str, Any]:
@@ -575,6 +727,10 @@ def _build_sequence_summary(trials: list[dict[str, Any]]) -> dict[str, Any]:
     reasons: dict[str, int] = {}
     rtf_values: list[float] = []
     drop_values: list[float] = []
+    latency_values: list[float] = []
+    quality_values: list[float] = []
+    hw_values: list[float] = []
+    unknown_reason_codes = 0
 
     for trial in trials:
         status = str(trial.get("trial_status") or "")
@@ -584,9 +740,11 @@ def _build_sequence_summary(trials: list[dict[str, Any]]) -> dict[str, Any]:
             running += 1
         if trial.get("stopped_at"):
             finalized += 1
-        reason_code = str(trial.get("reason_code") or "").strip()
+        reason_code = _normalize_reason_code(trial.get("reason_code"), allow_none=True, fallback="unknown")
         if reason_code:
             reasons[reason_code] = reasons.get(reason_code, 0) + 1
+            if reason_code not in MIC_V7_REASON_CODES:
+                unknown_reason_codes += 1
 
         rtf = _safe_float(trial.get("rtf"))
         if isinstance(rtf, float):
@@ -594,6 +752,15 @@ def _build_sequence_summary(trials: list[dict[str, Any]]) -> dict[str, Any]:
         drop = _safe_float(trial.get("drop_rate"))
         if isinstance(drop, float):
             drop_values.append(drop)
+        latency_ms = _safe_float(trial.get("latency_ms"))
+        if isinstance(latency_ms, float):
+            latency_values.append(latency_ms)
+        quality = _safe_float(trial.get("quality_score"))
+        if isinstance(quality, float):
+            quality_values.append(quality)
+        hw = _safe_float(trial.get("worker_rss_peak_mb"))
+        if isinstance(hw, float):
+            hw_values.append(hw)
 
     avg_rtf = round(sum(rtf_values) / len(rtf_values), 4) if rtf_values else None
     avg_drop = round(sum(drop_values) / len(drop_values), 4) if drop_values else None
@@ -604,6 +771,10 @@ def _build_sequence_summary(trials: list[dict[str, Any]]) -> dict[str, Any]:
         "reasons": reasons,
         "avg_rtf": avg_rtf,
         "avg_drop_rate": avg_drop,
+        "avg_latency_ms": round(sum(latency_values) / len(latency_values), 1) if latency_values else None,
+        "avg_quality_score": round(sum(quality_values) / len(quality_values), 4) if quality_values else None,
+        "avg_worker_rss_peak_mb": round(sum(hw_values) / len(hw_values), 1) if hw_values else None,
+        "unknown_reason_codes": unknown_reason_codes,
     }
 
 
@@ -679,12 +850,34 @@ def _persist_sequence_report(
                 sequence_total = maybe_total
                 break
 
+    timeline_validation = validate_timeline_monotonic(
+        trials_sorted,
+        timeline_key="global_timeline_ms",
+        seq_key="seq_index",
+    )
+    kpi_summary = compute_kpi_summary(trials_sorted, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS)
+    summary = _build_sequence_summary(trials_sorted)
+    summary["timeline_validation"] = timeline_validation
+    summary["kpi"] = kpi_summary
+    readiness = evaluate_v7_readiness(
+        trials=trials_sorted,
+        timeline_validation=timeline_validation,
+        kpi_summary=kpi_summary,
+        min_models=3,
+        require_v7_mode=False,
+        require_finalized=False,
+    )
+
     report = {
         "sequence_token": token,
         "updated_at": _iso_now(),
         "sequence_total": sequence_total,
         "trials_count": len(trials_sorted),
-        "summary": _build_sequence_summary(trials_sorted),
+        "contract": build_contract_metadata(),
+        "timeline_validation": timeline_validation,
+        "kpi": kpi_summary,
+        "readiness": readiness,
+        "summary": summary,
         "trials": trials_sorted,
     }
 
@@ -698,12 +891,19 @@ def _persist_sequence_report(
         "seq_total",
         "model_id",
         "orchestrator_mode",
+        "event_contract_schema",
+        "event_contract_version",
         "run_id",
         "sequence_id",
+        "segment_id",
         "global_timeline_ms",
         "phase",
         "status",
         "trial_status",
+        "latency_ms",
+        "latency_lane",
+        "latency_hard_violation",
+        "quality_score",
         "rtf",
         "drop_rate",
         "first_word_wall_ms",
@@ -715,6 +915,7 @@ def _persist_sequence_report(
         "elapsed_s",
         "total_audio_s",
         "reason_code",
+        "reason_known",
         "error",
         "session_id",
         "created_at",
@@ -770,7 +971,7 @@ def _maybe_persist_sequence_progress(
             "queue_depth_peak_s": state.queue_depth_peak_s,
             "backpressure_events": state.backpressure_events,
             "worker_rss_peak_mb": state.worker_rss_peak_mb,
-            "reason_code": state.reason_code,
+            "reason_code": _normalize_reason_code(state.reason_code, allow_none=True, fallback="unknown"),
             "error": state.error,
         }
 
@@ -783,15 +984,180 @@ def get_sequence_report(token: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        report = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    if not isinstance(report, dict):
+        return None
+
+    trials_raw = report.get("trials")
+    trials = list(trials_raw) if isinstance(trials_raw, list) else []
+    if trials:
+        for idx, trial in enumerate(trials):
+            if not isinstance(trial, dict):
+                continue
+            trial.setdefault("seq_index", idx + 1)
+            trial.setdefault("event_contract_schema", MIC_V7_EVENT_SCHEMA)
+            trial.setdefault("event_contract_version", MIC_V7_EVENT_VERSION)
+            trial["reason_code"] = _normalize_reason_code(trial.get("reason_code"), allow_none=True, fallback="unknown")
+            trial["reason_known"] = trial["reason_code"] in MIC_V7_REASON_CODES if trial.get("reason_code") else True
+            trial.update(compute_trial_kpi(trial, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS))
+
+        timeline_validation = validate_timeline_monotonic(trials, timeline_key="global_timeline_ms", seq_key="seq_index")
+        kpi_summary = compute_kpi_summary(trials, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS)
+        readiness = evaluate_v7_readiness(
+            trials=trials,
+            timeline_validation=timeline_validation,
+            kpi_summary=kpi_summary,
+            min_models=3,
+            require_v7_mode=False,
+            require_finalized=False,
+        )
+        summary = report.get("summary")
+        if not isinstance(summary, dict):
+            summary = _build_sequence_summary(trials)
+        summary["timeline_validation"] = timeline_validation
+        summary["kpi"] = kpi_summary
+        report["summary"] = summary
+        report["timeline_validation"] = timeline_validation
+        report["kpi"] = kpi_summary
+        report["readiness"] = readiness
+
+    report["contract"] = build_contract_metadata()
+    report["trials"] = trials
+    return report
 
 
 def get_sequence_report_csv_path(token: str) -> Path | None:
     """Vrátí cestu k report.csv, nebo None."""
     path = MIC_SEQUENCES_ROOT / token / "report.csv"
     return path if path.exists() else None
+
+
+def get_sequence_readiness(token: str, *, min_models: int = 3) -> dict[str, Any] | None:
+    report = get_sequence_report(token)
+    if report is None:
+        return None
+    trials = report.get("trials")
+    if not isinstance(trials, list):
+        trials = []
+    timeline = report.get("timeline_validation")
+    if not isinstance(timeline, dict):
+        timeline = validate_timeline_monotonic(trials, timeline_key="global_timeline_ms", seq_key="seq_index")
+    kpi = report.get("kpi")
+    if not isinstance(kpi, dict):
+        kpi = compute_kpi_summary(trials, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS)
+    readiness = evaluate_v7_readiness(
+        trials=trials,
+        timeline_validation=timeline,
+        kpi_summary=kpi,
+        min_models=max(1, int(min_models)),
+        require_v7_mode=False,
+        require_finalized=False,
+    )
+    return {
+        "sequence_token": token,
+        "contract": build_contract_metadata(),
+        "timeline_validation": timeline,
+        "kpi": kpi,
+        "readiness": readiness,
+    }
+
+
+def get_v7_runtime_mapping_status(*, max_reports: int = 80, max_events: int = 2500) -> dict[str, Any]:
+    events: list[dict[str, Any]] = []
+    if MIC_EVENTS_LOG_PATH.exists():
+        try:
+            lines = MIC_EVENTS_LOG_PATH.read_text(encoding="utf-8").splitlines()
+            for raw in lines[-max(1, int(max_events)):]:
+                if not raw.strip():
+                    continue
+                try:
+                    row = json.loads(raw)
+                except Exception:
+                    continue
+                if isinstance(row, dict):
+                    events.append(row)
+        except Exception:
+            events = []
+
+    event_types: dict[str, int] = {}
+    v7_events = 0
+    invalid_contract_events = 0
+    unknown_reason_events = 0
+    missing_field_events = 0
+    last_event_ts: str | None = None
+    for event in events:
+        event_name = str(event.get("event") or "").strip() or "unknown"
+        event_types[event_name] = event_types.get(event_name, 0) + 1
+        last_event_ts = str(event.get("ts") or last_event_ts or "")
+        mode = str(event.get("orchestrator_mode") or "").strip()
+        if mode == ORCHESTRATOR_MODE_V7:
+            v7_events += 1
+        contract_valid = event.get("contract_valid")
+        if contract_valid is False:
+            invalid_contract_events += 1
+        if event.get("reason_known") is False:
+            unknown_reason_events += 1
+        missing = event.get("contract_missing_fields")
+        if isinstance(missing, list):
+            missing_field_events += len(missing)
+
+    report_files = sorted(
+        MIC_SEQUENCES_ROOT.glob("*/report.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    report_tokens: list[str] = []
+    timeline_fail = 0
+    readiness_fail = 0
+    latest_sequence_updated_at: str | None = None
+    latest_sequence_token: str | None = None
+
+    for report_path in report_files[: max(1, int(max_reports))]:
+        token = report_path.parent.name
+        report_tokens.append(token)
+        report = get_sequence_report(token)
+        if not isinstance(report, dict):
+            continue
+        timeline = report.get("timeline_validation")
+        if isinstance(timeline, dict) and not bool(timeline.get("ok")):
+            timeline_fail += 1
+        readiness = report.get("readiness")
+        readiness_pass = bool(readiness.get("pass")) if isinstance(readiness, dict) else False
+        if not readiness_pass:
+            readiness_fail += 1
+        updated_at = str(report.get("updated_at") or "").strip()
+        if latest_sequence_updated_at is None and updated_at:
+            latest_sequence_updated_at = updated_at
+            latest_sequence_token = token
+
+    if v7_events == 0 and not report_tokens:
+        status = "missing"
+    elif invalid_contract_events > 0 or timeline_fail > 0:
+        status = "error"
+    elif readiness_fail > 0 or unknown_reason_events > 0 or missing_field_events > 0:
+        status = "warn"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "generated_at_utc": _iso_now(),
+        "contract": build_contract_metadata(),
+        "events_total": len(events),
+        "events_v7_total": v7_events,
+        "invalid_contract_events": invalid_contract_events,
+        "unknown_reason_events": unknown_reason_events,
+        "missing_required_field_events": missing_field_events,
+        "last_event_ts": last_event_ts,
+        "event_types": event_types,
+        "sequence_reports_total": len(report_tokens),
+        "timeline_fail_reports": timeline_fail,
+        "readiness_fail_reports": readiness_fail,
+        "latest_sequence_token": latest_sequence_token,
+        "latest_sequence_updated_at": latest_sequence_updated_at,
+    }
 
 
 def _append_mic_event(
@@ -818,6 +1184,7 @@ def _append_mic_event(
                     "started_at": state.started_at,
                     "stopped_at": state.stopped_at,
                     "orchestrator_mode": state.orchestrator_mode,
+                    "segment_id": _session_segment_id(state),
                 }
             )
             if state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
@@ -832,6 +1199,8 @@ def _append_mic_event(
                 )
     if extra:
         payload.update(extra)
+    payload["reason_code"] = _normalize_reason_code(payload.get("reason_code"), allow_none=True, fallback="unknown")
+    payload = apply_v7_event_contract(payload)
     try:
         MIC_EVENTS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with MIC_EVENTS_LOG_PATH.open("a", encoding="utf-8") as fh:
@@ -897,7 +1266,14 @@ def _build_session_snapshot(
             "sequence_index": state.sequence_index,
             "sequence_total": state.sequence_total,
             "global_timeline_ms": _compute_global_timeline_ms_unlocked(state),
-            "reason_code": state.reason_code,
+            "event_contract_schema": MIC_V7_EVENT_SCHEMA,
+            "event_contract_version": MIC_V7_EVENT_VERSION,
+            "segment_id": _session_segment_id(state),
+            "reason_code": _normalize_reason_code(state.reason_code, allow_none=True, fallback="unknown"),
+            "reason_known": state.reason_code in MIC_V7_REASON_CODES if state.reason_code else True,
+            "preflight_ok": state.preflight_ok,
+            "preflight_errors": list(state.preflight_errors or []),
+            "preflight_warnings": list(state.preflight_warnings or []),
             "error": state.error,
         }
     if extra:
@@ -942,8 +1318,24 @@ def create_session(model_id: str, model_params: dict | None = None) -> str:
     if state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
         state.run_id = f"run_{session_id}"
         state.sequence_id = str(seq_meta.get("token") or session_id)
-        state.sequence_index = _safe_int(seq_meta.get("index"))
-        state.sequence_total = _safe_int(seq_meta.get("total"))
+        seq_index = _safe_int(seq_meta.get("index")) or 1
+        seq_total = _safe_int(seq_meta.get("total")) or seq_index
+        state.sequence_index = max(1, int(seq_index))
+        state.sequence_total = max(int(state.sequence_index), int(seq_total))
+
+    preflight = _evaluate_session_preflight(
+        model_id=state.model_id,
+        model_params=state.model_params,
+        orchestrator_mode=state.orchestrator_mode,
+        run_id=state.run_id,
+        sequence_id=state.sequence_id,
+        sequence_index=state.sequence_index,
+        sequence_total=state.sequence_total,
+    )
+    with state._lock:
+        state.preflight_ok = bool(preflight.get("ok"))
+        state.preflight_errors = list(preflight.get("errors") or [])
+        state.preflight_warnings = list(preflight.get("warnings") or [])
 
     with _sessions_lock:
         _sessions[session_id] = state
@@ -959,6 +1351,9 @@ def create_session(model_id: str, model_params: dict | None = None) -> str:
             "mobile_loop_speech_s": seq_meta["speech_s"],
             "mobile_loop_pause_s": seq_meta["pause_s"],
             "mobile_loop_cycle_s": seq_meta["cycle_s"],
+            "preflight_ok": state.preflight_ok,
+            "preflight_errors": list(state.preflight_errors or []),
+            "preflight_warnings": list(state.preflight_warnings or []),
             "run_id": state.run_id,
             "sequence_id": state.sequence_id,
             "sequence_index": state.sequence_index,
@@ -976,6 +1371,10 @@ def get_session(session_id: str) -> MicSessionState | None:
 
 def get_orchestrator_payload(state: MicSessionState) -> dict[str, Any]:
     return _build_orchestrator_payload(state)
+
+
+def get_v7_contract_metadata() -> dict[str, Any]:
+    return build_contract_metadata()
 
 
 def log_transport_event(session_id: str, event: str, extra: dict[str, Any] | None = None) -> None:
@@ -1650,6 +2049,8 @@ def _prepare_chunk_audio(
 
 def _classify_reason(exc: BaseException | str) -> str:
     text = str(exc).lower()
+    if "preflight" in text:
+        return "preflight_failed"
     if "timeout" in text:
         return "timeout"
     if "buffer" in text and ("overrun" in text or "overflow" in text):
@@ -1661,6 +2062,11 @@ def _classify_reason(exc: BaseException | str) -> str:
     if "decode" in text:
         return "decode_error"
     return "adapter_error"
+
+
+def classify_error_reason(exc: BaseException | str, *, fallback: str = "adapter_error") -> str:
+    reason = _normalize_reason_code(_classify_reason(exc), allow_none=False, fallback=fallback)
+    return reason or fallback
 
 
 def _current_process_rss_mb() -> float | None:
@@ -1678,6 +2084,13 @@ def start_recording(session_id: str) -> None:
     state = get_session(session_id)
     if state is None:
         raise ValueError(f"Session not found: {session_id}")
+
+    with state._lock:
+        preflight_ok = bool(state.preflight_ok)
+        preflight_errors = list(state.preflight_errors or [])
+    if not preflight_ok and preflight_errors:
+        joined = ", ".join(preflight_errors)
+        raise RuntimeError(f"preflight_failed: {joined}")
 
     adapter_key = _adapter_key(state.model_id)
     target_sr = _parse_int_param(state.model_params, "sample_rate", SAMPLE_RATE, 8000, 48000)
@@ -1728,7 +2141,7 @@ def start_recording(session_id: str) -> None:
         state.queue_depth_peak_s = 0.0
         state.backpressure_events = 0
         state.backpressure_active = False
-        state.reason_code = None
+        _set_reason_code(state, None, allow_none=True)
         state.error = None
         state.transcript = ""
         state.partial = ""
@@ -1736,11 +2149,17 @@ def start_recording(session_id: str) -> None:
         if state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
             if not state.run_id:
                 state.run_id = f"run_{state.session_id}"
+            meta = _parse_auto_sequence_meta(state.model_params or {})
             if not state.sequence_id:
-                meta = _parse_auto_sequence_meta(state.model_params or {})
                 state.sequence_id = str(meta.get("token") or state.session_id)
-                state.sequence_index = _safe_int(meta.get("index"))
-                state.sequence_total = _safe_int(meta.get("total"))
+            seq_index = _safe_int(state.sequence_index)
+            if seq_index is None:
+                seq_index = _safe_int(meta.get("index")) or 1
+            seq_total = _safe_int(state.sequence_total)
+            if seq_total is None:
+                seq_total = _safe_int(meta.get("total")) or seq_index
+            state.sequence_index = max(1, int(seq_index))
+            state.sequence_total = max(int(state.sequence_index), int(seq_total))
         _set_status(state, "recording")
     sequence_timing = _update_sequence_timing_on_start(state)
     orchestrator_payload = _update_v7_timing_on_start(state)
@@ -1770,9 +2189,10 @@ def record_session_start_failure(
     state = get_session(session_id)
     if state is None:
         return
+    reason = _normalize_reason_code(reason_code, allow_none=False, fallback="start_recording_failed") or "start_recording_failed"
     with state._lock:
         state.error = str(error)
-        state.reason_code = str(reason_code)
+        state.reason_code = reason
         try:
             _set_status(state, "stopped")
         except Exception:
@@ -1783,7 +2203,7 @@ def record_session_start_failure(
         "start_failed",
         state=state,
         extra={
-            "failure_reason_code": str(reason_code),
+            "failure_reason_code": reason,
             "failure_error": str(error),
             **_build_orchestrator_payload(state),
         },
@@ -1800,20 +2220,26 @@ def process_audio_chunk(
     """Přijme audio chunk a vrátí partial výsledek."""
     state = get_session(session_id)
     if state is None:
-        return {"error": "session not found", "reason_code": "session_not_found"}
+        return {
+            "error": "session not found",
+            "reason_code": _normalize_reason_code("session_not_found", allow_none=False, fallback="session_not_found"),
+        }
     if state.status != "recording":
         return {
             "error": f"session not recording (status={state.status})",
-            "reason_code": "not_recording",
+            "reason_code": _normalize_reason_code("not_recording", allow_none=False, fallback="not_recording"),
         }
     if not samples:
         with state._lock:
             state.chunk_count += 1
             state.dropped_chunks += 1
             state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
-            state.reason_code = "empty_chunk"
+            _set_reason_code(state, "empty_chunk", allow_none=False, fallback="empty_chunk")
         _maybe_persist_sequence_progress(state, phase="partial")
-        return {"error": "empty chunk", "reason_code": "empty_chunk"}
+        return {
+            "error": "empty chunk",
+            "reason_code": _normalize_reason_code("empty_chunk", allow_none=False, fallback="empty_chunk"),
+        }
 
     in_sr = max(1, int(sample_rate))
     prepared_samples, prepared_sr = _prepare_chunk_audio(state=state, samples=samples, sample_rate=in_sr)
@@ -1822,9 +2248,12 @@ def process_audio_chunk(
             state.chunk_count += 1
             state.dropped_chunks += 1
             state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
-            state.reason_code = "empty_chunk"
+            _set_reason_code(state, "empty_chunk", allow_none=False, fallback="empty_chunk")
         _maybe_persist_sequence_progress(state, phase="partial")
-        return {"error": "empty chunk", "reason_code": "empty_chunk"}
+        return {
+            "error": "empty chunk",
+            "reason_code": _normalize_reason_code("empty_chunk", allow_none=False, fallback="empty_chunk"),
+        }
 
     chunk_audio_s = len(prepared_samples) / max(1, prepared_sr)
     now_perf = time.perf_counter()
@@ -1856,7 +2285,7 @@ def process_audio_chunk(
             if state.queue_depth_s <= state.queue_low_watermark_s:
                 state.backpressure_active = False
             state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
-            state.reason_code = "backpressure_drop"
+            _set_reason_code(state, "backpressure_drop", allow_none=False, fallback="backpressure_drop")
             backpressure_payload = {
                 "type": "partial",
                 "text": state.transcript,
@@ -1887,7 +2316,7 @@ def process_audio_chunk(
     except Exception as exc:
         with state._lock:
             state.error = str(exc)
-            state.reason_code = _classify_reason(exc)
+            _set_reason_code(state, classify_error_reason(exc), allow_none=False, fallback="adapter_error")
             state.chunk_count += 1
             state.dropped_chunks += 1
             state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
@@ -1948,7 +2377,7 @@ def process_audio_chunk(
             first_audio = result.get("first_word_audio_ms")
             state.first_word_audio_ms = float(first_audio) if isinstance(first_audio, (int, float)) else None
         state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
-        state.reason_code = None
+        _set_reason_code(state, None, allow_none=True)
 
     _maybe_persist_sequence_progress(state, phase="partial")
 
@@ -1990,7 +2419,7 @@ def stop_recording(session_id: str) -> dict[str, Any]:
         final = {}
         with state._lock:
             state.error = str(exc)
-            state.reason_code = _classify_reason(exc)
+            _set_reason_code(state, classify_error_reason(exc), allow_none=False, fallback="adapter_error")
             state.dropped_chunks += 1
 
     elapsed_s = max(0.001, time.perf_counter() - state._started_perf)
@@ -2044,9 +2473,9 @@ def stop_recording(session_id: str) -> dict[str, Any]:
         state.drop_rate = state.dropped_chunks / max(1, state.chunk_count)
         state.queue_depth_s = max(0.0, state.queue_depth_s)
         if state.reason_code is None and state.drop_rate > 0.05:
-            state.reason_code = "backpressure_drop"
+            _set_reason_code(state, "backpressure_drop", allow_none=False, fallback="backpressure_drop")
         elif state.reason_code is None and not state.transcript.strip():
-            state.reason_code = "no_tokens"
+            _set_reason_code(state, "no_tokens", allow_none=False, fallback="no_tokens")
     sequence_timing = _update_sequence_timing_on_stop(state)
 
     final_payload = {
@@ -2081,7 +2510,7 @@ def stop_recording(session_id: str) -> dict[str, Any]:
         "rtf": state.rtf,
         "total_audio_s": state.total_audio_s,
         "sequence_timing": sequence_timing,
-        "reason_code": state.reason_code,
+        "reason_code": _normalize_reason_code(state.reason_code, allow_none=True, fallback="unknown"),
         "error": state.error,
     }
     final_payload.update(_build_orchestrator_payload(state))

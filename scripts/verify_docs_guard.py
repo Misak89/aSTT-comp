@@ -97,6 +97,25 @@ PLAN_DOC_PREFIXES = (
     "docs/mic_sequence_",
 )
 
+V7_SYNC_EXACT_PATHS = {
+    "backend/app/services/mic_v7_contract.py",
+    "backend/app/services/mic_service.py",
+    "backend/app/routers/mic.py",
+    "backend/app/routers/health.py",
+    "frontend/src/components/MicSession.tsx",
+    "frontend/src/pages/DashboardPage.tsx",
+    "frontend/src/types/index.ts",
+    "frontend/src/api/client.ts",
+    "tests/unit/test_mic_v7_contract.py",
+    "tests/unit/test_mic_v7_runtime_mapping.py",
+    "tests/unit/test_mic_orchestrator_mode.py",
+    "tests/unit/test_dashboard_monitor_contract.py",
+}
+
+V7_SYNC_PREFIXES = (
+    "docs/tuning_v7_",
+)
+
 DOCS_GUARDED_PREFIX = "docs/"
 DOCS_IGNORE_PREFIXES = (
     "docs/backups/",
@@ -224,6 +243,15 @@ def _needs_plan_tracker_update(changed: Iterable[str]) -> bool:
         if low.startswith("docs/") and low.endswith(".md") and "plan" in low:
             return True
         if low.startswith("docs/") and low.endswith(".md") and "roadmap" in low:
+            return True
+    return False
+
+
+def _needs_v7_plan_tracker_sync(changed: Iterable[str]) -> bool:
+    for path in changed:
+        if path in V7_SYNC_EXACT_PATHS:
+            return True
+        if any(path.startswith(prefix) for prefix in V7_SYNC_PREFIXES):
             return True
     return False
 
@@ -380,6 +408,33 @@ def _has_added_prefix_line(base: str | None, head: str, path: str, prefix: str) 
 def _has_new_session_header(base: str | None, head: str, path: str) -> bool:
     patch = _get_patch(base, head, path)
     return any(SESSION_HEADER_ADD_RE.match(line) for line in patch.splitlines())
+
+
+def _has_added_v7_completion_claim(base: str | None, head: str, path: str) -> bool:
+    patch = _get_patch(base, head, path)
+    completion_tokens = (
+        "implementov",
+        "implemented",
+        "done",
+        "completed",
+        "splnen",
+        "hotov",
+        "body 1-7",
+        "1-7",
+    )
+    for line in patch.splitlines():
+        if line.startswith(("+++", "---", "@@", "diff ", "index ")):
+            continue
+        if not line.startswith("+"):
+            continue
+        content = line[1:].strip().lower()
+        if not content:
+            continue
+        if "v7" not in content:
+            continue
+        if any(token in content for token in completion_tokens):
+            return True
+    return False
 
 
 def _parse_doc_meta(content: str) -> dict[str, str]:
@@ -618,6 +673,22 @@ def main() -> int:
         args.base, args.head, PLAN_TRACKER_DOC
     ):
         failures.append(f"- {PLAN_TRACKER_DOC} changed but without substantive added content.")
+
+    v7_sync_required = _needs_v7_plan_tracker_sync(changed)
+    v7_completion_claim = (
+        SESSION_LOG in changed_set
+        and _has_added_v7_completion_claim(args.base, args.head, SESSION_LOG)
+    )
+    if (v7_sync_required or v7_completion_claim) and PLAN_TRACKER_DOC not in changed_set:
+        failures.append(
+            f"- Missing {PLAN_TRACKER_DOC}: V7 code/test or V7 completion claim changed (anti-drift rule)."
+        )
+    if (v7_sync_required or v7_completion_claim) and PLAN_TRACKER_DOC in changed_set and not _has_substantive_added_lines(
+        args.base, args.head, PLAN_TRACKER_DOC
+    ):
+        failures.append(
+            f"- {PLAN_TRACKER_DOC}: V7 anti-drift requires substantive tracker update."
+        )
 
     if SPECSTORY_SCRIPT in changed_set:
         if KNOWN_FAILURES_DOC not in changed_set:

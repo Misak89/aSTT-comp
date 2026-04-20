@@ -16,6 +16,7 @@ _TS_RE = re.compile(
 )
 _TAG_RE = re.compile(r"<[^>]+>")
 _WORD_RE = re.compile(r"\w+", flags=re.UNICODE)
+_TOKEN_SPLIT_RE = re.compile(r"[.\-_\s]+")
 
 
 def _ts_to_ms(ts: str) -> int:
@@ -30,19 +31,21 @@ def _ts_to_ms(ts: str) -> int:
     return 0
 
 
+def _stem_has_token(path: Path, token: str) -> bool:
+    parts = [p for p in _TOKEN_SPLIT_RE.split(path.stem.lower()) if p]
+    return token.lower() in parts
+
+
 def _pick_preferred_vtt(vtt_files: list[Path]) -> Path:
     """Prefer edit/manual subtitles over auto-generated ones."""
-    edits = [
-        f for f in vtt_files
-        if "-edit." in f.name.lower() or "_edit." in f.name.lower() or ".edit." in f.name.lower()
-    ]
-    manual = [f for f in vtt_files if ".auto." not in f.name.lower() and "-auto." not in f.name.lower()]
-    return (edits or manual or vtt_files)[0]
+    sorted_files = sorted(vtt_files, key=lambda p: p.name.lower())
+    edits = [f for f in sorted_files if _stem_has_token(f, "edit")]
+    manual = [f for f in sorted_files if not _stem_has_token(f, "auto")]
+    return (edits or manual or sorted_files)[0]
 
 
 def _is_edit_md(path: Path) -> bool:
-    stem = path.stem.lower()
-    return stem.endswith("-edit") or stem.endswith("_edit")
+    return _stem_has_token(path, "edit")
 
 
 def _extract_md_body_text(md_path: Path) -> str:
@@ -160,9 +163,9 @@ def extract_vtt_clip_text(
     sub_dir = subtitles_root / video_id
     if not sub_dir.exists():
         return None
-    vtt_files = [f for f in sub_dir.glob("*.vtt") if f.is_file()]
+    vtt_files = sorted([f for f in sub_dir.glob("*.vtt") if f.is_file()], key=lambda p: p.name.lower())
     edit_root = subtitles_root.parent / "subtitles_edit" / video_id
-    edit_files = [f for f in edit_root.glob("*.vtt") if f.is_file()] if edit_root.exists() else []
+    edit_files = sorted([f for f in edit_root.glob("*.vtt") if f.is_file()], key=lambda p: p.name.lower()) if edit_root.exists() else []
     if edit_files:
         vtt_files = edit_files
     if not vtt_files:

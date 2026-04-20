@@ -3,8 +3,49 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T22:28:47Z
+- last_updated_utc: 2026-04-20T18:50:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
+
+---
+
+## Session 2026-04-20T18:50:31Z (docs-system-v2-anti-drift)
+
+### Summary
+- Pred docs editaci byl vytvoren centralni backup do `docs/backups/2026-04-20_205031/`.
+- Zavedena V2 dokumentacni disciplina pro stavy milniku:
+  - `docs/PLAN_TRACKER.md` doplnen o V7 matrix (`implementation`, `validation`, `readiness`, `evidence`) a V7 milniky prepnuty z cisteho `planned` na stav odpovidajici realne implementaci.
+  - `CONTRIBUTING.md` doplnen o 3 tvrda pravidla (`Code+state atomicita`, `Evidence-gated status`, `CI anti-drift`) + pravidlo pro nedokonceny posledni krok.
+  - `docs/DOCS_GOVERNANCE.md` doplnen o milestone state model + formalizaci tri tvrdych pravidel.
+  - `.github/pull_request_template.md` doplnen o povinne checkboxy na synchronizaci stavu a evidence.
+- `scripts/verify_docs_guard.py` rozsireny o anti-drift gate:
+  - V7 code/test change nebo V7 completion claim v `docs/session_log.md` nově vyzaduje soucasny substantive update `docs/PLAN_TRACKER.md`.
+
+### Impact
+- Dokumentace je odolnejsi proti rozjezdu mezi historii (`session_log`) a aktualnim stavem (`PLAN_TRACKER`).
+- Nedokonceny posledni krok je explicitne viditelny pres oddelene `implementation` vs `validation`.
+- CI guard a PR checklist ted technicky vynucuji, aby stav projektu odpovidal realne implementaci i validaci.
+
+---
+
+## Session 2026-04-08T11:13:59Z (v7-implementation-steps-1-to-7)
+
+### Summary
+- Pred docs editaci byl vytvoren centralni backup do `docs/backups/2026-04-08_131359/`.
+- Implementovany body 1-7 pro V7 online mic orchestrator bez rozbiti legacy rezimu:
+  - novy centralni kontrakt/validator (`backend/app/services/mic_v7_contract.py`) pro event schema/version, event names, reason-code vocabulary, timeline/KPI/readiness vypocet,
+  - `backend/app/services/mic_service.py` napojen na kontrakt (event envelope, reason normalization, preflight gate, timeline validation, KPI summary, readiness checker, runtime mapping agregace),
+  - `backend/app/routers/mic.py` rozsireny o `GET /api/mic/sequences/{token}/readiness` a `GET /api/mic/contract`, create/get session vraci preflight+contract metadata,
+  - `backend/app/routers/health.py` rozsireny o `GET /api/health/mic-orchestrator-v7`,
+  - frontend (`frontend/src/pages/DashboardPage.tsx`) ma novy runtime mapping panel V7, `frontend/src/components/MicSession.tsx` ma preflight gate pred WS startem + readiness zobrazeni.
+- Aktualizovan `docs/ARCHITECTURE.md` o V7 kontrakt vrstvu, readiness endpointy a runtime mapping health endpoint.
+- Rozsireny FE typy/client (`frontend/src/types/index.ts`, `frontend/src/api/client.ts`) a doplneny unit testy:
+  - `tests/unit/test_mic_v7_contract.py`,
+  - `tests/unit/test_mic_v7_runtime_mapping.py`,
+  - update `tests/unit/test_mic_orchestrator_mode.py`,
+  - update `tests/unit/test_dashboard_monitor_contract.py`.
+
+### Impact
+- V7 ma ted pevnejsi auditovatelny kontrakt, jednotne reason codes, explicitni preflight branu, KPI/readiness checker a dashboard mapovani runtime -> UI; legacy default zustava zachovany.
 
 ---
 

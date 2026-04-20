@@ -27,3 +27,9 @@ def test_log_linear_transforms_present():
     assert "function percentToPlot(valuePct: number, scale: 'log' | 'linear', coef: LogCoef)" in src
     assert "function plotToPercent(value: number, scale: 'log' | 'linear', coef: LogCoef)" in src
     assert "function invLogPlotPercent(plotPct: number, coef: LogCoef)" in src
+
+
+def test_dashboard_includes_mic_v7_runtime_mapping_panel():
+    src = _src()
+    assert "api.health.micOrchestratorV7" in src
+    assert "MIC Orchestrator V7 runtime mapping" in src

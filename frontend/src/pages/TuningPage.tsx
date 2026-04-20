@@ -397,6 +397,7 @@ export function TuningPage() {
     const p = cfg.customPrompt ?? ''
     return /^[\x00-\x7F]*$/.test(p) ? p : ''
   })
+  const [promptPanelCollapsed, setPromptPanelCollapsed] = useState<boolean>(cfg.promptPanelCollapsed ?? false)
   const [clipSeed, setClipSeed] = useState<number>(cfg.clipSeed ?? 42)
   const [clipStartSeconds, setClipStartSeconds] = useState<number | null>(cfg.clipStartSeconds ?? null)
   const [repeatTopK, setRepeatTopK] = useState<number>(cfg.repeatTopK ?? 0)
@@ -534,7 +535,7 @@ export function TuningPage() {
         Object.entries(paramValues).map(([k, v]) => [k, [...v]])
       ),
       selectedPrompts: [...selectedPrompts],
-      customPrompt, videoSortOrder, videoSortDirMap,
+      customPrompt, promptPanelCollapsed, videoSortOrder, videoSortDirMap,
     }
     localStorage.setItem(LS_KEY, JSON.stringify(cfg))
   }, [selectedModels, selectedVideos, strategy, sampleSeconds, maxTrials, label, clipSeed, clipStartSeconds, repeatTopK, repeatRuns, evaluationMode,
@@ -544,7 +545,7 @@ export function TuningPage() {
       constraintsProfile, constraintsCpuCores, constraintsRamLimitMb, constraintsPriority,
       loadProfile, loadCpuTargetPct, loadRamTargetPct,
       validateBeamPreflight,
-      paramValues, selectedPrompts, customPrompt, videoSortOrder, videoSortDirMap])
+      paramValues, selectedPrompts, customPrompt, promptPanelCollapsed, videoSortOrder, videoSortDirMap])
 
   function toggleParamValue(paramName: string, value: unknown) {
     setParamValues(prev => {
@@ -574,6 +575,22 @@ export function TuningPage() {
     const prompts = new Set(selectedPrompts)
     if (customPrompt.trim()) prompts.add(customPrompt.trim())
     return [...prompts]
+  }
+
+  function promptVariantLabel(variantCount: number): string {
+    if (variantCount === 1) return '1 varianta'
+    if (variantCount < 5) return `${variantCount} varianty`
+    return `${variantCount} variant`
+  }
+
+  function promptCollapsedSummary(prompts: string[]): string {
+    const hasEmpty = prompts.includes('')
+    const nonEmpty = prompts.filter(p => p !== '')
+    const shorten = (text: string): string => (text.length > 32 ? `${text.slice(0, 32)}...` : text)
+    if (hasEmpty && nonEmpty.length === 0) return 'Bez promptu'
+    if (hasEmpty) return `Bez promptu + ${nonEmpty.length} další`
+    if (nonEmpty.length <= 1) return shorten(nonEmpty[0] ?? 'Bez promptu')
+    return `${shorten(nonEmpty[0])} + ${nonEmpty.length - 1} další`
   }
 
   function resolveLoadTargets(): { profile: string; cpu: number | null; ram: number | null } {
@@ -684,9 +701,9 @@ export function TuningPage() {
     const bestOfVals = [...(paramValues['best_of'] ?? new Set<unknown>([1]))].map(v => Number(v)).filter(v => Number.isFinite(v))
     const onlyNoFallbackTrue = noFallbackSet.has(true) && !noFallbackSet.has(false)
     const hasBestOfAboveOne = bestOfVals.some(v => v > 1)
+    let preflightHintMsg = ''
     if (onlyNoFallbackTrue && hasBestOfAboveOne) {
-      setMsg('Nápověda: no_fallback=true + best_of>1 je redundantní (best_of nemá efekt). Nastav best_of=1 nebo zapni no_fallback=false.')
-      return
+      preflightHintMsg = 'Nápověda: no_fallback=true + best_of>1 je redundantní (best_of nemá efekt). Nastav best_of=1 nebo zapni no_fallback=false.'
     }
     let modelIdsForJob = [...selectedModels]
     let autoAdjustMsg = ''
@@ -779,7 +796,8 @@ export function TuningPage() {
       setJobs(prev => [job, ...prev])
       setSelectedJob(job)
       startPolling(job.job_id)
-      if (autoAdjustMsg) setMsg(autoAdjustMsg)
+      const postStartMsg = [autoAdjustMsg, preflightHintMsg].filter(Boolean).join(' ')
+      if (postStartMsg) setMsg(postStartMsg)
     } catch (e: any) {
       setMsg(`Chyba: ${e.message}`)
     }
@@ -908,6 +926,9 @@ export function TuningPage() {
   const hasVerySmallChunk = chunkVals.some(v => v > 0 && v < 10)
   const hasSingleVideo = selectedVideos.length === 1
   const hasWeakRepeatPlan = repeatTopK > 0 && repeatRuns < 3
+  const selectedPromptVariants = allSelectedPrompts()
+  const selectedPromptCount = selectedPromptVariants.length
+  const selectedPromptSummary = promptCollapsedSummary(selectedPromptVariants)
 
   return (
     <div className="space-y-6">
@@ -1474,78 +1495,91 @@ export function TuningPage() {
         {/* Initial prompt */}
         <div className="border-t border-gray-100 pt-4 space-y-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-gray-700">Initial prompt</span>
+            <button
+              type="button"
+              onClick={() => setPromptPanelCollapsed(prev => !prev)}
+              className="inline-flex items-center gap-1 text-left"
+            >
+              <span className="text-[10px] text-gray-500">{promptPanelCollapsed ? '▶' : '▼'}</span>
+              <span className="text-xs font-medium text-gray-700">Initial prompt</span>
+            </button>
             <span className="text-xs text-gray-400">— kontext pro model (každý vybraný prompt = 1 varianta trialu)</span>
-            <span className="text-xs text-gray-400 ml-auto">{allSelectedPrompts().length} variant{allSelectedPrompts().length === 1 ? 'a' : allSelectedPrompts().length < 5 ? 'y' : ''}</span>
+            <span className="text-xs text-gray-400 ml-auto">
+              {promptVariantLabel(selectedPromptCount)}{promptPanelCollapsed ? ` ${selectedPromptSummary}` : ''}
+            </span>
           </div>
-          {PROMPT_LIBRARY.map(group => {
-            const dynamicPrompts = group.id === 'topic_auto'
-              ? selectedVideos.slice(0, 3).map(vid => {
-                  const item = library.find(l => l.video_id === vid)
-                  if (!item) return null
-                  return { label: item.title.slice(0, 30), text: autoPromptFromTitle(item.title) }
-                }).filter(Boolean) as { label: string; text: string }[]
-              : group.prompts
-            if (group.id === 'topic_auto' && dynamicPrompts.length === 0) return null
-            const colorMap: Record<string, string> = {
-              gray: 'border-gray-300 text-gray-600',
-              blue: 'border-blue-300 text-blue-700',
-              violet: 'border-violet-300 text-violet-700',
-              red: 'border-red-300 text-red-700',
-              indigo: 'border-indigo-300 text-indigo-700',
-              green: 'border-green-300 text-green-700',
-              orange: 'border-orange-300 text-orange-700',
-            }
-            const selectedColor: Record<string, string> = {
-              gray: 'bg-gray-600 text-white border-gray-600',
-              blue: 'bg-blue-600 text-white border-blue-600',
-              violet: 'bg-violet-600 text-white border-violet-600',
-              red: 'bg-red-600 text-white border-red-600',
-              indigo: 'bg-indigo-600 text-white border-indigo-600',
-              green: 'bg-green-600 text-white border-green-600',
-              orange: 'bg-orange-600 text-white border-orange-600',
-            }
-            return (
-              <div key={group.id}>
-                <div className="text-xs text-gray-400 mb-1">{group.label}</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {dynamicPrompts.map(p => {
-                    const isSelected = selectedPrompts.has(p.text)
-                    return (
-                      <div key={p.text} className="relative group/pt">
-                        <button
-                          onClick={() => togglePrompt(p.text)}
-                          className={`px-2.5 py-1 rounded text-xs border transition-colors ${
-                            isSelected ? selectedColor[group.color] : `bg-white hover:bg-gray-50 ${colorMap[group.color]}`
-                          }`}
-                        >
-                          {p.label}
-                        </button>
-                        {p.text && (
-                          <div className="pointer-events-none absolute left-0 top-7 z-20 hidden group-hover/pt:block w-80 bg-gray-900 text-white text-xs rounded px-2.5 py-2 shadow-xl leading-relaxed font-mono break-all">
-                            {p.text}
+          {!promptPanelCollapsed && (
+            <>
+              {PROMPT_LIBRARY.map(group => {
+                const dynamicPrompts = group.id === 'topic_auto'
+                  ? selectedVideos.slice(0, 3).map(vid => {
+                      const item = library.find(l => l.video_id === vid)
+                      if (!item) return null
+                      return { label: item.title.slice(0, 30), text: autoPromptFromTitle(item.title) }
+                    }).filter(Boolean) as { label: string; text: string }[]
+                  : group.prompts
+                if (group.id === 'topic_auto' && dynamicPrompts.length === 0) return null
+                const colorMap: Record<string, string> = {
+                  gray: 'border-gray-300 text-gray-600',
+                  blue: 'border-blue-300 text-blue-700',
+                  violet: 'border-violet-300 text-violet-700',
+                  red: 'border-red-300 text-red-700',
+                  indigo: 'border-indigo-300 text-indigo-700',
+                  green: 'border-green-300 text-green-700',
+                  orange: 'border-orange-300 text-orange-700',
+                }
+                const selectedColor: Record<string, string> = {
+                  gray: 'bg-gray-600 text-white border-gray-600',
+                  blue: 'bg-blue-600 text-white border-blue-600',
+                  violet: 'bg-violet-600 text-white border-violet-600',
+                  red: 'bg-red-600 text-white border-red-600',
+                  indigo: 'bg-indigo-600 text-white border-indigo-600',
+                  green: 'bg-green-600 text-white border-green-600',
+                  orange: 'bg-orange-600 text-white border-orange-600',
+                }
+                return (
+                  <div key={group.id}>
+                    <div className="text-xs text-gray-400 mb-1">{group.label}</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {dynamicPrompts.map(p => {
+                        const isSelected = selectedPrompts.has(p.text)
+                        return (
+                          <div key={p.text} className="relative group/pt">
+                            <button
+                              onClick={() => togglePrompt(p.text)}
+                              className={`px-2.5 py-1 rounded text-xs border transition-colors ${
+                                isSelected ? selectedColor[group.color] : `bg-white hover:bg-gray-50 ${colorMap[group.color]}`
+                              }`}
+                            >
+                              {p.label}
+                            </button>
+                            {p.text && (
+                              <div className="pointer-events-none absolute left-0 top-7 z-20 hidden group-hover/pt:block w-80 bg-gray-900 text-white text-xs rounded px-2.5 py-2 shadow-xl leading-relaxed font-mono break-all">
+                                {p.text}
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+              <div className="flex items-center gap-2">
+                <input
+                  value={customPrompt}
+                  onChange={e => setCustomPrompt(e.target.value)}
+                  placeholder="Vlastní prompt (ASCII)..."
+                  className="border rounded px-2 py-1 text-xs flex-1"
+                />
+                {customPrompt.trim() && (
+                  <span className={`text-xs px-2 py-1 rounded border ${selectedPromptVariants.includes(customPrompt.trim()) ? 'text-blue-600' : 'text-gray-400'}`}>
+                    {selectedPromptVariants.includes(customPrompt.trim()) ? '✓ v trialu' : 'přidá se automaticky'}
+                  </span>
+                )}
               </div>
-            )
-          })}
-          <div className="flex items-center gap-2">
-            <input
-              value={customPrompt}
-              onChange={e => setCustomPrompt(e.target.value)}
-              placeholder="Vlastní prompt (ASCII)..."
-              className="border rounded px-2 py-1 text-xs flex-1"
-            />
-            {customPrompt.trim() && (
-              <span className={`text-xs px-2 py-1 rounded border ${selectedPrompts.has(customPrompt.trim()) || allSelectedPrompts().includes(customPrompt.trim()) ? 'text-blue-600' : 'text-gray-400'}`}>
-                {allSelectedPrompts().includes(customPrompt.trim()) ? '✓ v trialu' : 'přidá se automaticky'}
-              </span>
-            )}
-          </div>
+            </>
+          )}
         </div>
 
         {/* Hodnocení */}

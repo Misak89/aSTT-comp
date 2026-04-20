@@ -249,10 +249,25 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
     run_num = 0
 
     for source in source_entries:
+        # Benchmark service může pro library video předat přímo cached WAV cestu
+        # (runtime/audio_cache/<video_id>.wav). V takovém případě parse_source_entries
+        # nastaví origin_type=local_file a video_id ztratíme; zkusíme ho obnovit
+        # z názvu souboru, aby šlo načíst VTT reference_text a počítat diff/WER.
+        source_video_id = source.video_id
+        if not source_video_id and source.origin_type == "local_file" and source.value:
+            try:
+                src_path = Path(str(source.value))
+                if src_path.suffix.lower() == ".wav" and src_path.parent.name == "audio_cache":
+                    inferred = src_path.stem.strip()
+                    if inferred:
+                        source_video_id = inferred
+            except Exception:
+                source_video_id = source.video_id
+
         # VTT reference načti jednou per source
         ref_text = (
-            extract_vtt_clip_text(source.video_id, segment_start_seconds, sample_seconds, subtitles_root)
-            if source.video_id
+            extract_vtt_clip_text(source_video_id, segment_start_seconds, sample_seconds, subtitles_root)
+            if source_video_id
             else None
         )
 
@@ -291,7 +306,7 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                 # nebo máme cached audio pro toto video_id.
                 # Pokud je požadovaný start offset > 0, jedeme přes stream_audio_chunks(start_offset),
                 # aby se opravdu přepisoval jen daný úsek.
-                _cached_wav = _audio_cache_root / f"{source.video_id}.wav" if source.video_id else None
+                _cached_wav = _audio_cache_root / f"{source_video_id}.wav" if source_video_id else None
                 local_media_path: str | None = None
                 effective_source = source
                 if source.origin_type == "local_file" and source.value:
@@ -306,7 +321,7 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                         value=str(_cached_wav),
                         exists=True,
                         canonical_url=source.canonical_url,
-                        video_id=source.video_id,
+                        video_id=source_video_id,
                     )
 
                 # Direct WAV bypass je validní jen pro buffered adaptery
@@ -357,7 +372,7 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                     result["model_id"] = model_id
                     result["setting_id"] = setting_id
                     result["setting_label"] = setting_label
-                    result["video_id"] = source.video_id or source.source_id
+                    result["video_id"] = source_video_id or source.source_id
 
                     if "transcript" not in result and "transcript_text" in result:
                         result["transcript"] = result["transcript_text"]
@@ -375,9 +390,9 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                         result["wil"] = round(word_information_lost(ref_text, result["transcript"]), 4)
                         # Segment-level WER pokud máme Whisper segmenty
                         _segs = result.get("_segments", [])
-                        if _segs and source.video_id:
+                        if _segs and source_video_id:
                             result["segment_metrics"] = segment_level_wer(
-                                _segs, source.video_id, 0, subtitles_root
+                                _segs, source_video_id, 0, subtitles_root
                             )
 
                 except Exception as exc:
@@ -385,7 +400,7 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                         "model_id": model_id,
                         "setting_id": setting_id,
                         "setting_label": setting_label,
-                        "video_id": source.video_id or source.source_id,
+                        "video_id": source_video_id or source.source_id,
                         "error": str(exc),
                     }
 

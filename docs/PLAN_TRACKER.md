@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T10:26:47Z
+- last_updated_utc: 2026-04-20T18:50:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -104,14 +104,32 @@ Navazne dokumenty:
 | V6-S2 `/library` slicer UI (preset + max 21 bodu) | done | `docs/tuning_v6_implementacni_plan.md` |
 | V6-S3 `/transcript` bundle orchestration (one logical row) | done | `docs/tuning_v6_implementacni_plan.md` |
 | V6-S4 3x CZ model stability + long-run validation | planned | `docs/tuning_v6_implementacni_plan.md` |
-| V7-S0 data contract + event schema (`run_id`, `sequence_id`, globalni cas) | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S1 backend sekvencni orchestrator (single live stream) | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S2 presne timestampovane event logy + transition reasons | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S3 dual output + casova konzistence transcript/log | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S4 KPI vypocet + jednotna porovnavaci tabulka | planned | `docs/tuning_v7_implementacni_plan.md` |
-| V7-S5 validacni run 3-5 modelu + DoD kontrola | planned | `docs/tuning_v7_implementacni_plan.md` |
+| V7-S0 data contract + event schema (`run_id`, `sequence_id`, globalni cas) | in_progress (viz V7 matrix nize) | `docs/tuning_v7_implementacni_plan.md` |
+| V7-S1 backend sekvencni orchestrator (single live stream) | in_progress (viz V7 matrix nize) | `docs/tuning_v7_implementacni_plan.md` |
+| V7-S2 presne timestampovane event logy + transition reasons | in_progress (viz V7 matrix nize) | `docs/tuning_v7_implementacni_plan.md` |
+| V7-S3 dual output + casova konzistence transcript/log | in_progress (viz V7 matrix nize) | `docs/tuning_v7_implementacni_plan.md` |
+| V7-S4 KPI vypocet + jednotna porovnavaci tabulka | in_progress (viz V7 matrix nize) | `docs/tuning_v7_implementacni_plan.md` |
+| V7-S5 validacni run 3-5 modelu + DoD kontrola | in_progress (viz V7 matrix nize) | `docs/tuning_v7_implementacni_plan.md` |
 
 Operational note (2026-04-03): P4 (long-run/race/recovery validace dlouhych prepisu) je vedome odlozena do navazujici iterace `long-transcript-v6`.
+
+## 2A. V7 Milestone Matrix (authoritative for V7)
+
+Stavy V7 jsou zavazne vedeny dvojici `implementation` + `validation`.
+
+| Milnik | implementation | validation | readiness | Evidence |
+|---|---|---|---|---|
+| V7-S0 | implemented | in_progress | amber | `backend/app/services/mic_v7_contract.py`, `tests/unit/test_mic_v7_contract.py` |
+| V7-S1 | implemented | in_progress | amber | `backend/app/services/mic_service.py` (`create_session`, `start_recording`, `_update_v7_timing_on_start`), `tests/unit/test_mic_orchestrator_mode.py` |
+| V7-S2 | implemented | in_progress | amber | `runtime/logs/mic_sequence_events.jsonl`, `apply_v7_event_contract`, `GET /api/mic/contract` |
+| V7-S3 | implemented | in_progress | amber | `backend/app/routers/mic.py` (session payload + ws final envelope), `frontend/src/components/MicSession.tsx` |
+| V7-S4 | implemented | in_progress | amber | `compute_kpi_summary`, `GET /api/mic/sequences/{token}/readiness`, `GET /api/health/mic-orchestrator-v7` |
+| V7-S5 | in_progress | not_started | amber | cekaji fyzicke runy 3-5 modelu + DoD report |
+
+Poznamka k readiness:
+- `green`: implementation=`implemented` a validation=`passed`
+- `amber`: implementation hotova, ale validace bezi/chybi
+- `red`: validation=`failed` nebo implementation=`blocked/regressed`
 
 ## 3. Kam co zapisovat (zavazne)
 1. Aktivni plan + stav: `docs/PLAN_TRACKER.md`
@@ -134,3 +152,8 @@ Operational note (2026-04-03): P4 (long-run/race/recovery validace dlouhych prep
 - `done`
 - `dropped`
 - `pending_repo_setting`
+
+## 6. Stavovy slovnik V7 matrix
+- `implementation`: `planned`, `in_progress`, `implemented`, `blocked`, `regressed`
+- `validation`: `not_started`, `in_progress`, `passed`, `failed`, `waived`
+- `readiness`: `green`, `amber`, `red`

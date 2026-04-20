@@ -27,7 +27,9 @@ def test_create_session_defaults_to_legacy_mode() -> None:
     assert state.sequence_id is None
 
     payload = mic_service.get_orchestrator_payload(state)
-    assert payload == {"orchestrator_mode": mic_service.ORCHESTRATOR_MODE_LEGACY}
+    assert payload["orchestrator_mode"] == mic_service.ORCHESTRATOR_MODE_LEGACY
+    assert payload.get("event_contract_schema") == "astt.mic.v7.event"
+    assert payload.get("event_contract_version") == "1.0.0"
 
 
 def test_create_session_v7_mode_sets_ids_from_sequence_metadata() -> None:

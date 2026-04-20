@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-04T10:38:32Z
+- last_updated_utc: 2026-04-04T12:40:06Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## 1. Stabilni start webu
@@ -101,6 +101,16 @@ Pouzivej tento postup, kdyz runtime pada a fix se nedari rychle stabilizovat.
 Poznamky:
 - Pri vice rizikovych commitech rollbackuj inkrementalne (od nejnovejsiho k nejstarsimu) a po kazdem kroku validuj.
 - Pokud rollback sam nestaci, otevri follow-up fix jako novy, oddeleny commit nad vratkou.
+
+## 5.2 Stuck-loop escalation protocol (MUST)
+Pouzij tento postup, kdyz se troubleshooting toci v kruhu.
+
+1. Timebox: stejna hypoteza max 3 pokusy (vyjimecne 4, pokud je novy dukaz).
+2. No-loop rule: po 3-4 neuspesnych pokusech zastav dalsi retry stejne cesty.
+3. Evidence gate: zapis, co bylo zkouseno, s jakym vysledkem a proc to selhalo.
+4. Blocker statement: pojmenuj konkretni blocker (chybejici token/opravneni/pristup/rozhodnuti).
+5. Escalace: navrhni max 2 bezpecne dalsi varianty, ne dalsi serii pokusu.
+6. Handoff: pokud blocker trva, oznac stav `blocked` a cekej na explicitni rozhodnuti ownera.
 
 ## 6. Physical validation policy (obecne, cross-domain)
 Tato politika plati obecne pro testovani kodu, security, performance i provozu.

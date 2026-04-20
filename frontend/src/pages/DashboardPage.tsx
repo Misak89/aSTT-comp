@@ -13,7 +13,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, Ca
 import { api } from '../api/client'
 import { listTranscripts } from '../components/transcribe/useTranscribeStorage'
 import { useProcessScanCadence } from '../components/dashboard/useProcessScanCadence'
-import type { AppProcessInfo, AppProcessSnapshot, BenchmarkJobStatus, LibraryItem, SpecstoryLiveStatus } from '../types'
+import type { AppProcessInfo, AppProcessSnapshot, BenchmarkJobStatus, LibraryItem, MicOrchestratorV7Health, SpecstoryLiveStatus } from '../types'
 import { formatClockHms, formatDateTimeMedium } from '../lib/time'
 
 interface HealthState {
@@ -517,6 +517,7 @@ export function DashboardPage() {
   const [jobs, setJobs] = useState<BenchmarkJobStatus[]>([])
   const [library, setLibrary] = useState<LibraryItem[]>([])
   const [specstory, setSpecstory] = useState<SpecstoryLiveStatus | null>(null)
+  const [micV7, setMicV7] = useState<MicOrchestratorV7Health | null>(null)
   const [processes, setProcesses] = useState<AppProcessSnapshot | null>(null)
   const [uptime, setUptime] = useState('')
   const [loggerOpenStatus, setLoggerOpenStatus] = useState<string>('')
@@ -572,6 +573,7 @@ export function DashboardPage() {
         setHealth(nextHealth)
       }).catch(() => {})
       api.health.specstory().then(setSpecstory).catch(() => {})
+      api.health.micOrchestratorV7({ max_reports: 80, max_events: 2500 }).then(setMicV7).catch(() => {})
     }
     fetchHealth()
     const t = setInterval(fetchHealth, 5_000)
@@ -725,6 +727,21 @@ export function DashboardPage() {
     if (status === 'stale') return 'Stale'
     if (status === 'missing') return 'Not started'
     if (status === 'error') return 'Error'
+    return 'Unknown'
+  }
+
+  const micV7Tone = (status: MicOrchestratorV7Health['status'] | undefined) => {
+    if (status === 'ok') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    if (status === 'warn') return 'border-amber-200 bg-amber-50 text-amber-800'
+    if (status === 'missing') return 'border-slate-200 bg-slate-50 text-slate-700'
+    return 'border-red-200 bg-red-50 text-red-700'
+  }
+
+  const micV7Label = (status: MicOrchestratorV7Health['status'] | undefined) => {
+    if (status === 'ok') return 'Contract OK'
+    if (status === 'warn') return 'Contract Warning'
+    if (status === 'missing') return 'No V7 runtime data'
+    if (status === 'error') return 'Contract Error'
     return 'Unknown'
   }
 
@@ -948,6 +965,35 @@ export function DashboardPage() {
               {specstory.loop_pid ? ` · pid: ${specstory.loop_pid}` : ''}
             </div>
             {specstory.last_error && <div>error: {specstory.last_error}</div>}
+          </div>
+        )}
+      </div>
+
+      <div className={`rounded border p-4 ${micV7Tone(micV7?.status)}`}>
+        <div className="text-xs font-semibold uppercase tracking-wide">MIC Orchestrator V7 runtime mapping</div>
+        <div className="text-sm font-semibold mt-1">{micV7Label(micV7?.status)}</div>
+        {micV7 && (
+          <div className="text-xs mt-1 space-y-0.5">
+            <div>
+              events: {micV7.events_v7_total ?? 0}/{micV7.events_total ?? 0}
+              {` · invalid contract: ${micV7.invalid_contract_events ?? 0}`}
+              {` · missing fields: ${micV7.missing_required_field_events ?? 0}`}
+            </div>
+            <div>
+              reports: {micV7.sequence_reports_total ?? 0}
+              {` · timeline fail: ${micV7.timeline_fail_reports ?? 0}`}
+              {` · readiness fail: ${micV7.readiness_fail_reports ?? 0}`}
+            </div>
+            <div>
+              schema: {micV7.contract?.schema ?? 'n/a'}
+              {` · version: ${micV7.contract?.version ?? 'n/a'}`}
+            </div>
+            {(micV7.latest_sequence_token || micV7.latest_sequence_updated_at) && (
+              <div>
+                latest: {micV7.latest_sequence_token ?? 'n/a'}
+                {micV7.latest_sequence_updated_at ? ` · ${fmtDt(micV7.latest_sequence_updated_at)}` : ''}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -171,6 +171,11 @@ export interface MicSessionState {
   sequence_index?: number | null
   sequence_total?: number | null
   global_timeline_ms?: number | null
+  event_contract_schema?: string | null
+  event_contract_version?: string | null
+  preflight_ok?: boolean
+  preflight_errors?: string[]
+  preflight_warnings?: string[]
   reason_code?: string | null
   elapsed_s: number
   rtf: number
@@ -338,7 +343,67 @@ export interface MicSequenceReport {
   sequence_total: number | null
   trials_count: number
   summary?: MicSequenceSummary
+  contract?: {
+    schema?: string
+    version?: string
+    required_fields_v7?: string[]
+    reason_codes?: string[]
+  }
+  timeline_validation?: {
+    ok?: boolean
+    issues?: string[]
+    checked_points?: number
+    regressions?: number
+    max_regression_ms?: number
+    min_timeline_ms?: number | null
+    max_timeline_ms?: number | null
+  }
+  kpi?: {
+    hard_limit_ms?: number
+    hard_limit_violations?: number
+    latency_lane_counts?: Record<string, number>
+    latency_ms_p50?: number | null
+    latency_ms_p95?: number | null
+    rtf_avg?: number | null
+    rtf_p95?: number | null
+    drop_rate_avg?: number | null
+    drop_rate_p95?: number | null
+    quality_score_avg?: number | null
+    quality_score_min?: number | null
+    hw_rss_peak_mb_avg?: number | null
+    hw_rss_peak_mb_max?: number | null
+  }
+  readiness?: {
+    pass?: boolean
+    checked_at?: string
+    checks?: { id: string; pass: boolean; actual: unknown; expected: unknown }[]
+    failed_checks?: string[]
+  }
   trials: MicSequenceTrial[]
+}
+
+export interface MicSequenceReadinessResponse {
+  sequence_token: string
+  contract?: {
+    schema?: string
+    version?: string
+    required_fields_v7?: string[]
+    reason_codes?: string[]
+  }
+  timeline_validation?: {
+    ok?: boolean
+    issues?: string[]
+    checked_points?: number
+    regressions?: number
+    max_regression_ms?: number
+  }
+  kpi?: Record<string, unknown>
+  readiness?: {
+    pass?: boolean
+    checked_at?: string
+    checks?: { id: string; pass: boolean; actual: unknown; expected: unknown }[]
+    failed_checks?: string[]
+  }
 }
 
 export interface LocalFileEntry {
@@ -557,6 +622,29 @@ export interface AppProcessSnapshot {
   warnings?: string[]
   gpu?: AppProcessGpuSummary
   message?: string | null
+}
+
+export interface MicOrchestratorV7Health {
+  status: 'ok' | 'warn' | 'error' | 'missing'
+  generated_at_utc: string
+  contract?: {
+    schema?: string
+    version?: string
+    required_fields_v7?: string[]
+    reason_codes?: string[]
+  }
+  events_total?: number
+  events_v7_total?: number
+  invalid_contract_events?: number
+  unknown_reason_events?: number
+  missing_required_field_events?: number
+  last_event_ts?: string | null
+  event_types?: Record<string, number>
+  sequence_reports_total?: number
+  timeline_fail_reports?: number
+  readiness_fail_reports?: number
+  latest_sequence_token?: string | null
+  latest_sequence_updated_at?: string | null
 }
 
 // Tuning

@@ -16,6 +16,7 @@ from ..config import (
     ROOT,
     TRANSCRIPTS_ROOT,
     LOGGER_LOGS_ROOT,
+    AUDIO_CACHE_ROOT,
 )
 
 router = APIRouter(prefix="/api/open-dir")
@@ -29,6 +30,7 @@ _DIRS = {
     "subtitles":   SUBTITLES_ROOT,
     "transcripts": TRANSCRIPTS_ROOT,
     "logger_logs": LOGGER_LOGS_ROOT,
+    "audio_cache": AUDIO_CACHE_ROOT,
     "root":        ROOT,
 }
 

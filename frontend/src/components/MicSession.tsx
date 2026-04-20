@@ -1242,7 +1242,18 @@ export function MicSession({ availableModels, library }: Props) {
         sessionParams.reference_sample_seconds = Math.max(1, Math.floor(referenceSampleSeconds))
       }
       // 1. Vytvoř backend session
-      const { session_id } = await api.mic.createSession(activeModelId, sessionParams)
+      const createResp = await api.mic.createSession(activeModelId, sessionParams)
+      const { session_id } = createResp
+      if (createResp.preflight_ok === false) {
+        const reasons = (createResp.preflight_errors ?? []).filter(Boolean)
+        const detail = reasons.length > 0 ? reasons.join(', ') : 'preflight_failed'
+        setError(`MIC preflight zablokoval start: ${detail}`)
+        setStatus('error')
+        return
+      }
+      if ((createResp.preflight_warnings ?? []).length > 0) {
+        setSaveMsg(`Preflight warning: ${(createResp.preflight_warnings ?? []).join(', ')}`)
+      }
 
       // 2. Otevři WebSocket
       const ws = new WebSocket(`${WS_BASE}/api/mic/sessions/${session_id}/stream`)
@@ -2700,6 +2711,14 @@ export function MicSession({ availableModels, library }: Props) {
               {' | '}running {seqReport.summary.running ?? 0}
               {typeof seqReport.summary.avg_rtf === 'number' ? ` | avg RTF ${seqReport.summary.avg_rtf.toFixed(3)}` : ''}
               {typeof seqReport.summary.avg_drop_rate === 'number' ? ` | avg drop ${(seqReport.summary.avg_drop_rate * 100).toFixed(1)}%` : ''}
+            </div>
+          )}
+          {seqReport.readiness && (
+            <div className={`mb-2 text-[11px] ${seqReport.readiness.pass ? 'text-emerald-300' : 'text-amber-300'}`}>
+              Readiness: <strong>{seqReport.readiness.pass ? 'PASS' : 'FAIL'}</strong>
+              {Array.isArray(seqReport.readiness.failed_checks) && seqReport.readiness.failed_checks.length > 0
+                ? ` | ${seqReport.readiness.failed_checks.join(', ')}`
+                : ''}
             </div>
           )}
           <div className="overflow-x-auto">

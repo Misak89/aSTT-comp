@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-03T01:13:51Z
+- last_updated_utc: 2026-04-08T11:15:02Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento dokument je centralni popis toho, jak projekt funguje.
@@ -22,6 +22,7 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 - Runtime data: `runtime/` (single active runtime root)
 - Runtime path resolver: `packages/common/runtime_paths.py` (canonical `runtime/`, optional legacy read fallback for `.runtime` in utility flows)
 - Health scan policy (`backend/app/routers/health.py`): default process scan lane is `fast`; `slow/full` are explicit lanes, and per-PID cmdline/exe metadata uses short TTL cache for lower monitoring overhead.
+- V7 runtime mapping health: `GET /api/health/mic-orchestrator-v7` (contract validity + timeline/readiness aggregation from runtime artefacts).
 
 ## 3. Datove toky (zjednodusene)
 1. Frontend vola API (`/api/...`).
@@ -33,9 +34,18 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 ## 4. Mic pipeline
 - API/WS: `backend/app/routers/mic.py`
 - Orchestrace: `backend/app/services/mic_service.py`
+- V7 contract module: `backend/app/services/mic_v7_contract.py`
 - Frontend orchestrace sekvence: `frontend/src/components/MicSession.tsx`
 - Session artefakty: `runtime/mic_sessions/*`
 - Event stream: `runtime/logs/mic_sequence_events.jsonl`
+- Sequence report artefakty: `runtime/mic_sequences/<sequence_token>/report.json` + `report.csv`
+- V7 operational endpoints:
+  - `GET /api/mic/contract` (schema/version, event names, reason-code vocabulary)
+  - `GET /api/mic/sequences/{token}/readiness` (PASS/FAIL checker nad timeline + KPI + kontrakt)
+- Preflight gate:
+  - session create naplní `preflight_ok/errors/warnings`,
+  - `start_recording` blokuje start pri `preflight_ok=false` (reason `preflight_failed`),
+  - frontend zobrazi blokaci pred otevrenim WS.
 
 ## 5. Tuning pipeline
 - API/service: `backend/app/routers/tuning.py`, `backend/app/services/tuning_service.py`

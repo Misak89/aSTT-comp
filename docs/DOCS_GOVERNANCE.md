@@ -4,7 +4,7 @@ Doc-Meta:
 - owner: engineering
 - status: active
 - doc_file: DOCS_GOVERNANCE.md
-- last_updated_utc: 2026-04-02T22:02:50Z
+- last_updated_utc: 2026-04-20T18:50:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 
@@ -61,7 +61,23 @@ Mandatory Start (in this repository): README.md -> AGENTS.md -> docs/PLAN_TRACKE
 - Proto plati:
   - core/living governance dokumenty zustavaji single-file kontrakty,
   - systemove state artefakty (`oss_intake_register`, `specstory_*`, `docs/models/*`, `docs/runs/*`) jsou formatove rizeny specializovane,
-  - triplet `MD+JSON+JSONL` je povinny pro nove ne-core lidske dokumentacni artefakty (audit, plan, analyza, roadmapa, report).
+- triplet `MD+JSON+JSONL` je povinny pro nove ne-core lidske dokumentacni artefakty (audit, plan, analyza, roadmapa, report).
+
+## 3.4 Milestone state model (anti-drift)
+- Pro aktivni produktove milniky pouzivej oddelene osy:
+  - `implementation`: `planned | in_progress | implemented | blocked | regressed`
+  - `validation`: `not_started | in_progress | passed | failed | waived`
+- `readiness` je odvozeny stav:
+  - `green`: implementation=`implemented` + validation=`passed`
+  - `amber`: implementation hotova, validace nehotova
+  - `red`: validation=`failed` nebo implementation=`blocked/regressed`
+- `docs/PLAN_TRACKER.md` je jediny autoritativni zdroj aktualniho stavu.
+- `docs/session_log.md` je historie, ne status authority.
+
+## 3.5 Tri tvrda pravidla (MUST)
+1. `Code+state atomicita`: milestone state update musi byt ve stejnem commitu jako souvisejici kod/test zmena.
+2. `Evidence-gated status`: bez evidence nelze zvednout stav na `implemented`/`passed`.
+3. `CI anti-drift`: V7 completion claim nebo V7 code/test change bez update `docs/PLAN_TRACKER.md` je guard fail.
 
 ## 4. Automaticke vynuceni
 - Gate script: `scripts/verify_docs_guard.py`
@@ -72,6 +88,9 @@ Mandatory Start (in this repository): README.md -> AGENTS.md -> docs/PLAN_TRACKE
   - u snapshot/report dokumentu suffix data v nazvu (`_YYYY-MM-DD`),
   - u novych ne-core `MD`/`JSON`/`JSONL` s metadaty konzistenci `doc_file` s nazvem souboru,
   - pro novy ne-core artefakt pritomnost vsech tri formatu (`.md`, `.json`, `.jsonl`) v ramci stejneho tematickeho stemu.
+- Guard navic kontroluje anti-drift:
+  - V7 orchestrator code/test change => povinny update `docs/PLAN_TRACKER.md`,
+  - V7 completion claim v `docs/session_log.md` => povinny update `docs/PLAN_TRACKER.md`.
 - Pri zmene `scripts/specstory_failure_learning.py` guard vyzaduje i update:
   - `docs/KNOWN_FAILURES.md`
   - `docs/reports/specstory_failures.json`
