@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-20T20:01:12Z
+- last_updated_utc: 2026-04-04T12:40:06Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 ## 1. Stabilni start webu
@@ -57,20 +57,6 @@ URL:
 - `GET /api/health/processes?mode=full`: `200`.
 - Frontend build: `npm --prefix frontend run build` OK.
 - Backend sanity: `.venv\Scripts\python -m compileall backend/app/routers/health.py` OK.
-
-## 2.3 V7 readiness checklist (S5 gate)
-- Spousteci command:
-  - `.venv\Scripts\python scripts/v7_readiness_checklist.py --sequence-token latest --api-base http://127.0.0.1:8012`
-- Doporuceny evidence export:
-  - `.venv\Scripts\python scripts/v7_readiness_checklist.py --sequence-token latest --api-base http://127.0.0.1:8012 --output-json docs/reports/v7_readiness_checklist_YYYY-MM-DD.json --output-md docs/reports/v7_readiness_checklist_YYYY-MM-DD.md --output-jsonl docs/reports/v7_readiness_checklist_YYYY-MM-DD.jsonl`
-- Co je hard PASS pro S5:
-  - `overall_pass=true`,
-  - model count `3-5`,
-  - vsechny trialy `started` + `finalized`,
-  - dostupna latency evidence pro vsechny trialy,
-  - dashboard runtime mapping endpoint bez `warn/error`.
-- Poznamka:
-  - checklist je runtime evidence gate; fyzicky online mic run je porad povinny (neni nahrazen simulaci).
 
 ## 3. Kde jsou logy a runtime data
 - Mic session: `runtime/mic_sessions/`

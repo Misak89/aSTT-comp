@@ -3,33 +3,8 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-20T20:01:12Z
+- last_updated_utc: 2026-04-20T18:50:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
-
----
-
-## Session 2026-04-20T20:01:12Z (v7-step-8-readiness-checklist-gate)
-
-### Summary
-- Pred docs editaci byl vytvoren centralni backup do `docs/backups/2026-04-20_220015/`.
-- Pridan opakovatelny V7 readiness gate script:
-  - `scripts/v7_readiness_checklist.py`
-  - unit test: `tests/unit/test_v7_readiness_checklist.py`
-- Spustena validace:
-  - `pytest` subset pro V7 + dashboard/runtime mapping: `15 passed`,
-  - runtime checklist probe: `shared_seq` -> `overall_pass=false`.
-- Vytvoren evidence triplet:
-  - `docs/reports/v7_readiness_checklist_2026-04-20.md`
-  - `docs/reports/v7_readiness_checklist_2026-04-20.json`
-  - `docs/reports/v7_readiness_checklist_2026-04-20.jsonl`
-- Aktualizovan governance operativa:
-  - `docs/RUNBOOK.md` doplnen o sekci `2.3 V7 readiness checklist (S5 gate)`.
-- `docs/PLAN_TRACKER.md` synchronizovan s realnym vysledkem S5:
-  - `validation=failed`, `readiness=red`, evidence odkazuje na checklist report + script + test.
-
-### Impact
-- Bod 8 je formalizovan jako opakovatelny gate s tvrdymi podminkami a strojove citelnym vysledkem.
-- Stav projektu je explicitne konzistentni s realnymi artefakty: V7-S5 zatim neprosel kvuli chybejicimu 3-5 model fyzickemu runu a chybejici finalized+latency evidenci.
 
 ---
 

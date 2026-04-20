@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-20T20:01:12Z
+- last_updated_utc: 2026-04-20T18:50:31Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -124,11 +124,7 @@ Stavy V7 jsou zavazne vedeny dvojici `implementation` + `validation`.
 | V7-S2 | implemented | in_progress | amber | `runtime/logs/mic_sequence_events.jsonl`, `apply_v7_event_contract`, `GET /api/mic/contract` |
 | V7-S3 | implemented | in_progress | amber | `backend/app/routers/mic.py` (session payload + ws final envelope), `frontend/src/components/MicSession.tsx` |
 | V7-S4 | implemented | in_progress | amber | `compute_kpi_summary`, `GET /api/mic/sequences/{token}/readiness`, `GET /api/health/mic-orchestrator-v7` |
-| V7-S5 | in_progress | failed | red | `docs/reports/v7_readiness_checklist_2026-04-20.md`, `scripts/v7_readiness_checklist.py`, `tests/unit/test_v7_readiness_checklist.py` |
-
-Aktualni stav V7-S5 (2026-04-20):
-- Readiness checklist probe byl spusten nad `shared_seq` a skoncil `FAIL`.
-- Hlavni blokery: model coverage `<3`, trialy nejsou `started/finalized`, chybi latency evidence, dashboard runtime mapping hlasi `warn`.
+| V7-S5 | in_progress | not_started | amber | cekaji fyzicke runy 3-5 modelu + DoD report |
 
 Poznamka k readiness:
 - `green`: implementation=`implemented` a validation=`passed`

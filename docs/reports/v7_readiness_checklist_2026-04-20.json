@@ -1,0 +1,65 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "v7_readiness_checklist_2026-04-20.json",
+    "last_updated_utc": "2026-04-20T20:01:12Z",
+    "review_due_utc": "2026-04-21T00:00:00Z",
+    "source_md": "docs/reports/v7_readiness_checklist_2026-04-20.md",
+    "source_runtime_json": "runtime/v7_readiness_latest.json"
+  },
+  "report_type": "v7_readiness_checklist",
+  "plan_id": "cs-online-mic-orchestrator-v7",
+  "milestone": "V7-S5",
+  "execution": {
+    "script": "scripts/v7_readiness_checklist.py",
+    "sequence_token": "shared_seq",
+    "api_base": "http://127.0.0.1:8012",
+    "generated_at_utc": "2026-04-20T19:59:41.232591+00:00",
+    "exit_code": 1
+  },
+  "result": {
+    "overall_pass": false,
+    "failed_checks": [
+      "model_count_range",
+      "all_trials_started",
+      "all_trials_finalized",
+      "latency_available_all_trials",
+      "strict_readiness",
+      "dashboard_runtime_mapping_status"
+    ],
+    "strict_readiness_failed_checks": [
+      "model_coverage",
+      "finalized_trials"
+    ]
+  },
+  "summary": {
+    "trials_count": 2,
+    "model_count": 1,
+    "models": [
+      "whisper_cpp_small"
+    ],
+    "started_count": 0,
+    "stopped_count": 0,
+    "latency_known_count": 0,
+    "timeline_checked_points": 2
+  },
+  "events": {
+    "scanned_lines": 361,
+    "matched_events": 24,
+    "matched_v7_events": 24,
+    "invalid_contract_events": 0,
+    "unknown_reason_events": 0
+  },
+  "dashboard_runtime_mapping": {
+    "status": "warn",
+    "sequence_reports_total": 17,
+    "readiness_fail_reports": 16,
+    "invalid_contract_events": 0
+  },
+  "conclusion": {
+    "milestone_validation": "failed",
+    "readiness": "red",
+    "reason": "V7-S5 zatim nema fyzicky 3-5 model run s finalized+latency evidenci."
+  }
+}
