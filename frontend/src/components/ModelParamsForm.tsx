@@ -13,9 +13,22 @@ interface Props {
   onChange: (values: Record<string, unknown>) => void
   compact?: boolean
   hints?: Record<string, string>
+  disabled?: boolean
+  recommendations?: Record<string, unknown>
+  onApplyRecommended?: (name: string, value: unknown) => void
 }
 
-export function ModelParamsForm({ modelId, params, values, onChange, compact = false, hints }: Props) {
+export function ModelParamsForm({
+  modelId,
+  params,
+  values,
+  onChange,
+  compact = false,
+  hints,
+  disabled = false,
+  recommendations,
+  onApplyRecommended,
+}: Props) {
   if (!params || params.length === 0) return null
 
   function set(name: string, value: unknown) {
@@ -47,7 +60,24 @@ export function ModelParamsForm({ modelId, params, values, onChange, compact = f
                 </div>
               )}
             </div>
-            <ParamInput param={p} value={current(p)} onChange={v => set(p.name, v)} compact={compact} />
+            <ParamInput param={p} value={current(p)} onChange={v => set(p.name, v)} compact={compact} disabled={disabled} />
+            {recommendations && Object.prototype.hasOwnProperty.call(recommendations, p.name) && (
+              <div className="flex items-center gap-1 text-[10px] text-emerald-300">
+                <span title={`Doporučeno: ${formatInlineValue(recommendations[p.name])}`}>
+                  dop: {formatInlineValue(recommendations[p.name])}
+                </span>
+                {onApplyRecommended && (
+                  <button
+                    type="button"
+                    onClick={() => onApplyRecommended(p.name, recommendations[p.name])}
+                    disabled={disabled}
+                    className="rounded border border-emerald-800 px-1 py-0 text-[10px] text-emerald-200 hover:text-white disabled:opacity-50"
+                  >
+                    Použít
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       ))}
@@ -55,15 +85,23 @@ export function ModelParamsForm({ modelId, params, values, onChange, compact = f
   )
 }
 
-function ParamInput({ param, value, onChange, compact }: {
+function formatInlineValue(value: unknown): string {
+  if (value == null || value === '') return '—'
+  if (typeof value === 'boolean') return value ? 'ano' : 'ne'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '—'
+  return String(value)
+}
+
+export function ParamInput({ param, value, onChange, compact, disabled = false }: {
   param: ParamSpec
   value: unknown
   onChange: (v: unknown) => void
   compact: boolean
+  disabled?: boolean
 }) {
   const cls = compact
-    ? 'bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-sm text-white w-24'
-    : 'bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white w-full'
+    ? 'bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-sm text-white w-24 disabled:opacity-60'
+    : 'bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white w-full disabled:opacity-60'
 
   if (param.type === 'bool') {
     return (
@@ -71,7 +109,8 @@ function ParamInput({ param, value, onChange, compact }: {
         type="checkbox"
         checked={Boolean(value ?? param.default)}
         onChange={e => onChange(e.target.checked)}
-        className="w-4 h-4 accent-blue-500"
+        disabled={disabled}
+        className="w-4 h-4 accent-blue-500 disabled:opacity-60"
       />
     )
   }
@@ -81,6 +120,7 @@ function ParamInput({ param, value, onChange, compact }: {
       <select
         value={String(value ?? param.default)}
         onChange={e => onChange(e.target.value)}
+        disabled={disabled}
         className={cls}
       >
         {param.options.map(opt => (
@@ -99,6 +139,7 @@ function ParamInput({ param, value, onChange, compact }: {
         max={param.max ?? undefined}
         value={String(value ?? param.default)}
         onChange={e => onChange(parseInt(e.target.value, 10) || param.default)}
+        disabled={disabled}
         className={cls}
       />
     )
@@ -113,6 +154,7 @@ function ParamInput({ param, value, onChange, compact }: {
         max={param.max ?? undefined}
         value={String(value ?? param.default)}
         onChange={e => onChange(parseFloat(e.target.value) || param.default)}
+        disabled={disabled}
         className={cls}
       />
     )
@@ -121,10 +163,11 @@ function ParamInput({ param, value, onChange, compact }: {
   // str
   return (
     <input
-      type="text"
-      value={String(value ?? param.default)}
-      onChange={e => onChange(e.target.value)}
-      className={cls}
-    />
+    type="text"
+    value={String(value ?? param.default)}
+    onChange={e => onChange(e.target.value)}
+    disabled={disabled}
+    className={cls}
+  />
   )
 }

@@ -36,6 +36,22 @@ MIC_V7_EVENT_NAMES = frozenset(
         "ws_finalize_failed",
         "ws_closed",
         "ws_close_failed",
+        "client_sequence_started",
+        "client_sequence_trial_start_requested",
+        "client_sequence_session_create_requested",
+        "client_sequence_session_created",
+        "client_sequence_trial_ws_opened",
+        "client_sequence_trial_stop_requested",
+        "client_sequence_audio_start_marked",
+        "client_sequence_silence_stop_deferred",
+        "client_sequence_trial_saved",
+        "client_sequence_next_scheduled",
+        "client_sequence_trial_retry",
+        "client_sequence_trial_skipped",
+        "client_sequence_completed",
+        "client_sequence_stopped",
+        "mobile_loop_package_created",
+        "mobile_loop_audio_start_marked",
     }
 )
 

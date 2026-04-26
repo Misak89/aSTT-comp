@@ -43,6 +43,7 @@ from .mic_v7_contract import (
     normalize_reason_code,
     validate_timeline_monotonic,
 )
+from packages.adapters._registry import REGISTRY
 
 try:
     import psutil
@@ -58,6 +59,13 @@ _V7_SEQUENCE_MAX_TRACKED = 256
 ORCHESTRATOR_MODE_LEGACY = "legacy_sequence"
 ORCHESTRATOR_MODE_V7 = "v7_cs_online"
 _V7_LATENCY_HARD_LIMIT_MS = 12_000.0
+
+
+def _model_default_params(model_id: str) -> dict[str, Any]:
+    descriptor = REGISTRY.get(model_id)
+    if descriptor is None:
+        return {}
+    return {param.name: param.default for param in descriptor.params}
 _ORCHESTRATOR_MODE_ALIASES = {
     "legacy": ORCHESTRATOR_MODE_LEGACY,
     "legacy_sequence": ORCHESTRATOR_MODE_LEGACY,
@@ -124,6 +132,7 @@ class MicSessionState:
     preflight_errors: list[str] = field(default_factory=list)
     preflight_warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    final: dict[str, Any] | None = None
     _session_obj: Any = field(default=None, repr=False)
     _started_perf: float = field(default=0.0, repr=False)
     _total_samples: int = field(default=0, repr=False)
@@ -225,6 +234,31 @@ def _safe_float(value: Any) -> float | None:
     return None
 
 
+def _safe_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "y", "on"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
+
+
+def _safe_str_list(value: Any, *, limit: int = 200) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value[: max(0, int(limit))]:
+        text = str(item).strip()
+        if text:
+            out.append(text[:160])
+    return out
+
+
 def _normalize_reason_code(raw_reason: Any, *, allow_none: bool = True, fallback: str = "unknown") -> str | None:
     return normalize_reason_code(
         raw_reason,
@@ -258,16 +292,77 @@ def _parse_auto_sequence_meta(model_params: dict[str, Any]) -> dict[str, Any]:
     sequence_index = _safe_int(model_params.get("auto_model_sequence_index"))
     sequence_total = _safe_int(model_params.get("auto_model_sequence_total"))
     speech_s = _safe_float(model_params.get("mobile_loop_speech_s"))
+    capture_speech_s = _safe_float(model_params.get("mobile_loop_capture_speech_s"))
+    early_stop_s = _safe_float(model_params.get("mobile_loop_early_stop_s"))
     pause_s = _safe_float(model_params.get("mobile_loop_pause_s"))
+    audio_start_delay_s = _safe_float(model_params.get("mobile_loop_audio_start_delay_s"))
     cycle_s = (speech_s + pause_s) if isinstance(speech_s, (int, float)) and isinstance(pause_s, (int, float)) else None
+    hard_trial_s = _safe_float(model_params.get("auto_model_sequence_hard_trial_s"))
+    hard_trial_base_s = _safe_float(model_params.get("auto_model_sequence_hard_trial_base_s"))
+    effective_hard_trial_s = _safe_float(model_params.get("auto_model_sequence_effective_hard_trial_s"))
     return {
         "token": token or None,
         "index": sequence_index,
         "total": sequence_total,
         "speech_s": speech_s,
+        "capture_speech_s": capture_speech_s,
+        "early_stop_s": early_stop_s,
         "pause_s": pause_s,
+        "audio_start_delay_s": audio_start_delay_s if isinstance(audio_start_delay_s, (int, float)) else 0.0,
         "cycle_s": cycle_s,
+        "slot_s": _safe_float(model_params.get("auto_model_sequence_slot_s")) or cycle_s,
         "mobile_loop_enabled": bool(model_params.get("mobile_loop_enabled")),
+        "mobile_loop_auto_stop": _safe_bool(model_params.get("mobile_loop_auto_stop")),
+        "mobile_loop_sync_first_round": _safe_bool(model_params.get("mobile_loop_sync_first_round")),
+        "mobile_loop_measured_rounds": _safe_int(model_params.get("mobile_loop_measured_rounds")),
+        "mobile_loop_package_id": str(model_params.get("mobile_loop_package_id") or "").strip() or None,
+        "audio_start_source": str(model_params.get("mobile_loop_audio_start_source") or "").strip() or None,
+        "audio_start_known": _safe_bool(model_params.get("mobile_loop_audio_start_known")),
+        "queue_model_ids": _safe_str_list(model_params.get("auto_model_sequence_queue")),
+        "selected_model_ids": _safe_str_list(model_params.get("auto_model_sequence_selected_models")),
+        "lead_start_s": _safe_float(model_params.get("auto_model_sequence_lead_start_s")),
+        "preparation_s": _safe_float(model_params.get("auto_model_sequence_preparation_s")),
+        "hard_trial_base_s": hard_trial_base_s,
+        "hard_trial_s": hard_trial_s,
+        "effective_hard_trial_s": effective_hard_trial_s if isinstance(effective_hard_trial_s, (int, float)) else hard_trial_s,
+        "silence_stop_s": _safe_float(model_params.get("auto_model_sequence_silence_stop_s")),
+        "silence_min_elapsed_s": _safe_float(model_params.get("auto_model_sequence_silence_min_elapsed_s")),
+        "silence_min_audio_fraction": _safe_float(model_params.get("auto_model_sequence_silence_min_audio_fraction")),
+        "grace_s": _safe_float(model_params.get("auto_model_sequence_grace_s")),
+        "latency_guard_s": _safe_float(model_params.get("auto_model_sequence_latency_guard_s")),
+        "adaptive_max_cut_s": _safe_float(model_params.get("auto_model_sequence_adaptive_max_cut_s")),
+    }
+
+
+def _sequence_plan_payload_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mobile_loop_enabled": meta.get("mobile_loop_enabled"),
+        "mobile_loop_speech_s": meta.get("speech_s"),
+        "mobile_loop_capture_speech_s": meta.get("capture_speech_s"),
+        "mobile_loop_early_stop_s": meta.get("early_stop_s"),
+        "mobile_loop_pause_s": meta.get("pause_s"),
+        "mobile_loop_audio_start_delay_s": meta.get("audio_start_delay_s"),
+        "mobile_loop_cycle_s": meta.get("cycle_s"),
+        "mobile_loop_sync_first_round": meta.get("mobile_loop_sync_first_round"),
+        "mobile_loop_measured_rounds": meta.get("mobile_loop_measured_rounds"),
+        "mobile_loop_auto_stop": meta.get("mobile_loop_auto_stop"),
+        "mobile_loop_package_id": meta.get("mobile_loop_package_id"),
+        "mobile_loop_audio_start_source": meta.get("audio_start_source"),
+        "mobile_loop_audio_start_known": meta.get("audio_start_known"),
+        "auto_model_sequence_queue": list(meta.get("queue_model_ids") or []),
+        "auto_model_sequence_selected_models": list(meta.get("selected_model_ids") or []),
+        "auto_model_sequence_lead_start_s": meta.get("lead_start_s"),
+        "auto_model_sequence_preparation_s": meta.get("preparation_s"),
+        "auto_model_sequence_hard_trial_base_s": meta.get("hard_trial_base_s"),
+        "auto_model_sequence_hard_trial_s": meta.get("hard_trial_s"),
+        "auto_model_sequence_effective_hard_trial_s": meta.get("effective_hard_trial_s"),
+        "auto_model_sequence_silence_stop_s": meta.get("silence_stop_s"),
+        "auto_model_sequence_silence_min_elapsed_s": meta.get("silence_min_elapsed_s"),
+        "auto_model_sequence_silence_min_audio_fraction": meta.get("silence_min_audio_fraction"),
+        "auto_model_sequence_grace_s": meta.get("grace_s"),
+        "auto_model_sequence_slot_s": meta.get("slot_s"),
+        "auto_model_sequence_latency_guard_s": meta.get("latency_guard_s"),
+        "auto_model_sequence_adaptive_max_cut_s": meta.get("adaptive_max_cut_s"),
     }
 
 
@@ -444,11 +539,29 @@ def _update_sequence_timing_on_start(state: MicSessionState) -> dict[str, Any]:
     timing: dict[str, Any] = {
         "mobile_loop_enabled": meta["mobile_loop_enabled"],
         "planned_speech_s": round(float(meta["speech_s"]), 3) if isinstance(meta["speech_s"], (int, float)) else None,
+        "planned_capture_speech_s": round(float(meta["capture_speech_s"]), 3) if isinstance(meta["capture_speech_s"], (int, float)) else None,
+        "planned_early_stop_s": round(float(meta["early_stop_s"]), 3) if isinstance(meta["early_stop_s"], (int, float)) else None,
         "planned_pause_s": round(float(meta["pause_s"]), 3) if isinstance(meta["pause_s"], (int, float)) else None,
+        "planned_audio_start_delay_s": round(float(meta["audio_start_delay_s"]), 3)
+        if isinstance(meta["audio_start_delay_s"], (int, float))
+        else 0.0,
         "planned_cycle_s": round(float(meta["cycle_s"]), 3) if isinstance(meta["cycle_s"], (int, float)) else None,
+        "planned_slot_s": round(float(meta["slot_s"]), 3) if isinstance(meta["slot_s"], (int, float)) else None,
+        "planned_hard_trial_base_s": round(float(meta["hard_trial_base_s"]), 3) if isinstance(meta["hard_trial_base_s"], (int, float)) else None,
+        "planned_hard_trial_s": round(float(meta["hard_trial_s"]), 3) if isinstance(meta["hard_trial_s"], (int, float)) else None,
+        "planned_effective_hard_trial_s": round(float(meta["effective_hard_trial_s"]), 3) if isinstance(meta["effective_hard_trial_s"], (int, float)) else None,
+        "planned_silence_stop_s": round(float(meta["silence_stop_s"]), 3) if isinstance(meta["silence_stop_s"], (int, float)) else None,
+        "planned_silence_min_elapsed_s": round(float(meta["silence_min_elapsed_s"]), 3) if isinstance(meta["silence_min_elapsed_s"], (int, float)) else None,
+        "planned_silence_min_audio_fraction": round(float(meta["silence_min_audio_fraction"]), 3) if isinstance(meta["silence_min_audio_fraction"], (int, float)) else None,
+        "planned_grace_s": round(float(meta["grace_s"]), 3) if isinstance(meta["grace_s"], (int, float)) else None,
+        "planned_lead_start_s": round(float(meta["lead_start_s"]), 3) if isinstance(meta["lead_start_s"], (int, float)) else None,
+        "mobile_loop_package_id": meta["mobile_loop_package_id"],
+        "audio_start_source": meta["audio_start_source"],
+        "audio_start_known": meta["audio_start_known"],
         "sequence_token": meta["token"],
         "sequence_index": meta["index"],
         "sequence_total": meta["total"],
+        "sequence_queue": list(meta.get("queue_model_ids") or []),
         "created_at": created_at,
         "started_at": started_at,
         "created_to_started_ms": round(float(started_ms - created_ms), 1)
@@ -485,9 +598,13 @@ def _update_sequence_timing_on_start(state: MicSessionState) -> dict[str, Any]:
             prev_stop_ms = _safe_float(seq.get("last_stop_ms"))
             anchor_start_ms = _safe_float(seq.get("anchor_start_ms")) or float(started_ms)
             expected_start_ms = anchor_start_ms + (index - 1) * float(cycle_s) * 1000.0
+            audio_start_delay_s = _safe_float(meta.get("audio_start_delay_s")) or 0.0
+            expected_audio_start_ms = expected_start_ms + float(audio_start_delay_s) * 1000.0
             timing["observed_start_epoch_ms"] = round(float(started_ms), 1)
             timing["expected_start_epoch_ms"] = round(float(expected_start_ms), 1)
             timing["expected_start_at"] = _epoch_ms_to_iso(expected_start_ms)
+            timing["expected_audio_start_epoch_ms"] = round(float(expected_audio_start_ms), 1)
+            timing["expected_audio_start_at"] = _epoch_ms_to_iso(expected_audio_start_ms)
             timing["start_drift_ms"] = round(float(started_ms - expected_start_ms), 1)
             if isinstance(prev_start_ms, (int, float)):
                 observed_gap_s = (float(started_ms) - float(prev_start_ms)) / 1000.0
@@ -530,12 +647,17 @@ def _update_sequence_timing_on_stop(state: MicSessionState) -> dict[str, Any]:
         timing["observed_duration_s"] = round(float(elapsed_s), 3)
 
     speech_s = meta["speech_s"]
+    audio_start_delay_s = _safe_float(meta.get("audio_start_delay_s")) or 0.0
     if isinstance(speech_s, (int, float)) and isinstance(timing.get("observed_duration_s"), (int, float)):
         timing["duration_vs_speech_delta_s"] = round(float(timing["observed_duration_s"]) - float(speech_s), 3)
+        timing["duration_vs_audio_plan_delta_s"] = round(
+            float(timing["observed_duration_s"]) - (float(audio_start_delay_s) + float(speech_s)),
+            3,
+        )
 
     expected_start_ms = _safe_float(timing.get("expected_start_epoch_ms"))
     if isinstance(expected_start_ms, (int, float)) and isinstance(speech_s, (int, float)) and isinstance(stopped_ms, (int, float)):
-        expected_stop_ms = float(expected_start_ms) + float(speech_s) * 1000.0
+        expected_stop_ms = float(expected_start_ms) + (float(audio_start_delay_s) + float(speech_s)) * 1000.0
         timing["expected_stop_at"] = _epoch_ms_to_iso(expected_stop_ms)
         timing["stop_drift_vs_planned_speech_ms"] = round(float(stopped_ms - expected_stop_ms), 1)
 
@@ -681,11 +803,29 @@ def _build_sequence_trial_entry(
     p = payload or {}
     orchestrator = _build_orchestrator_payload(state)
     reason_code = _normalize_reason_code(p.get("reason_code", state.reason_code), allow_none=True)
+    state_params = dict(state.model_params or {})
+    sequence_meta = _parse_auto_sequence_meta(state_params)
+    sequence_timing = p.get("sequence_timing")
+    if not isinstance(sequence_timing, dict):
+        sequence_timing = dict(state.sequence_timing or {})
+    raw_model_params_used = p.get("model_params_used")
+    if not isinstance(raw_model_params_used, dict):
+        raw_model_params_used = state_params.get("model_params_used")
+    raw_common_params_used = p.get("sequence_common_params_used")
+    if not isinstance(raw_common_params_used, dict):
+        raw_common_params_used = state_params.get("sequence_common_params_used")
+    raw_param_profile = p.get("sequence_param_profile", state_params.get("sequence_param_profile"))
     entry = {
         "seq_index": seq_index,
         "seq_total": seq_total,
         "session_id": state.session_id,
         "model_id": state.model_id,
+        "model_params_used": dict(raw_model_params_used or {}) if isinstance(raw_model_params_used, dict) else {},
+        "sequence_common_params_enabled": bool(state_params.get("sequence_common_params_enabled")),
+        "sequence_common_params_used": dict(raw_common_params_used or {}) if isinstance(raw_common_params_used, dict) else {},
+        "sequence_param_profile": str(raw_param_profile).strip() if raw_param_profile else None,
+        "sequence_timing": dict(sequence_timing),
+        **_sequence_plan_payload_from_meta(sequence_meta),
         "orchestrator_mode": orchestrator.get("orchestrator_mode"),
         "run_id": orchestrator.get("run_id"),
         "sequence_id": orchestrator.get("sequence_id"),
@@ -717,7 +857,182 @@ def _build_sequence_trial_entry(
         "reason_known": reason_code in MIC_V7_REASON_CODES if reason_code else True,
     }
     entry.update(compute_trial_kpi(entry, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS))
+    entry.update(_sequence_timing_flat_fields(entry.get("sequence_timing")))
     return entry
+
+
+def _sequence_timing_flat_fields(sequence_timing: Any) -> dict[str, Any]:
+    if not isinstance(sequence_timing, dict):
+        return {}
+    planned_pause_s = _safe_float(sequence_timing.get("planned_pause_s"))
+    observed_pause_s = _safe_float(sequence_timing.get("observed_pause_after_prev_stop_s"))
+    fields: dict[str, Any] = {
+        "planned_pause_s": round(float(planned_pause_s), 3) if isinstance(planned_pause_s, float) else None,
+        "planned_audio_start_delay_s": _safe_float(sequence_timing.get("planned_audio_start_delay_s")),
+        "observed_pause_after_prev_stop_s": round(float(observed_pause_s), 3) if isinstance(observed_pause_s, float) else None,
+        "observed_start_gap_s": _safe_float(sequence_timing.get("observed_start_gap_s")),
+        "start_gap_error_s": _safe_float(sequence_timing.get("start_gap_error_s")),
+        "observed_duration_s": _safe_float(sequence_timing.get("observed_duration_s")),
+        "duration_vs_audio_plan_delta_s": _safe_float(sequence_timing.get("duration_vs_audio_plan_delta_s")),
+        "stop_drift_vs_planned_speech_ms": _safe_float(sequence_timing.get("stop_drift_vs_planned_speech_ms")),
+    }
+    if isinstance(planned_pause_s, float) and isinstance(observed_pause_s, float):
+        fields["pause_deviation_s"] = round(float(observed_pause_s - planned_pause_s), 3)
+    else:
+        fields["pause_deviation_s"] = None
+    return fields
+
+
+def _sequence_trial_float(trial: dict[str, Any], flat_key: str, timing_key: str | None = None) -> float | None:
+    value = _safe_float(trial.get(flat_key))
+    if isinstance(value, float):
+        return value
+    timing = trial.get("sequence_timing")
+    if isinstance(timing, dict):
+        value = _safe_float(timing.get(timing_key or flat_key))
+        if isinstance(value, float):
+            return value
+    return None
+
+
+def _build_sequence_pause_validation(trials: list[dict[str, Any]], *, tolerance_s: float = 2.0) -> dict[str, Any]:
+    checked: list[dict[str, Any]] = []
+    violations: list[dict[str, Any]] = []
+    planned_values: set[float] = set()
+    observed_values: list[float] = []
+    max_abs_deviation: float | None = None
+
+    for trial in sorted(trials, key=lambda t: t.get("seq_index") if isinstance(t.get("seq_index"), int) else 10**9):
+        planned_pause_s = _sequence_trial_float(trial, "planned_pause_s", "planned_pause_s")
+        observed_pause_s = _sequence_trial_float(trial, "observed_pause_after_prev_stop_s", "observed_pause_after_prev_stop_s")
+        if not isinstance(planned_pause_s, float) or not isinstance(observed_pause_s, float):
+            continue
+        planned_pause_s = round(planned_pause_s, 3)
+        observed_pause_s = round(observed_pause_s, 3)
+        deviation_s = round(observed_pause_s - planned_pause_s, 3)
+        abs_deviation = abs(deviation_s)
+        planned_values.add(planned_pause_s)
+        observed_values.append(observed_pause_s)
+        max_abs_deviation = abs_deviation if max_abs_deviation is None else max(max_abs_deviation, abs_deviation)
+        row = {
+            "seq_index": trial.get("seq_index"),
+            "model_id": trial.get("model_id"),
+            "planned_pause_s": planned_pause_s,
+            "observed_pause_s": observed_pause_s,
+            "deviation_s": deviation_s,
+        }
+        checked.append(row)
+        if abs_deviation > tolerance_s:
+            violations.append(row)
+
+    planned_sorted = sorted(planned_values)
+    return {
+        "ok": len(violations) == 0,
+        "checked_points": len(checked),
+        "tolerance_s": round(float(tolerance_s), 3),
+        "planned_pause_s": planned_sorted[0] if len(planned_sorted) == 1 else None,
+        "planned_pause_values_s": planned_sorted,
+        "observed_pause_min_s": round(min(observed_values), 3) if observed_values else None,
+        "observed_pause_max_s": round(max(observed_values), 3) if observed_values else None,
+        "max_abs_deviation_s": round(max_abs_deviation, 3) if isinstance(max_abs_deviation, float) else None,
+        "violations": violations,
+    }
+
+
+def _trial_brief(trial: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "seq_index": trial.get("seq_index"),
+        "model_id": trial.get("model_id"),
+        "trial_status": trial.get("trial_status"),
+        "rtf": _safe_float(trial.get("rtf")),
+        "drop_rate": _safe_float(trial.get("drop_rate")),
+        "reason_code": _normalize_reason_code(trial.get("reason_code"), allow_none=True, fallback="unknown"),
+    }
+
+
+def _build_sequence_conclusion(
+    trials: list[dict[str, Any]],
+    *,
+    pause_validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    finalized_trials = [trial for trial in trials if trial.get("stopped_at") or str(trial.get("phase") or "") == "final"]
+    usable: list[dict[str, Any]] = []
+    borderline: list[dict[str, Any]] = []
+    performance_failed: list[dict[str, Any]] = []
+    quality_not_reliable: list[dict[str, Any]] = []
+
+    for trial in finalized_trials:
+        status = str(trial.get("trial_status") or "")
+        reason = _normalize_reason_code(trial.get("reason_code"), allow_none=True, fallback="unknown") or ""
+        drop = _safe_float(trial.get("drop_rate"))
+        rtf = _safe_float(trial.get("rtf"))
+        drop_value = drop if isinstance(drop, float) else 0.0
+        rtf_value = rtf if isinstance(rtf, float) else None
+        brief = _trial_brief(trial)
+
+        if drop_value > _BORDERLINE_DROP_RATE:
+            quality_not_reliable.append(brief)
+
+        if (
+            status == "fail"
+            or drop_value > _FAIL_DROP_RATE
+            or reason == "backpressure_drop" and drop_value > _FAIL_DROP_RATE
+            or (isinstance(rtf_value, float) and rtf_value > 2.0)
+        ):
+            performance_failed.append(brief)
+            continue
+
+        if (
+            status == "ok"
+            or (
+                status == "borderline"
+                and drop_value <= _BORDERLINE_DROP_RATE
+                and (rtf_value is None or rtf_value <= 1.2)
+            )
+        ):
+            usable.append(brief)
+            continue
+
+        if status in {"borderline", "too_slow_for_slot"}:
+            borderline.append(brief)
+
+    def rank_key(item: dict[str, Any]) -> tuple[float, float, float]:
+        drop = item.get("drop_rate") if isinstance(item.get("drop_rate"), float) else 1.0
+        rtf = item.get("rtf") if isinstance(item.get("rtf"), float) else 999.0
+        seq = item.get("seq_index") if isinstance(item.get("seq_index"), int) else 10**9
+        return (float(drop), abs(float(rtf) - 1.0), float(seq))
+
+    ranked_usable = sorted(usable, key=rank_key)
+    ranked_borderline = sorted(borderline, key=rank_key)
+    best = ranked_usable[0] if ranked_usable else (ranked_borderline[0] if ranked_borderline else None)
+
+    notes: list[str] = []
+    if pause_validation and pause_validation.get("ok") is False:
+        max_dev = _safe_float(pause_validation.get("max_abs_deviation_s"))
+        if isinstance(max_dev, float):
+            notes.append(f"Pauzy mimo plán; max odchylka {max_dev:.1f}s. Porovnání opakovat po kontrole časování.")
+        else:
+            notes.append("Pauzy mimo plán. Porovnání opakovat po kontrole časování.")
+    if quality_not_reliable:
+        notes.append("Modely s dropem nad 10 % nehodnotit textově bez opakování, protože část audia byla zahozena.")
+    if not finalized_trials:
+        headline = "Zatím není dokončený žádný trial."
+    elif ranked_usable:
+        headline = f"Použitelný online model: {ranked_usable[0].get('model_id')}."
+    elif ranked_borderline:
+        headline = f"Nejbližší použitelnému je hraniční model: {ranked_borderline[0].get('model_id')}."
+    else:
+        headline = "V tomto nastavení není technicky použitelný žádný model."
+
+    return {
+        "headline": headline,
+        "best_model_id": best.get("model_id") if best else None,
+        "usable_models": ranked_usable,
+        "borderline_models": ranked_borderline,
+        "performance_failed_models": performance_failed,
+        "quality_not_reliable_models": quality_not_reliable,
+        "notes": notes,
+    }
 
 
 def _build_sequence_summary(trials: list[dict[str, Any]]) -> dict[str, Any]:
@@ -856,9 +1171,17 @@ def _persist_sequence_report(
         seq_key="seq_index",
     )
     kpi_summary = compute_kpi_summary(trials_sorted, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS)
+    pause_validation = _build_sequence_pause_validation(trials_sorted)
+    conclusion = _build_sequence_conclusion(trials_sorted, pause_validation=pause_validation)
     summary = _build_sequence_summary(trials_sorted)
     summary["timeline_validation"] = timeline_validation
     summary["kpi"] = kpi_summary
+    summary["pause_validation"] = pause_validation
+    summary["conclusion"] = conclusion
+    sequence_plan = _sequence_plan_payload_from_meta(_parse_auto_sequence_meta(state.model_params or {}))
+    if not any(v not in (None, [], "") for v in sequence_plan.values()):
+        previous_plan = report.get("sequence_plan")
+        sequence_plan = dict(previous_plan) if isinstance(previous_plan, dict) else sequence_plan
     readiness = evaluate_v7_readiness(
         trials=trials_sorted,
         timeline_validation=timeline_validation,
@@ -875,8 +1198,11 @@ def _persist_sequence_report(
         "trials_count": len(trials_sorted),
         "contract": build_contract_metadata(),
         "timeline_validation": timeline_validation,
+        "pause_validation": pause_validation,
+        "conclusion": conclusion,
         "kpi": kpi_summary,
         "readiness": readiness,
+        "sequence_plan": sequence_plan,
         "summary": summary,
         "trials": trials_sorted,
     }
@@ -890,6 +1216,31 @@ def _persist_sequence_report(
         "seq_index",
         "seq_total",
         "model_id",
+        "sequence_param_profile",
+        "mobile_loop_speech_s",
+        "mobile_loop_capture_speech_s",
+        "mobile_loop_early_stop_s",
+        "mobile_loop_pause_s",
+        "mobile_loop_audio_start_delay_s",
+        "mobile_loop_cycle_s",
+        "mobile_loop_package_id",
+        "planned_pause_s",
+        "planned_audio_start_delay_s",
+        "observed_pause_after_prev_stop_s",
+        "pause_deviation_s",
+        "observed_start_gap_s",
+        "start_gap_error_s",
+        "observed_duration_s",
+        "duration_vs_audio_plan_delta_s",
+        "stop_drift_vs_planned_speech_ms",
+        "auto_model_sequence_slot_s",
+        "auto_model_sequence_hard_trial_base_s",
+        "auto_model_sequence_hard_trial_s",
+        "auto_model_sequence_effective_hard_trial_s",
+        "auto_model_sequence_silence_stop_s",
+        "auto_model_sequence_silence_min_elapsed_s",
+        "auto_model_sequence_silence_min_audio_fraction",
+        "auto_model_sequence_grace_s",
         "orchestrator_mode",
         "event_contract_schema",
         "event_contract_version",
@@ -1002,9 +1353,12 @@ def get_sequence_report(token: str) -> dict[str, Any] | None:
             trial["reason_code"] = _normalize_reason_code(trial.get("reason_code"), allow_none=True, fallback="unknown")
             trial["reason_known"] = trial["reason_code"] in MIC_V7_REASON_CODES if trial.get("reason_code") else True
             trial.update(compute_trial_kpi(trial, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS))
+            trial.update(_sequence_timing_flat_fields(trial.get("sequence_timing")))
 
         timeline_validation = validate_timeline_monotonic(trials, timeline_key="global_timeline_ms", seq_key="seq_index")
         kpi_summary = compute_kpi_summary(trials, hard_limit_ms=_V7_LATENCY_HARD_LIMIT_MS)
+        pause_validation = _build_sequence_pause_validation(trials)
+        conclusion = _build_sequence_conclusion(trials, pause_validation=pause_validation)
         readiness = evaluate_v7_readiness(
             trials=trials,
             timeline_validation=timeline_validation,
@@ -1018,10 +1372,32 @@ def get_sequence_report(token: str) -> dict[str, Any] | None:
             summary = _build_sequence_summary(trials)
         summary["timeline_validation"] = timeline_validation
         summary["kpi"] = kpi_summary
+        summary["pause_validation"] = pause_validation
+        summary["conclusion"] = conclusion
         report["summary"] = summary
         report["timeline_validation"] = timeline_validation
+        report["pause_validation"] = pause_validation
+        report["conclusion"] = conclusion
         report["kpi"] = kpi_summary
         report["readiness"] = readiness
+        if not isinstance(report.get("sequence_plan"), dict):
+            first_plan: dict[str, Any] = {}
+            if isinstance(trials[0], dict):
+                plan_keys = [
+                    "mobile_loop_enabled",
+                    "mobile_loop_speech_s",
+                    "mobile_loop_capture_speech_s",
+                    "mobile_loop_early_stop_s",
+                    "mobile_loop_pause_s",
+                    "mobile_loop_cycle_s",
+                    "mobile_loop_package_id",
+                    "auto_model_sequence_slot_s",
+                    "auto_model_sequence_hard_trial_s",
+                    "auto_model_sequence_silence_stop_s",
+                    "auto_model_sequence_grace_s",
+                ]
+                first_plan = {key: trials[0].get(key) for key in plan_keys if key in trials[0]}
+            report["sequence_plan"] = first_plan
 
     report["contract"] = build_contract_metadata()
     report["trials"] = trials
@@ -1306,13 +1682,26 @@ def _persist_session_snapshot(
 
 def create_session(model_id: str, model_params: dict | None = None) -> str:
     session_id = f"mic_{uuid.uuid4().hex[:8]}"
-    params = dict(model_params or {})
+    params = {
+        **_model_default_params(model_id),
+        **dict(model_params or {}),
+    }
     state = MicSessionState(
         session_id=session_id,
         model_id=model_id,
         model_params=params,
         created_at=_iso_now(),
     )
+    initial_target_sr = _parse_int_param(params, "sample_rate", SAMPLE_RATE, 8000, 48000)
+    initial_gain_db = _parse_float_param(params, "input_gain_db", 0.0, -24.0, 24.0)
+    initial_high_wm = _parse_float_param(params, "backpressure_high_s", 1.2, 0.2, 5.0)
+    initial_low_wm = _parse_float_param(params, "backpressure_low_s", 0.4, 0.05, 3.0)
+    if initial_low_wm >= initial_high_wm:
+        initial_low_wm = max(0.05, min(initial_high_wm * 0.5, initial_high_wm - 0.05))
+    state.target_sample_rate = initial_target_sr
+    state.input_gain_db = initial_gain_db
+    state.queue_high_watermark_s = initial_high_wm
+    state.queue_low_watermark_s = initial_low_wm
     seq_meta = _parse_auto_sequence_meta(state.model_params)
     state.orchestrator_mode = _orchestrator_mode_from_params(state.model_params)
     if state.orchestrator_mode == ORCHESTRATOR_MODE_V7:
@@ -1347,10 +1736,7 @@ def create_session(model_id: str, model_params: dict | None = None) -> str:
             "auto_model_sequence_token": state.model_params.get("auto_model_sequence_token"),
             "auto_model_sequence_index": state.model_params.get("auto_model_sequence_index"),
             "auto_model_sequence_total": state.model_params.get("auto_model_sequence_total"),
-            "mobile_loop_enabled": seq_meta["mobile_loop_enabled"],
-            "mobile_loop_speech_s": seq_meta["speech_s"],
-            "mobile_loop_pause_s": seq_meta["pause_s"],
-            "mobile_loop_cycle_s": seq_meta["cycle_s"],
+            **_sequence_plan_payload_from_meta(seq_meta),
             "preflight_ok": state.preflight_ok,
             "preflight_errors": list(state.preflight_errors or []),
             "preflight_warnings": list(state.preflight_warnings or []),
@@ -1385,6 +1771,135 @@ def log_transport_event(session_id: str, event: str, extra: dict[str, Any] | Non
     _append_mic_event(str(event), state=state, extra=payload_extra)
 
 
+def update_session_runtime_metadata(session_id: str, updates: dict[str, Any] | None) -> None:
+    """Best-effort update of UI runtime metadata before finalization."""
+    state = get_session(session_id)
+    if state is None or not isinstance(updates, dict):
+        return
+
+    allowed_keys = {
+        "mobile_loop_audio_start_delay_s",
+        "mobile_loop_audio_start_known",
+        "mobile_loop_audio_start_source",
+        "auto_model_sequence_hard_trial_s",
+        "auto_model_sequence_effective_hard_trial_s",
+        "auto_model_sequence_silence_min_elapsed_s",
+        "auto_model_sequence_silence_min_audio_fraction",
+    }
+    sanitized: dict[str, Any] = {}
+    for key in allowed_keys:
+        if key not in updates:
+            continue
+        value = updates.get(key)
+        if key.endswith("_s") or key.endswith("_fraction"):
+            numeric = _safe_float(value)
+            if isinstance(numeric, float):
+                sanitized[key] = numeric
+        elif key.endswith("_known"):
+            parsed = _safe_bool(value)
+            if parsed is not None:
+                sanitized[key] = parsed
+        else:
+            text = str(value or "").strip()
+            if text:
+                sanitized[key] = text[:120]
+
+    if not sanitized:
+        return
+
+    with state._lock:
+        state.model_params.update(sanitized)
+        if "mobile_loop_audio_start_delay_s" in sanitized:
+            delay_s = _safe_float(sanitized.get("mobile_loop_audio_start_delay_s")) or 0.0
+            state.sequence_timing["planned_audio_start_delay_s"] = round(float(delay_s), 3)
+            expected_start_ms = _safe_float(state.sequence_timing.get("expected_start_epoch_ms"))
+            if isinstance(expected_start_ms, float):
+                expected_audio_start_ms = expected_start_ms + float(delay_s) * 1000.0
+                state.sequence_timing["expected_audio_start_epoch_ms"] = round(expected_audio_start_ms, 1)
+                state.sequence_timing["expected_audio_start_at"] = _epoch_ms_to_iso(expected_audio_start_ms)
+        if "mobile_loop_audio_start_known" in sanitized:
+            state.sequence_timing["audio_start_known"] = sanitized["mobile_loop_audio_start_known"]
+        if "mobile_loop_audio_start_source" in sanitized:
+            state.sequence_timing["audio_start_source"] = sanitized["mobile_loop_audio_start_source"]
+
+
+def _sanitize_client_event_name(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    cleaned = []
+    for ch in raw[:80]:
+        if ("a" <= ch <= "z") or ("0" <= ch <= "9") or ch == "_":
+            cleaned.append(ch)
+        elif ch in {" ", "-", "."}:
+            cleaned.append("_")
+    event = "".join(cleaned).strip("_")
+    while "__" in event:
+        event = event.replace("__", "_")
+    if event.startswith("client_sequence_") or event.startswith("mobile_loop_"):
+        return event
+    return "client_sequence_event"
+
+
+def _sanitize_client_event_value(value: Any, *, depth: int = 0) -> Any:
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return float(value) if isinstance(value, float) else int(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        return value[:2000]
+    if depth >= 3:
+        return str(value)[:500]
+    if isinstance(value, list):
+        return [_sanitize_client_event_value(item, depth=depth + 1) for item in value[:200]]
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= 120:
+                break
+            key_text = str(key).strip()[:120]
+            if key_text:
+                out[key_text] = _sanitize_client_event_value(item, depth=depth + 1)
+        return out
+    return str(value)[:500]
+
+
+def log_client_sequence_event(event: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Zapíše best-effort klientskou událost orchestrace sekvence do mic JSONL logu."""
+    extra_raw = payload if isinstance(payload, dict) else {}
+    extra = _sanitize_client_event_value(extra_raw)
+    if not isinstance(extra, dict):
+        extra = {}
+    session_id = str(extra.get("session_id") or "").strip()
+    state = get_session(session_id) if session_id else None
+    extra["client_event"] = True
+    extra["client_event_source"] = "benchmark_mic_ui"
+    if state is not None:
+        for identity_key in {
+            "orchestrator_mode",
+            "run_id",
+            "sequence_id",
+            "sequence_index",
+            "sequence_total",
+            "global_timeline_ms",
+        }:
+            extra.pop(identity_key, None)
+    else:
+        if session_id:
+            extra.setdefault("session_id", session_id)
+        if str(extra.get("orchestrator_mode") or "").strip().lower() == ORCHESTRATOR_MODE_V7:
+            token = str(extra.get("sequence_id") or extra.get("sequence_token") or "").strip()
+            if token:
+                extra.setdefault("sequence_id", token)
+                extra.setdefault("run_id", f"run_client_{token}")
+            if _safe_float(extra.get("global_timeline_ms")) is None:
+                extra["global_timeline_ms"] = 0.0
+    event_name = _sanitize_client_event_name(event)
+    _append_mic_event(event_name, state=state, extra=extra)
+    return {"ok": True, "event": event_name, "session_id": session_id or None}
+
+
 def _iter_manual_history_files() -> list[Path]:
     history_dir = MIC_SESSIONS_ROOT / "history"
     if not history_dir.exists():
@@ -1400,6 +1915,81 @@ def _read_json_dict(path: Path) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return payload
+
+
+def _extract_transcript_from_session_payload(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    final = payload.get("final")
+    if isinstance(final, dict):
+        final_text = final.get("text")
+        if isinstance(final_text, str) and final_text.strip():
+            return final_text
+    transcript = payload.get("transcript")
+    if isinstance(transcript, str) and transcript.strip():
+        return transcript
+    return ""
+
+
+def _manual_record_linked_session_id(metrics: dict[str, Any]) -> str:
+    session_id = str(metrics.get("mic_session_id") or "").strip()
+    if not session_id:
+        return ""
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    if any(ch not in allowed for ch in session_id):
+        return ""
+    return session_id
+
+
+def _session_transcript_from_manual_metrics(metrics: dict[str, Any]) -> str:
+    session_id = _manual_record_linked_session_id(metrics)
+    if not session_id:
+        return ""
+
+    with _sessions_lock:
+        state = _sessions.get(session_id)
+    if state is not None:
+        with state._lock:
+            transcript = _extract_transcript_from_session_payload(
+                {"transcript": state.transcript, "final": dict(state.final or {})}
+            )
+        if transcript:
+            return transcript
+
+    latest_payload = _read_json_dict(MIC_SESSIONS_ROOT / f"{session_id}.json")
+    transcript = _extract_transcript_from_session_payload(latest_payload)
+    if transcript:
+        return transcript
+
+    history_dir = MIC_SESSIONS_ROOT / "history"
+    if not history_dir.exists():
+        return ""
+    try:
+        candidates = sorted(
+            history_dir.glob(f"*_{session_id}_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        return ""
+    for path in candidates:
+        transcript = _extract_transcript_from_session_payload(_read_json_dict(path))
+        if transcript:
+            return transcript
+    return ""
+
+
+def _apply_authoritative_manual_record_transcript(payload: dict[str, Any]) -> dict[str, Any]:
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, dict):
+        return payload
+    if not _manual_record_linked_session_id(metrics):
+        return payload
+
+    transcript = _session_transcript_from_manual_metrics(metrics)
+    next_payload = dict(payload)
+    next_payload["transcript"] = transcript
+    return next_payload
 
 
 def _manual_record_id(payload: dict[str, Any], path: Path) -> str:
@@ -1429,6 +2019,7 @@ def _refresh_manual_latest_snapshots() -> None:
         payload = _read_json_dict(path)
         if payload is None:
             continue
+        payload = _apply_authoritative_manual_record_transcript(payload)
         if latest_overall is None:
             latest_overall = payload
         model_id = str(payload.get("model_id") or "").strip()
@@ -1481,6 +2072,7 @@ def save_manual_record(
         "transcript": transcript or "",
         "metrics": dict(metrics or {}),
     }
+    payload = _apply_authoritative_manual_record_transcript(payload)
 
     MIC_SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
     history_dir = MIC_SESSIONS_ROOT / "history"
@@ -1516,6 +2108,7 @@ def list_manual_records(
         payload = _read_json_dict(path)
         if payload is None:
             continue
+        payload = _apply_authoritative_manual_record_transcript(payload)
 
         rec_model_id = str(payload.get("model_id") or "").strip()
         if model_filter and rec_model_id.lower() != model_filter:
@@ -1931,6 +2524,24 @@ def generate_mobile_loop_package(
         if ref_path.exists():
             zf.write(ref_path, arcname=ref_path.name)
 
+    _append_mic_event(
+        "mobile_loop_package_created",
+        extra={
+            "package_id": package_id,
+            "video_id": video_id_clean,
+            "clip_from_s": round(start_s, 3),
+            "clip_to_s": round(bounded_end_s, 3),
+            "clip_duration_s": round(clip_duration_s, 3),
+            "pause_s": round(safe_pause_s, 3),
+            "measured_rounds": safe_repeats,
+            "sync_rounds": sync_rounds,
+            "total_rounds": total_rounds,
+            "total_duration_s": round(cursor, 3),
+            "wav_path": str(wav_path),
+            "zip_path": str(zip_path),
+        },
+    )
+
     return {
         "package_id": package_id,
         "created_at": created_at,
@@ -2163,6 +2774,7 @@ def start_recording(session_id: str) -> None:
         _set_status(state, "recording")
     sequence_timing = _update_sequence_timing_on_start(state)
     orchestrator_payload = _update_v7_timing_on_start(state)
+    sequence_meta = _parse_auto_sequence_meta(state.model_params or {})
     _persist_session_snapshot(state, phase="started")
     _append_mic_event(
         "started",
@@ -2173,6 +2785,7 @@ def start_recording(session_id: str) -> None:
             "queue_high_watermark_s": state.queue_high_watermark_s,
             "queue_low_watermark_s": state.queue_low_watermark_s,
             "sequence_timing": sequence_timing,
+            **_sequence_plan_payload_from_meta(sequence_meta),
             **orchestrator_payload,
         },
     )
@@ -2514,6 +3127,8 @@ def stop_recording(session_id: str) -> dict[str, Any]:
         "error": state.error,
     }
     final_payload.update(_build_orchestrator_payload(state))
+    with state._lock:
+        state.final = dict(final_payload)
     _persist_session_snapshot(state, phase="final", extra={"final": final_payload})
     _persist_sequence_report(state, final_payload, phase="final")
     _append_mic_event(

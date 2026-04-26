@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-08T11:15:02Z
+- last_updated_utc: 2026-04-25T10:49:40Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento dokument je centralni popis toho, jak projekt funguje.
@@ -39,6 +39,7 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 - Session artefakty: `runtime/mic_sessions/*`
 - Event stream: `runtime/logs/mic_sequence_events.jsonl`
 - Sequence report artefakty: `runtime/mic_sequences/<sequence_token>/report.json` + `report.csv`
+- MIC UI muze vyplnit spolecne parametry nebo hromadne profily sekvence; backend i frontend ukladaji auditni snapshot `model_params_used` a aktivni profil s hodnotami skutecne pouzitymi pro konkretni model.
 - V7 operational endpoints:
   - `GET /api/mic/contract` (schema/version, event names, reason-code vocabulary)
   - `GET /api/mic/sequences/{token}/readiness` (PASS/FAIL checker nad timeline + KPI + kontrakt)

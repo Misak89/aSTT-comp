@@ -1485,15 +1485,3 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - MIC history cannot display stale or manually supplied text for automatic MIC session rows; the real session payload is the only transcript source for linked rows.
-
----
-
-## Session 2026-04-26T04:55:36Z (mic-defaults-vosk-whisper-base)
-
-### Summary
-- Updated MIC defaults from the latest physical CZ online test for `vosk_small_cs_0_4` and `whisper_cpp_base`.
-- Registry/API defaults now use VOSK `chunk_seconds=0.4`, `input_gain_db=1.0`, backpressure `1.4/0.5`, and whisper.cpp base `threads=8`, `beam_size=1`, `best_of=1`, `no_fallback=false`, `analysis_interval_ms=2000`, backpressure `2.0/0.8`.
-- MIC session creation now merges registry defaults before user overrides, so sessions started without explicit params still use the current measured defaults.
-
-### Impact
-- New MIC tests and sequence reports start from the best currently verified settings for the two leading CZ online candidates while still allowing per-run overrides.

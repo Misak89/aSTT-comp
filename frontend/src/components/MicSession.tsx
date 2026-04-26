@@ -14,15 +14,17 @@
 import { Fragment, useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type {
   ModelDescriptor,
+  ParamSpec,
   AudioDevice,
   LibraryItem,
   MicMobileLoopPackageResponse,
   MicMobileLoopPackageListItem,
   MicSequenceReport,
+  MicSequenceConclusionModel,
   MicTrialStatus,
 } from '../types'
 import { api } from '../api/client'
-import { ModelParamsForm } from './ModelParamsForm'
+import { ModelParamsForm, ParamInput } from './ModelParamsForm'
 import { videoLabel } from '../utils'
 import { formatDateTimeMedium } from '../lib/time'
 
@@ -36,6 +38,7 @@ interface Props {
 type Status = 'idle' | 'connecting' | 'recording' | 'stopping' | 'done' | 'error'
 type MicTestMode = 'free_speech' | 'reference_video'
 type MicOrchestratorMode = 'legacy_sequence' | 'v7_cs_online'
+type SequenceParamProfileId = 'recommended_per_model' | 'fast_online' | 'quality_online'
 
 type MicMetrics = {
   latency_ms?: number
@@ -81,12 +84,18 @@ type SavedWebMicResult = {
   sequence_token?: string | null
   sequence_index?: number | null
   orchestrator_mode?: MicOrchestratorMode | null
+  model_params_used?: Record<string, unknown> | null
+  sequence_common_params_enabled?: boolean | null
+  sequence_common_params_used?: Record<string, unknown> | null
+  sequence_param_profile?: string | null
 }
 
 type AutoModelSequenceMeta = {
   sequence_token: string
   sequence_index: number
   sequence_total: number
+  queue_model_ids?: string[]
+  selected_model_ids?: string[]
 }
 
 type ActiveSessionLoopConfig = {
@@ -95,6 +104,7 @@ type ActiveSessionLoopConfig = {
   captureSpeechS: number | null
   earlyStopS: number | null
   pauseS: number | null
+  audioStartDelayS: number | null
   syncFirstRound: boolean | null
   measuredRounds: number | null
   autoStop: boolean | null
@@ -150,10 +160,23 @@ Výpravě v Doubravě malý grizzly ukáže se,
 tůristé zajisté rozutíkají se po lese.`
 
 /**
- * Doporučené MIC defaulty z interních tuning výsledků (27.-29. 3. 2026).
+ * Doporučené MIC defaulty z interních tuning výsledků (27. 3.-26. 4. 2026).
  * Nejsou to "tvrdé" backend defaulty — aplikují se pouze v MIC UI.
  */
 const MIC_RECOMMENDED_DEFAULTS: Record<string, Record<string, unknown>> = {
+  whisper_cpp_base: {
+    language: 'cs',
+    threads: 8,
+    beam_size: 1,
+    best_of: 1,
+    no_fallback: false,
+    initial_prompt: 'Aspergerův syndrom',
+    analysis_interval_ms: 2000,
+    analysis_window_seconds: 10,
+    input_gain_db: 0.0,
+    backpressure_high_s: 2.0,
+    backpressure_low_s: 0.8,
+  },
   whisper_cpp_small: {
     language: 'cs',
     threads: 4,
@@ -180,6 +203,14 @@ const MIC_RECOMMENDED_DEFAULTS: Record<string, Record<string, unknown>> = {
     backpressure_high_s: 1.2,
     backpressure_low_s: 0.4,
   },
+  vosk_small_cs_0_4: {
+    sample_rate: 16000,
+    chunk_seconds: 0.4,
+    set_words: false,
+    input_gain_db: 1.0,
+    backpressure_high_s: 1.4,
+    backpressure_low_s: 0.5,
+  },
 }
 
 const MIC_PARAM_HINTS: Record<string, string> = {
@@ -189,21 +220,43 @@ const MIC_PARAM_HINTS: Record<string, string> = {
   best_of: 'Drž 1-2 pro live. Vyšší hodnoty zvedají latenci bez velkého přínosu.',
   no_fallback: 'Pro stabilní live nech vypnuté. Zapni jen když chceš striktní dekódování.',
   initial_prompt: 'Krátký CZ kontext pomáhá u jmen a tématu; dlouhý prompt spíš škodí.',
-  analysis_interval_ms: '1200-1600 ms je obvykle dobrý kompromis mezi plynulostí a zátěží.',
+  analysis_interval_ms: '1200-2000 ms je obvykle dobrý kompromis; whisper.cpp base v posledním testu držel nejlépe 2000 ms.',
   analysis_window_seconds: '10-14 s pro běžné live. Delší okno zlepší kontext, ale zvýší zpoždění.',
   input_gain_db: 'Drž kolem 0 dB. Zvyš jen při tichém vstupu, sniž při přebuzení a šumu.',
-  backpressure_high_s: 'Vyšší hodnota = méně dropů, ale větší zpoždění. Běžně 1.0-1.4 s.',
+  backpressure_high_s: 'Vyšší hodnota = méně dropů, ale větší zpoždění. Běžně 1.0-2.0 s podle modelu.',
   backpressure_low_s: 'Hystereze návratu z backpressure; drž zhruba třetinu až polovinu high.',
   compute_type: 'Na CPU preferuj `int8`; vyšší přesnost typicky znamená pomalejší běh.',
   device: 'Pro starší kancelářské PC použij `cpu`; `cuda` jen pokud je stabilně dostupná.',
   sample_rate: 'Pro mic drž 16000 Hz, jinak roste režie bez jasného přínosu.',
-  chunk_seconds: 'Pro live drž 0.1-0.3 s; větší chunk zvyšuje latenci.',
+  chunk_seconds: 'Pro VOSK se v posledním CZ mic testu osvědčilo 0.4 s; menší chunk zkus jen při honbě za nižší latencí.',
   set_words: 'Zapni jen když potřebuješ word timestampy, jinak nech vypnuté.',
   num_threads: 'Stejné doporučení jako `threads`: 4-8 podle CPU, bez přestřelení.',
   decoding_method: 'Pro live začni `greedy_search`; beam variantu testuj až když je rezerva výkonu.',
   provider: 'Na běžném HW preferuj `cpu`; jiné providery jen pokud jsou ověřeně stabilní.',
   model_arch: 'Na slabším HW `tiny/small`, `medium` jen pokud drží RTF pod 1.',
 }
+
+const SEQUENCE_PARAM_PROFILES: Array<{
+  id: SequenceParamProfileId
+  label: string
+  description: string
+}> = [
+  {
+    id: 'recommended_per_model',
+    label: 'Doporučené per model',
+    description: 'Každý model dostane svůj doporučený MIC profil.',
+  },
+  {
+    id: 'fast_online',
+    label: 'Rychlý online',
+    description: 'Nižší latence: menší beam, kratší okno, CPU/int8 kde to jde.',
+  },
+  {
+    id: 'quality_online',
+    label: 'Kvalitnější',
+    description: 'Vyšší kvalita za cenu latence: delší okno, vyšší beam kde to model podporuje.',
+  },
+]
 
 function buildMicDefaultParams(model?: ModelDescriptor): Record<string, unknown> {
   if (!model) return {}
@@ -245,6 +298,18 @@ function clipText(value: string, maxLen: number): string {
   return `${text.slice(0, Math.max(1, maxLen - 1))}…`
 }
 
+function transcriptWords(value: string): string[] {
+  return (value || '').trim().split(/\s+/).filter(Boolean)
+}
+
+function clipWords(value: string, maxWords: number): string {
+  const text = (value || '').trim()
+  if (!text) return ''
+  const words = transcriptWords(text)
+  if (words.length <= maxWords) return text
+  return `${words.slice(0, maxWords).join(' ')}…`
+}
+
 const HISTORY_SORT_DEFAULT_DIR: Record<HistorySortKey, 'asc' | 'desc'> = {
   saved_at: 'desc',
   model_id: 'asc',
@@ -275,6 +340,7 @@ type MicUiPersistedState = {
   mobileLoopEnabled: boolean
   mobileLoopEarlyStopSeconds: number
   mobileLoopPauseSeconds: number
+  mobileLoopAudioStartDelaySeconds: number
   mobileLoopSyncFirstRound: boolean
   mobileLoopRepeatCount: number
   mobileLoopAutoStop: boolean
@@ -283,6 +349,10 @@ type MicUiPersistedState = {
   autoModelGraceSeconds: number
   autoModelSilenceStopSeconds: number
   orchestratorMode: MicOrchestratorMode
+  sequenceCommonParamsEnabled: boolean
+  sequenceCommonParams: Record<string, unknown>
+  sequenceParamProfileLabel: string
+  sequenceParamProfileDirty: boolean
 }
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -378,6 +448,371 @@ function buildMicParamsWithSaved(model: ModelDescriptor | undefined, saved?: Rec
   return merged
 }
 
+const COMMON_PARAM_ORDER = [
+  'language',
+  'lang',
+  'threads',
+  'num_threads',
+  'beam_size',
+  'best_of',
+  'no_fallback',
+  'compute_type',
+  'device',
+  'provider',
+  'decoding_method',
+  'analysis_interval_ms',
+  'analysis_window_seconds',
+  'input_gain_db',
+  'backpressure_high_s',
+  'backpressure_low_s',
+  'sample_rate',
+  'chunk_seconds',
+  'set_words',
+  'initial_prompt',
+  'model_arch',
+]
+
+function buildCommonParamSpecs(models: ModelDescriptor[]): ParamSpec[] {
+  const byName = new Map<string, ParamSpec>()
+  for (const model of models) {
+    for (const param of model.params) {
+      const existing = byName.get(param.name)
+      if (!existing) {
+        byName.set(param.name, { ...param, options: [...(param.options ?? [])] })
+        continue
+      }
+      byName.set(param.name, {
+        ...existing,
+        label: existing.label || param.label || param.name,
+        description: existing.description || param.description || '',
+        min: typeof existing.min === 'number' && typeof param.min === 'number'
+          ? Math.min(existing.min, param.min)
+          : existing.min ?? param.min,
+        max: typeof existing.max === 'number' && typeof param.max === 'number'
+          ? Math.max(existing.max, param.max)
+          : existing.max ?? param.max,
+        options: Array.from(new Set([...(existing.options ?? []), ...(param.options ?? [])])),
+      })
+    }
+  }
+
+  return Array.from(byName.values()).sort((a, b) => {
+    const ai = COMMON_PARAM_ORDER.indexOf(a.name)
+    const bi = COMMON_PARAM_ORDER.indexOf(b.name)
+    if (ai >= 0 || bi >= 0) return (ai >= 0 ? ai : 999) - (bi >= 0 ? bi : 999)
+    return a.label.localeCompare(b.label, 'cs')
+  })
+}
+
+function buildParamsFromSpecs(specs: ParamSpec[]): Record<string, unknown> {
+  const values: Record<string, unknown> = {}
+  for (const spec of specs) {
+    values[spec.name] = spec.default
+  }
+  return values
+}
+
+function pickModelSupportedParams(
+  model: ModelDescriptor | undefined,
+  values?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {}
+  if (!model || !values) return picked
+  for (const param of model.params) {
+    if (Object.prototype.hasOwnProperty.call(values, param.name)) {
+      picked[param.name] = values[param.name]
+    }
+  }
+  return picked
+}
+
+function buildMicParamsWithCommon(
+  model: ModelDescriptor | undefined,
+  saved: Record<string, unknown> | undefined,
+  commonEnabled: boolean,
+  commonParams: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = buildMicParamsWithSaved(model, saved)
+  if (!model || !commonEnabled) return merged
+  return { ...merged, ...pickModelSupportedParams(model, commonParams) }
+}
+
+function clampProfileNumber(param: ParamSpec, value: number): number {
+  let next = value
+  if (typeof param.min === 'number') next = Math.max(param.min, next)
+  if (typeof param.max === 'number') next = Math.min(param.max, next)
+  return param.type === 'int' ? Math.round(next) : next
+}
+
+function profileSelectValue(param: ParamSpec, preferred: string[]): string | undefined {
+  for (const value of preferred) {
+    if (param.options.includes(value)) return value
+  }
+  return undefined
+}
+
+function profileLanguageValue(model: ModelDescriptor, param: ParamSpec): string | undefined {
+  const langs = model.languages ?? []
+  if (param.type === 'select') {
+    if (param.options.includes('cs') && langs.includes('cs')) return 'cs'
+    if (param.options.includes('cs') && langs.length === 0) return 'cs'
+    const modelOption = langs.find((lang) => param.options.includes(lang))
+    if (modelOption) return modelOption
+    return typeof param.default === 'string' && param.options.includes(param.default) ? param.default : undefined
+  }
+  if (langs.includes('cs')) return 'cs'
+  if (typeof param.default === 'string' && param.default.trim()) return param.default
+  return langs[0]
+}
+
+function setProfileParam(
+  model: ModelDescriptor,
+  values: Record<string, unknown>,
+  name: string,
+  value: unknown,
+) {
+  const param = model.params.find((p) => p.name === name)
+  if (!param) return
+  if (param.type === 'select') {
+    if (typeof value !== 'string') return
+    if (!param.options.includes(value)) return
+    values[name] = value
+    return
+  }
+  if (param.type === 'int' || param.type === 'float') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return
+    values[name] = clampProfileNumber(param, value)
+    return
+  }
+  if (param.type === 'bool') {
+    values[name] = Boolean(value)
+    return
+  }
+  values[name] = value
+}
+
+function buildParamsForSequenceProfile(profileId: SequenceParamProfileId, model: ModelDescriptor): Record<string, unknown> {
+  const values = buildMicDefaultParams(model)
+  if (profileId === 'recommended_per_model') return values
+
+  for (const param of model.params) {
+    if (param.name === 'language' || param.name === 'lang') {
+      const lang = profileLanguageValue(model, param)
+      if (lang) setProfileParam(model, values, param.name, lang)
+    }
+  }
+
+  if (profileId === 'fast_online') {
+    setProfileParam(model, values, 'threads', 4)
+    setProfileParam(model, values, 'num_threads', 4)
+    setProfileParam(model, values, 'beam_size', 1)
+    setProfileParam(model, values, 'best_of', 1)
+    setProfileParam(model, values, 'no_fallback', false)
+    setProfileParam(model, values, 'analysis_interval_ms', 1000)
+    setProfileParam(model, values, 'analysis_window_seconds', 8)
+    setProfileParam(model, values, 'input_gain_db', 0)
+    setProfileParam(model, values, 'backpressure_high_s', 1.0)
+    setProfileParam(model, values, 'backpressure_low_s', 0.3)
+    setProfileParam(model, values, 'sample_rate', 16000)
+    setProfileParam(model, values, 'chunk_seconds', 0.2)
+    setProfileParam(model, values, 'set_words', false)
+    for (const param of model.params) {
+      if (param.name === 'compute_type') {
+        const value = profileSelectValue(param, ['int8', 'int8_float16', 'float16', 'float32'])
+        if (value) setProfileParam(model, values, param.name, value)
+      }
+      if (param.name === 'device' || param.name === 'provider') {
+        const value = profileSelectValue(param, ['cpu', 'auto', 'cuda', 'coreml'])
+        if (value) setProfileParam(model, values, param.name, value)
+      }
+      if (param.name === 'decoding_method') {
+        const value = profileSelectValue(param, ['greedy_search', 'modified_beam_search'])
+        if (value) setProfileParam(model, values, param.name, value)
+      }
+    }
+    return values
+  }
+
+  setProfileParam(model, values, 'threads', 6)
+  setProfileParam(model, values, 'num_threads', 6)
+  setProfileParam(model, values, 'beam_size', 3)
+  setProfileParam(model, values, 'best_of', 2)
+  setProfileParam(model, values, 'no_fallback', false)
+  setProfileParam(model, values, 'analysis_interval_ms', 1400)
+  setProfileParam(model, values, 'analysis_window_seconds', 14)
+  setProfileParam(model, values, 'input_gain_db', 0)
+  setProfileParam(model, values, 'backpressure_high_s', 1.4)
+  setProfileParam(model, values, 'backpressure_low_s', 0.5)
+  setProfileParam(model, values, 'sample_rate', 16000)
+  setProfileParam(model, values, 'chunk_seconds', 0.25)
+  setProfileParam(model, values, 'set_words', false)
+  for (const param of model.params) {
+    if (param.name === 'compute_type') {
+      const value = profileSelectValue(param, ['int8', 'int8_float16', 'float16', 'float32'])
+      if (value) setProfileParam(model, values, param.name, value)
+    }
+    if (param.name === 'device' || param.name === 'provider') {
+      const value = profileSelectValue(param, ['cpu', 'auto', 'cuda', 'coreml'])
+      if (value) setProfileParam(model, values, param.name, value)
+    }
+    if (param.name === 'decoding_method') {
+      const value = profileSelectValue(param, ['modified_beam_search', 'greedy_search'])
+      if (value) setProfileParam(model, values, param.name, value)
+    }
+  }
+  return values
+}
+
+function formatParamValue(value: unknown): string {
+  if (value == null || value === '') return '—'
+  if (typeof value === 'boolean') return value ? 'ano' : 'ne'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '—'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function formatParamsSummary(params?: Record<string, unknown> | null, maxItems = 6): string {
+  const entries = Object.entries(params ?? {}).filter(([, value]) => value !== undefined)
+  if (entries.length === 0) return ''
+  const head = entries.slice(0, maxItems).map(([key, value]) => `${key}=${formatParamValue(value)}`)
+  const suffix = entries.length > maxItems ? ` +${entries.length - maxItems}` : ''
+  return `${head.join(', ')}${suffix}`
+}
+
+function formatConclusionModels(models?: MicSequenceConclusionModel[]): string {
+  if (!Array.isArray(models) || models.length === 0) return '—'
+  return models.map((model) => {
+    const id = model.model_id || 'unknown'
+    const prefix = model.seq_index != null ? `#${model.seq_index} ` : ''
+    const parts: string[] = []
+    if (typeof model.rtf === 'number') parts.push(`RTF ${model.rtf.toFixed(2)}`)
+    if (typeof model.drop_rate === 'number') parts.push(`drop ${(model.drop_rate * 100).toFixed(1)}%`)
+    if (model.reason_code) parts.push(String(model.reason_code))
+    return `${prefix}${id}${parts.length > 0 ? ` (${parts.join(', ')})` : ''}`
+  }).join(', ')
+}
+
+function sameParamValue(a: unknown, b: unknown): boolean {
+  if (typeof a === 'number' && typeof b === 'number') {
+    return Number.isNaN(a) ? Number.isNaN(b) : Object.is(a, b)
+  }
+  return Object.is(a, b)
+}
+
+function buildBulkParamSpec(baseParam: ParamSpec, models: ModelDescriptor[]): ParamSpec | null {
+  const specs = models
+    .map((model) => model.params.find((param) => param.name === baseParam.name))
+    .filter((param): param is ParamSpec => Boolean(param))
+  if (specs.length === 0) return null
+  if (specs.some((param) => param.type !== specs[0].type)) return null
+
+  const minValues = specs.map((param) => param.min).filter((value): value is number => typeof value === 'number')
+  const maxValues = specs.map((param) => param.max).filter((value): value is number => typeof value === 'number')
+  let options = [...(baseParam.options ?? [])]
+  if (specs[0].type === 'select') {
+    options = specs.reduce<string[] | null>((acc, spec) => {
+      if (acc == null) return [...spec.options]
+      return acc.filter((option) => spec.options.includes(option))
+    }, null) ?? []
+  }
+
+  return {
+    ...baseParam,
+    type: specs[0].type,
+    min: minValues.length > 0 ? Math.max(...minValues) : null,
+    max: maxValues.length > 0 ? Math.min(...maxValues) : null,
+    options,
+  }
+}
+
+function BulkParamInput({
+  param,
+  value,
+  mixed,
+  disabled,
+  onChange,
+}: {
+  param: ParamSpec
+  value: unknown
+  mixed: boolean
+  disabled: boolean
+  onChange: (value: unknown) => void
+}) {
+  const cls = 'bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-sm text-white w-24 disabled:opacity-60'
+  const title = mixed ? 'Různé hodnoty; změna nastaví stejnou hodnotu všem podporovaným modelům.' : undefined
+
+  if (param.type === 'bool') {
+    return (
+      <input
+        type="checkbox"
+        checked={mixed ? false : Boolean(value ?? param.default)}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+        title={title}
+        className="w-4 h-4 accent-blue-500 disabled:opacity-60"
+      />
+    )
+  }
+
+  if (param.type === 'select') {
+    return (
+      <select
+        value={mixed ? '' : String(value ?? param.default)}
+        onChange={(e) => {
+          if (!e.target.value) return
+          onChange(e.target.value)
+        }}
+        disabled={disabled || param.options.length === 0}
+        title={title}
+        className={cls}
+      >
+        {mixed && <option value="">různé</option>}
+        {param.options.map((opt) => (
+          <option key={opt} value={opt}>{opt}</option>
+        ))}
+      </select>
+    )
+  }
+
+  if (param.type === 'int' || param.type === 'float') {
+    return (
+      <input
+        type="number"
+        step={param.type === 'int' ? 1 : 0.01}
+        min={param.min ?? undefined}
+        max={param.max ?? undefined}
+        value={mixed ? '' : String(value ?? param.default)}
+        placeholder={mixed ? 'různé' : undefined}
+        onChange={(e) => {
+          if (e.target.value === '') return
+          const parsed = param.type === 'int' ? parseInt(e.target.value, 10) : parseFloat(e.target.value)
+          if (!Number.isFinite(parsed)) return
+          onChange(parsed)
+        }}
+        disabled={disabled}
+        title={title}
+        className={cls}
+      />
+    )
+  }
+
+  return (
+    <input
+      type="text"
+      value={mixed ? '' : String(value ?? param.default ?? '')}
+      placeholder={mixed ? 'různé' : undefined}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      title={title}
+      className={cls}
+    />
+  )
+}
+
 function compareHistoryValue(
   key: HistorySortKey,
   a: SavedWebMicResult,
@@ -410,11 +845,26 @@ export function MicSession({ availableModels, library }: Props) {
     if (validIds.length > 0) return validIds
     return initialModelId ? [initialModelId] : []
   }, [availableModels, initialModelId, persistedUi.autoModelSelectedIds])
+  const commonParamSpecs = useMemo(() => buildCommonParamSpecs(availableModels), [availableModels])
+  const commonDefaultParams = useMemo(() => buildParamsFromSpecs(commonParamSpecs), [commonParamSpecs])
 
   const [paramsByModel, setParamsByModel] = useState<Record<string, Record<string, unknown>>>(() => initialModelParamsById)
   const [modelId, setModelId] = useState(initialModelId)
   const [params, setParams] = useState<Record<string, unknown>>(
     () => buildMicParamsWithSaved(initialModel, initialModelParamsById[initialModelId]),
+  )
+  const [sequenceCommonParamsEnabled, setSequenceCommonParamsEnabled] = useState(
+    typeof persistedUi.sequenceCommonParamsEnabled === 'boolean' ? persistedUi.sequenceCommonParamsEnabled : false,
+  )
+  const [sequenceCommonParams, setSequenceCommonParams] = useState<Record<string, unknown>>(() => {
+    const saved = asObjectRecord(persistedUi.sequenceCommonParams)
+    return { ...commonDefaultParams, ...(saved ?? {}) }
+  })
+  const [sequenceParamProfileLabel, setSequenceParamProfileLabel] = useState(
+    typeof persistedUi.sequenceParamProfileLabel === 'string' ? persistedUi.sequenceParamProfileLabel : '',
+  )
+  const [sequenceParamProfileDirty, setSequenceParamProfileDirty] = useState(
+    typeof persistedUi.sequenceParamProfileDirty === 'boolean' ? persistedUi.sequenceParamProfileDirty : false,
   )
   const [autoModelCycleEnabled, setAutoModelCycleEnabled] = useState(
     typeof persistedUi.autoModelCycleEnabled === 'boolean' ? persistedUi.autoModelCycleEnabled : false,
@@ -482,6 +932,9 @@ export function MicSession({ availableModels, library }: Props) {
     asFiniteNumberOr(persistedUi.mobileLoopEarlyStopSeconds, 0),
   )
   const [mobileLoopPauseSeconds, setMobileLoopPauseSeconds] = useState(asFiniteNumberOr(persistedUi.mobileLoopPauseSeconds, 15))
+  const [mobileLoopAudioStartDelaySeconds, setMobileLoopAudioStartDelaySeconds] = useState(
+    asFiniteNumberOr(persistedUi.mobileLoopAudioStartDelaySeconds, 0),
+  )
   const [mobileLoopSyncFirstRound, setMobileLoopSyncFirstRound] = useState(
     typeof persistedUi.mobileLoopSyncFirstRound === 'boolean' ? persistedUi.mobileLoopSyncFirstRound : true,
   )
@@ -504,9 +957,14 @@ export function MicSession({ availableModels, library }: Props) {
   const [seqReportToken, setSeqReportToken] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
+  const activeSessionIdRef = useRef<string | null>(null)
+  const clientSequenceRunIdRef = useRef<string | null>(null)
+  const clientSequenceAnchorAtPerfMsRef = useRef<number | null>(null)
   const saveGuardRef = useRef<Set<string>>(new Set())
   const autoModelSavedSlotsRef = useRef<Set<number>>(new Set())
   const autoStopFiredRef = useRef(false)
+  const stopGraceCheckInFlightRef = useRef(false)
+  const finalizedSessionIdsRef = useRef<Set<string>>(new Set())
   const stopRequestedAtPerfMsRef = useRef<number | null>(null)
   const trialStartedAtPerfMsRef = useRef<number | null>(null)
   const trialDeadlineAtPerfMsRef = useRef<number | null>(null)
@@ -515,17 +973,22 @@ export function MicSession({ availableModels, library }: Props) {
   const sequenceAnchorAtPerfMsRef = useRef<number | null>(null)
   const lastTranscriptUpdateAtPerfMsRef = useRef<number | null>(null)
   const currentTranscriptTextRef = useRef('')
+  const silenceMinCaptureNotifiedRef = useRef(false)
   const activeSessionLoopConfigRef = useRef<ActiveSessionLoopConfig>({
     enabled: false,
     speechS: null,
     captureSpeechS: null,
     earlyStopS: null,
     pauseS: null,
+    audioStartDelayS: null,
     syncFirstRound: null,
     measuredRounds: null,
     autoStop: null,
     packageId: null,
   })
+  const activeSessionModelParamsRef = useRef<Record<string, unknown>>({})
+  const activeSessionCommonParamsRef = useRef<Record<string, unknown>>({})
+  const activeSessionParamProfileRef = useRef<string | null>(null)
   const autoModelSequenceTokenRef = useRef<string | null>(null)
   const autoModelAdvanceLockRef = useRef(false)
   const autoModelAdvanceTimerRef = useRef<number | null>(null)
@@ -552,6 +1015,13 @@ export function MicSession({ availableModels, library }: Props) {
     [library],
   )
   const selectedReferenceVideo = referenceLibrary.find(v => v.video_id === referenceVideoId)
+  const selectedModelRecommendedParams = useMemo(
+    () => buildMicDefaultParams(selectedModel),
+    [selectedModel],
+  )
+  const effectiveSequenceParamProfileLabel = sequenceParamProfileLabel
+    ? `${sequenceParamProfileLabel}${sequenceParamProfileDirty ? ' + ruční úpravy' : ''}`
+    : ''
   const persistedParamsByModel = useMemo(() => {
     if (!modelId) return { ...paramsByModel }
     return { ...paramsByModel, [modelId]: { ...params } }
@@ -564,6 +1034,7 @@ export function MicSession({ availableModels, library }: Props) {
   const loopEarlyStopS = Math.max(0, Math.min(loopEarlyStopMaxS, Number.isFinite(mobileLoopEarlyStopSeconds) ? mobileLoopEarlyStopSeconds : 0))
   const loopCaptureSpeechS = Math.max(1, loopSpeechS - loopEarlyStopS)
   const loopPauseS = Math.max(0, Math.min(3600, Math.floor(mobileLoopPauseSeconds) || 15))
+  const loopAudioStartDelayS = Math.max(0, Math.min(30, Number.isFinite(mobileLoopAudioStartDelaySeconds) ? mobileLoopAudioStartDelaySeconds : 0))
   const loopRepeatCount = Math.max(1, Math.min(200, Math.floor(mobileLoopRepeatCount) || 1))
   const loopSyncRounds = mobileLoopSyncFirstRound ? 1 : 0
   const loopCycleS = Math.max(1, loopSpeechS + loopPauseS)
@@ -571,11 +1042,17 @@ export function MicSession({ availableModels, library }: Props) {
   const loopPlanS = loopCycleS * loopTotalRounds
   const autoModelLeadStartSeconds = 2.5
   const autoModelPreparationSeconds = 10
-  const autoModelHardTrialSeconds = Math.min(65, loopCaptureSpeechS + 5)
+  const autoModelHardTrialBaseSeconds = Math.min(65, loopCaptureSpeechS + 5)
+  const autoModelHardTrialSeconds = autoModelHardTrialBaseSeconds + (mobileLoopEnabled ? loopAudioStartDelayS : 0)
   const autoModelLatencyGuardSeconds = 10
   const autoModelAdaptiveMaxCutSeconds = Math.max(1, loopPauseS - 2)
+  const autoModelSilenceMinAudioFraction = 0.75
+  const autoModelMinSilenceStopElapsedS = Math.max(
+    autoModelSilenceStopSeconds,
+    (mobileLoopEnabled ? loopAudioStartDelayS : 0) + loopSpeechS * autoModelSilenceMinAudioFraction,
+  )
   const autoModelSlotSeconds = loopCycleS
-  const effectiveTrialPlanS = autoModelSequenceActive ? loopCycleS : loopPlanS
+  const effectiveTrialPlanS = autoModelSequenceActive ? loopCycleS : loopPlanS + loopAudioStartDelayS
   const uiLocked = status === 'recording' || status === 'connecting' || status === 'stopping' || autoModelSequenceActive
   const autoModelSelectedOrdered = useMemo(
     () => autoModelSelectedIds.filter((id) => availableModels.some((m) => m.model_id === id)),
@@ -593,6 +1070,74 @@ export function MicSession({ availableModels, library }: Props) {
     const rest = availableModels.filter((m) => !autoModelSelectionIndexById.has(m.model_id))
     return [...selected, ...rest]
   }, [autoModelSelectedOrdered, availableModels, autoModelSelectionIndexById])
+  const sequenceMatrixModels = useMemo(() => {
+    const ids = autoModelCycleEnabled && autoModelSelectedOrdered.length > 0
+      ? autoModelSelectedOrdered
+      : (modelId ? [modelId] : [])
+    return ids
+      .map((id) => availableModels.find((m) => m.model_id === id))
+      .filter((m): m is ModelDescriptor => Boolean(m))
+  }, [autoModelCycleEnabled, autoModelSelectedOrdered, modelId, availableModels])
+  const sequenceCommonParamSpecs = useMemo(() => buildCommonParamSpecs(sequenceMatrixModels), [sequenceMatrixModels])
+  const sequenceCommonDefaultParams = useMemo(() => buildParamsFromSpecs(sequenceCommonParamSpecs), [sequenceCommonParamSpecs])
+  const editableMatrixParamsByModel = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>()
+    for (const matrixModel of sequenceMatrixModels) {
+      map.set(
+        matrixModel.model_id,
+        buildMicParamsWithSaved(matrixModel, persistedParamsByModel[matrixModel.model_id]),
+      )
+    }
+    return map
+  }, [sequenceMatrixModels, persistedParamsByModel])
+  const recommendedMatrixParamsByModel = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>()
+    for (const matrixModel of sequenceMatrixModels) {
+      map.set(matrixModel.model_id, buildMicDefaultParams(matrixModel))
+    }
+    return map
+  }, [sequenceMatrixModels])
+  const effectiveMatrixParamsByModel = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>()
+    for (const matrixModel of sequenceMatrixModels) {
+      map.set(
+        matrixModel.model_id,
+        buildMicParamsWithCommon(
+          matrixModel,
+          persistedParamsByModel[matrixModel.model_id],
+          sequenceCommonParamsEnabled,
+          sequenceCommonParams,
+        ),
+      )
+    }
+    return map
+  }, [sequenceMatrixModels, persistedParamsByModel, sequenceCommonParamsEnabled, sequenceCommonParams])
+  const seqReportProfileLabel = useMemo(() => {
+    const profiles = Array.from(new Set(
+      (seqReport?.trials ?? [])
+        .map((trial) => (typeof trial.sequence_param_profile === 'string' ? trial.sequence_param_profile.trim() : ''))
+        .filter(Boolean),
+    ))
+    if (profiles.length === 0) return ''
+    if (profiles.length === 1) return profiles[0]
+    const visible = profiles.slice(0, 3).join(', ')
+    return `${profiles.length} profilů: ${visible}${profiles.length > 3 ? '...' : ''}`
+  }, [seqReport])
+  const seqReportPauseValidation = seqReport?.pause_validation ?? seqReport?.summary?.pause_validation ?? null
+  const seqReportConclusion = seqReport?.conclusion ?? seqReport?.summary?.conclusion ?? null
+
+  useEffect(() => {
+    setSequenceCommonParams((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const [key, value] of Object.entries(commonDefaultParams)) {
+        if (Object.prototype.hasOwnProperty.call(next, key)) continue
+        next[key] = value
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [commonDefaultParams])
 
   const applyClipDuration = useCallback((nextDurationSeconds: number) => {
     const duration = Math.max(1, Number.isFinite(nextDurationSeconds) ? nextDurationSeconds : 1)
@@ -636,14 +1181,313 @@ export function MicSession({ availableModels, library }: Props) {
   ]), [customReferenceText1, customReferenceText2])
 
   const selectedReferenceText = referenceTexts.find(t => t.id === selectedReferenceTextId)
+  const logSequenceEvent = useCallback((event: string, payload: Record<string, unknown> = {}) => {
+    void api.mic.logSequenceEvent({
+      event,
+      payload: {
+        client_ts_ms: performance.timeOrigin + performance.now(),
+        ...payload,
+      },
+    }).catch(() => {})
+  }, [])
+  const buildSequencePlanPayload = useCallback((
+    token: string | null,
+    queueModelIds: string[],
+    selectedModelIds: string[],
+    sequenceIndex?: number,
+    modelForTrial?: string,
+  ): Record<string, unknown> => {
+    const anchorPerf = clientSequenceAnchorAtPerfMsRef.current
+    const clientGlobalTimelineMs = anchorPerf == null ? 0 : Math.max(0, performance.now() - anchorPerf)
+    const clientRunId = clientSequenceRunIdRef.current ?? (token ? `run_client_${token}` : null)
+    return {
+      run_id: clientRunId,
+      sequence_id: token,
+      global_timeline_ms: Math.round(clientGlobalTimelineMs * 10) / 10,
+      sequence_token: token,
+      sequence_index: typeof sequenceIndex === 'number' ? sequenceIndex + 1 : null,
+      sequence_total: queueModelIds.length || null,
+      model_id: modelForTrial ?? null,
+      selected_model_ids: selectedModelIds,
+      queue_model_ids: queueModelIds,
+      mic_test_mode: testMode,
+      orchestrator_mode: orchestratorMode,
+      reference_video_id: referenceVideoId || null,
+      reference_clip_from_s: clipFromS,
+      reference_clip_to_s: clipToS,
+      reference_clip_duration_s: clipDurationS,
+      reference_text_id: testMode === 'free_speech' ? selectedReferenceTextId : null,
+      mobile_loop_enabled: mobileLoopEnabled,
+      mobile_loop_speech_s: loopSpeechS,
+      mobile_loop_capture_speech_s: loopCaptureSpeechS,
+      mobile_loop_early_stop_s: loopEarlyStopS,
+      mobile_loop_pause_s: loopPauseS,
+      mobile_loop_audio_start_delay_s: loopAudioStartDelayS,
+      mobile_loop_cycle_s: loopCycleS,
+      mobile_loop_plan_s: loopPlanS,
+      mobile_loop_sync_first_round: mobileLoopSyncFirstRound,
+      mobile_loop_measured_rounds: loopRepeatCount,
+      mobile_loop_total_rounds: loopTotalRounds,
+      mobile_loop_auto_stop: mobileLoopAutoStop,
+      mobile_loop_package_id: mobileLoopEnabled ? (mobileLoopPackage?.package_id ?? null) : null,
+      mobile_loop_audio_start_source: mobileLoopEnabled ? 'external_mobile_loop' : 'none',
+      mobile_loop_audio_start_known: mobileLoopEnabled ? loopAudioStartDelayS > 0 : false,
+      mobile_loop_audio_start_expected: mobileLoopEnabled
+        ? (loopAudioStartDelayS > 0 ? 'manual_offset_after_start_sequence' : 'manual_start_together_with_start_sequence')
+        : 'not_applicable',
+      auto_model_sequence_lead_start_s: autoModelLeadStartSeconds,
+      auto_model_sequence_preparation_s: autoModelPreparationSeconds,
+      auto_model_sequence_hard_trial_base_s: autoModelHardTrialBaseSeconds,
+      auto_model_sequence_hard_trial_s: autoModelHardTrialSeconds,
+      auto_model_sequence_effective_hard_trial_s: autoModelHardTrialSeconds,
+      auto_model_sequence_silence_stop_s: autoModelSilenceStopSeconds,
+      auto_model_sequence_silence_min_elapsed_s: autoModelMinSilenceStopElapsedS,
+      auto_model_sequence_silence_min_audio_fraction: autoModelSilenceMinAudioFraction,
+      auto_model_sequence_grace_s: autoModelGraceSeconds,
+      auto_model_sequence_slot_s: autoModelSlotSeconds,
+      auto_model_sequence_latency_guard_s: autoModelLatencyGuardSeconds,
+      auto_model_sequence_adaptive_max_cut_s: autoModelAdaptiveMaxCutSeconds,
+      sequence_common_params_enabled: sequenceCommonParamsEnabled,
+      sequence_param_profile: effectiveSequenceParamProfileLabel || null,
+    }
+  }, [
+    testMode,
+    orchestratorMode,
+    referenceVideoId,
+    clipFromS,
+    clipToS,
+    clipDurationS,
+    selectedReferenceTextId,
+    mobileLoopEnabled,
+    loopSpeechS,
+    loopCaptureSpeechS,
+    loopEarlyStopS,
+    loopPauseS,
+    loopAudioStartDelayS,
+    loopCycleS,
+    loopPlanS,
+    mobileLoopSyncFirstRound,
+    loopRepeatCount,
+    loopTotalRounds,
+    mobileLoopAutoStop,
+    mobileLoopPackage,
+    autoModelLeadStartSeconds,
+    autoModelPreparationSeconds,
+    autoModelHardTrialBaseSeconds,
+    autoModelHardTrialSeconds,
+    autoModelSilenceStopSeconds,
+    autoModelMinSilenceStopElapsedS,
+    autoModelSilenceMinAudioFraction,
+    autoModelGraceSeconds,
+    autoModelSlotSeconds,
+    autoModelLatencyGuardSeconds,
+    autoModelAdaptiveMaxCutSeconds,
+    sequenceCommonParamsEnabled,
+    effectiveSequenceParamProfileLabel,
+  ])
+  const applyMobileLoopAudioStartDelay = useCallback((
+    rawDelayS: number,
+    source: 'manual_input' | 'mark_now' = 'manual_input',
+  ) => {
+    const delayS = Math.max(0, Math.min(30, Number.isFinite(rawDelayS) ? rawDelayS : 0))
+    setMobileLoopAudioStartDelaySeconds(delayS)
+
+    const loopCfg = activeSessionLoopConfigRef.current
+    if (loopCfg.enabled) {
+      loopCfg.audioStartDelayS = delayS
+    }
+
+    const trialStartedPerf = trialStartedAtPerfMsRef.current
+    const hardTrialS = autoModelHardTrialBaseSeconds + (mobileLoopEnabled ? delayS : 0)
+    const silenceMinElapsedS = Math.max(
+      autoModelSilenceStopSeconds,
+      (mobileLoopEnabled ? delayS : 0) + loopSpeechS * autoModelSilenceMinAudioFraction,
+    )
+    let sequenceAnchorPerf: number | null = sequenceAnchorAtPerfMsRef.current
+    let trialDeadlinePerf: number | null = trialDeadlineAtPerfMsRef.current
+    let trialHardLimitPerf: number | null = trialHardLimitAtPerfMsRef.current
+
+    if (trialStartedPerf != null) {
+      const delayMs = delayS * 1000
+      trialHardLimitPerf = trialStartedPerf + hardTrialS * 1000
+      trialHardLimitAtPerfMsRef.current = trialHardLimitPerf
+
+      if (autoModelSequenceActive || autoModelSequenceTokenRef.current) {
+        const currentIndex = Math.max(0, autoModelSequenceIndex)
+        sequenceAnchorPerf = trialStartedPerf + delayMs - currentIndex * loopCycleS * 1000
+        sequenceAnchorAtPerfMsRef.current = sequenceAnchorPerf
+        trialDeadlinePerf = Math.max(
+          trialStartedPerf + 1000,
+          sequenceAnchorPerf + (currentIndex + 1) * loopCycleS * 1000 - autoModelLeadStartSeconds * 1000,
+        )
+        trialDeadlineAtPerfMsRef.current = trialDeadlinePerf
+      } else {
+        trialDeadlinePerf = trialStartedPerf + (loopPlanS + delayS) * 1000
+        trialDeadlineAtPerfMsRef.current = trialDeadlinePerf
+      }
+    }
+
+    const sessionId = activeSessionIdRef.current
+    const token = autoModelSequenceTokenRef.current
+    const eventPayload: Record<string, unknown> = {
+      session_id: sessionId,
+      model_id: modelId,
+      client_audio_start_delay_s: delayS,
+      mobile_loop_audio_start_delay_s: delayS,
+      mobile_loop_audio_start_known: delayS > 0,
+      mobile_loop_audio_start_source: source === 'mark_now' ? 'manual_mark_during_trial' : 'manual_input',
+      auto_model_sequence_hard_trial_base_s: autoModelHardTrialBaseSeconds,
+      auto_model_sequence_hard_trial_s: hardTrialS,
+      auto_model_sequence_effective_hard_trial_s: hardTrialS,
+      auto_model_sequence_silence_min_elapsed_s: silenceMinElapsedS,
+      client_sequence_anchor_perf_ms: sequenceAnchorPerf,
+      client_trial_deadline_perf_ms: trialDeadlinePerf,
+      client_trial_hard_limit_perf_ms: trialHardLimitPerf,
+      ui_message: `Start audia nastaven +${delayS.toFixed(1)}s.`,
+    }
+    if (token) {
+      logSequenceEvent('client_sequence_audio_start_marked', {
+        ...buildSequencePlanPayload(
+          token,
+          autoModelSequenceIds,
+          autoModelSelectedOrdered,
+          autoModelSequenceIndex,
+          modelId,
+        ),
+        ...eventPayload,
+      })
+    } else if (sessionId) {
+      logSequenceEvent('mobile_loop_audio_start_marked', eventPayload)
+    }
+
+    if (source === 'mark_now') {
+      setSaveMsg(`Start audia označen: +${delayS.toFixed(1)}s.`)
+    }
+  }, [
+    autoModelHardTrialBaseSeconds,
+    autoModelLeadStartSeconds,
+    autoModelSelectedOrdered,
+    autoModelSequenceActive,
+    autoModelSequenceIds,
+    autoModelSequenceIndex,
+    autoModelSilenceMinAudioFraction,
+    autoModelSilenceStopSeconds,
+    buildSequencePlanPayload,
+    logSequenceEvent,
+    loopCycleS,
+    loopPlanS,
+    loopSpeechS,
+    mobileLoopEnabled,
+    modelId,
+  ])
+  const markMobileLoopAudioStartedNow = useCallback(() => {
+    const trialStartedPerf = trialStartedAtPerfMsRef.current
+    if (trialStartedPerf == null) {
+      setSaveMsg('Start audia nejde označit před spuštěním trialu.')
+      return
+    }
+    applyMobileLoopAudioStartDelay((performance.now() - trialStartedPerf) / 1000, 'mark_now')
+  }, [applyMobileLoopAudioStartDelay])
+  const markSequenceProfileManual = useCallback(() => {
+    setSequenceParamProfileLabel((prev) => prev || 'Ruční nastavení')
+    setSequenceParamProfileDirty(true)
+  }, [])
   const updateModelParams = useCallback((nextValues: Record<string, unknown>) => {
+    markSequenceProfileManual()
     setParams(nextValues)
     setParamsByModel((prev) => (
       modelId
         ? { ...prev, [modelId]: { ...nextValues } }
         : prev
     ))
-  }, [modelId])
+  }, [modelId, markSequenceProfileManual])
+  const updateSequenceCommonParams = useCallback((nextValues: Record<string, unknown>) => {
+    markSequenceProfileManual()
+    setSequenceCommonParams(nextValues)
+  }, [markSequenceProfileManual])
+  const updateMatrixModelParam = useCallback((targetModel: ModelDescriptor, paramName: string, value: unknown) => {
+    markSequenceProfileManual()
+    setParamsByModel((prev) => {
+      const baseSaved = targetModel.model_id === modelId ? params : prev[targetModel.model_id]
+      const nextValues = {
+        ...buildMicParamsWithSaved(targetModel, baseSaved),
+        [paramName]: value,
+      }
+      return { ...prev, [targetModel.model_id]: nextValues }
+    })
+    if (targetModel.model_id === modelId) {
+      setParams((prev) => ({
+        ...buildMicParamsWithSaved(targetModel, prev),
+        [paramName]: value,
+      }))
+    }
+  }, [modelId, params, markSequenceProfileManual])
+  const updateMatrixParamForAll = useCallback((paramName: string, value: unknown) => {
+    markSequenceProfileManual()
+    setParamsByModel((prev) => {
+      const next = { ...prev }
+      for (const matrixModel of sequenceMatrixModels) {
+        if (!matrixModel.params.some((param) => param.name === paramName)) continue
+        const baseSaved = matrixModel.model_id === modelId ? params : prev[matrixModel.model_id]
+        next[matrixModel.model_id] = {
+          ...buildMicParamsWithSaved(matrixModel, baseSaved),
+          [paramName]: value,
+        }
+      }
+      return next
+    })
+    if (selectedModel?.params.some((param) => param.name === paramName)) {
+      setParams((prev) => ({
+        ...buildMicParamsWithSaved(selectedModel, prev),
+        [paramName]: value,
+      }))
+    }
+  }, [sequenceMatrixModels, modelId, params, selectedModel, markSequenceProfileManual])
+  const applyRecommendedMatrixParamForAll = useCallback((paramName: string) => {
+    markSequenceProfileManual()
+    setParamsByModel((prev) => {
+      const next = { ...prev }
+      for (const matrixModel of sequenceMatrixModels) {
+        if (!matrixModel.params.some((param) => param.name === paramName)) continue
+        const recommended = buildMicDefaultParams(matrixModel)
+        if (!Object.prototype.hasOwnProperty.call(recommended, paramName)) continue
+        const baseSaved = matrixModel.model_id === modelId ? params : prev[matrixModel.model_id]
+        next[matrixModel.model_id] = {
+          ...buildMicParamsWithSaved(matrixModel, baseSaved),
+          [paramName]: recommended[paramName],
+        }
+      }
+      return next
+    })
+    if (selectedModel?.params.some((param) => param.name === paramName)) {
+      const recommended = buildMicDefaultParams(selectedModel)
+      if (Object.prototype.hasOwnProperty.call(recommended, paramName)) {
+        setParams((prev) => ({
+          ...buildMicParamsWithSaved(selectedModel, prev),
+          [paramName]: recommended[paramName],
+        }))
+      }
+    }
+  }, [sequenceMatrixModels, modelId, params, selectedModel, markSequenceProfileManual])
+  const applySequenceParamProfile = useCallback((profileId: SequenceParamProfileId) => {
+    const profile = SEQUENCE_PARAM_PROFILES.find((item) => item.id === profileId)
+    if (!profile) return
+    setSequenceCommonParamsEnabled(false)
+    setParamsByModel((prev) => {
+      const next = { ...prev }
+      for (const matrixModel of sequenceMatrixModels) {
+        next[matrixModel.model_id] = buildParamsForSequenceProfile(profileId, matrixModel)
+      }
+      return next
+    })
+    const activeProfileParams = selectedModel
+      ? buildParamsForSequenceProfile(profileId, selectedModel)
+      : {}
+    if (selectedModel) setParams(activeProfileParams)
+    setSequenceParamProfileLabel(profile.label)
+    setSequenceParamProfileDirty(false)
+    setSaveMsg(`Použit profil nastavení: ${profile.label}. Společné override hodnoty jsou vypnuté.`)
+  }, [sequenceMatrixModels, selectedModel])
 
   const loadSavedHistory = useCallback(async () => {
     try {
@@ -654,6 +1498,11 @@ export function MicSession({ availableModels, library }: Props) {
           const rawMode = typeof metrics.mic_test_mode === 'string' ? metrics.mic_test_mode : ''
           const mode: SavedWebMicResult['mic_test_mode'] =
             rawMode === 'free_speech' || rawMode === 'reference_video' ? rawMode : 'unknown'
+          const modelParamsUsed = asObjectRecord(metrics.model_params_used)
+          const commonParamsUsed = asObjectRecord(metrics.sequence_common_params_used)
+          const sequenceParamProfile = typeof metrics.sequence_param_profile === 'string'
+            ? metrics.sequence_param_profile
+            : null
           return [{
             record_id: r.record_id,
             saved_at: r.saved_at,
@@ -689,6 +1538,12 @@ export function MicSession({ availableModels, library }: Props) {
               : null,
             sequence_index: asFiniteNumber(metrics.auto_model_sequence_index) ?? null,
             orchestrator_mode: normalizeMicOrchestratorMode(metrics.mic_orchestrator_mode),
+            model_params_used: modelParamsUsed ? { ...modelParamsUsed } : null,
+            sequence_common_params_enabled: typeof metrics.sequence_common_params_enabled === 'boolean'
+              ? metrics.sequence_common_params_enabled
+              : null,
+            sequence_common_params_used: commonParamsUsed ? { ...commonParamsUsed } : null,
+            sequence_param_profile: sequenceParamProfile,
           }]
         } catch (e) {
           console.error('[loadSavedHistory] chyba při mapování záznamu', r.record_id, e)
@@ -759,6 +1614,7 @@ export function MicSession({ availableModels, library }: Props) {
       mobileLoopEnabled,
       mobileLoopEarlyStopSeconds,
       mobileLoopPauseSeconds,
+      mobileLoopAudioStartDelaySeconds,
       mobileLoopSyncFirstRound,
       mobileLoopRepeatCount,
       mobileLoopAutoStop,
@@ -767,6 +1623,10 @@ export function MicSession({ availableModels, library }: Props) {
       autoModelGraceSeconds,
       autoModelSilenceStopSeconds,
       orchestratorMode,
+      sequenceCommonParamsEnabled,
+      sequenceCommonParams,
+      sequenceParamProfileLabel,
+      sequenceParamProfileDirty,
     }
     writeMicUiState(payload)
   }, [
@@ -787,6 +1647,7 @@ export function MicSession({ availableModels, library }: Props) {
     mobileLoopEnabled,
     mobileLoopEarlyStopSeconds,
     mobileLoopPauseSeconds,
+    mobileLoopAudioStartDelaySeconds,
     mobileLoopSyncFirstRound,
     mobileLoopRepeatCount,
     mobileLoopAutoStop,
@@ -795,6 +1656,10 @@ export function MicSession({ availableModels, library }: Props) {
     autoModelGraceSeconds,
     autoModelSilenceStopSeconds,
     orchestratorMode,
+    sequenceCommonParamsEnabled,
+    sequenceCommonParams,
+    sequenceParamProfileLabel,
+    sequenceParamProfileDirty,
   ])
 
   // Načti dostupná audio zařízení
@@ -1078,11 +1943,16 @@ export function MicSession({ availableModels, library }: Props) {
       mic_test_mode: testMode,
       reference_label: referenceLabel,
       reference_text: referenceText,
+      model_params_used: activeSessionModelParamsRef.current,
+      sequence_common_params_enabled: sequenceCommonParamsEnabled,
+      sequence_common_params_used: activeSessionCommonParamsRef.current,
+      sequence_param_profile: activeSessionParamProfileRef.current,
       mobile_loop_enabled: loopCfg.enabled,
       mobile_loop_speech_s: loopCfg.speechS,
       mobile_loop_capture_speech_s: loopCfg.captureSpeechS,
       mobile_loop_early_stop_s: loopCfg.earlyStopS,
       mobile_loop_pause_s: loopCfg.pauseS,
+      mobile_loop_audio_start_delay_s: loopCfg.audioStartDelayS,
       mobile_loop_sync_first_round: loopCfg.syncFirstRound,
       mobile_loop_measured_rounds: loopCfg.measuredRounds,
       mobile_loop_autostop: loopCfg.autoStop,
@@ -1146,6 +2016,21 @@ export function MicSession({ availableModels, library }: Props) {
           const savedCount = autoModelSavedSlotsRef.current.size
           setAutoModelSavedCount(savedCount)
           setSaveMsg(`Uloženo ${savedCount}/${autoSequenceMeta.sequence_total} (${saved.record_id}).`)
+          logSequenceEvent('client_sequence_trial_saved', {
+            sequence_token: autoSequenceMeta.sequence_token,
+            sequence_index: autoSequenceMeta.sequence_index + 1,
+            sequence_total: autoSequenceMeta.sequence_total,
+            session_id: sessionId,
+            model_id: modelIdForSession,
+            record_id: saved.record_id,
+            saved_count: savedCount,
+            quality_assessment: quality,
+            reason_code: finalMsg.reason_code,
+            rtf: finalMsg.rtf,
+            drop_rate: finalMsg.drop_rate,
+            elapsed_s: finalMsg.elapsed_s,
+            ui_message: `Uloženo ${savedCount}/${autoSequenceMeta.sequence_total} (${saved.record_id}).`,
+          })
           // Fetch sequence report po každém uloženém trialu
           const seqToken = autoSequenceMeta.sequence_token
           setSeqReportToken(seqToken)
@@ -1164,9 +2049,13 @@ export function MicSession({ availableModels, library }: Props) {
   const startSession = useCallback(async (modelOverrideId?: string, autoSequenceMeta?: AutoModelSequenceMeta | null) => {
     const activeModelId = modelOverrideId ?? modelId
     const activeModel = availableModels.find((m) => m.model_id === activeModelId)
-    const activeParams = modelOverrideId
-      ? buildMicParamsWithSaved(activeModel, paramsByModel[activeModelId])
-      : params
+    const activeSavedParams = modelOverrideId ? paramsByModel[activeModelId] : params
+    const activeParams = buildMicParamsWithCommon(
+      activeModel,
+      activeSavedParams,
+      sequenceCommonParamsEnabled,
+      sequenceCommonParams,
+    )
 
     setError(null)
     setTranscript('')
@@ -1175,7 +2064,9 @@ export function MicSession({ availableModels, library }: Props) {
     setRecordingElapsedS(0)
     setRecordingStartedAtPerfMs(null)
     autoStopFiredRef.current = false
+    stopGraceCheckInFlightRef.current = false
     setStatus('connecting')
+    activeSessionIdRef.current = null
 
     try {
       if (!activeModel || !activeModelId) {
@@ -1201,6 +2092,18 @@ export function MicSession({ availableModels, library }: Props) {
         mic_test_mode: testMode,
         mic_orchestrator_mode: orchestratorMode,
       }
+      const activeModelParamsUsed = pickModelSupportedParams(activeModel, activeParams)
+      const activeCommonParamsUsed = sequenceCommonParamsEnabled
+        ? pickModelSupportedParams(activeModel, sequenceCommonParams)
+        : {}
+      const activeParamProfile = effectiveSequenceParamProfileLabel || null
+      activeSessionModelParamsRef.current = activeModelParamsUsed
+      activeSessionCommonParamsRef.current = activeCommonParamsUsed
+      activeSessionParamProfileRef.current = activeParamProfile
+      sessionParams.model_params_used = activeModelParamsUsed
+      sessionParams.sequence_common_params_enabled = sequenceCommonParamsEnabled
+      sessionParams.sequence_common_params_used = activeCommonParamsUsed
+      sessionParams.sequence_param_profile = activeParamProfile
       const activeLoopSyncFirstRound = mobileLoopEnabled ? (autoSequenceMeta ? false : mobileLoopSyncFirstRound) : null
       const activeLoopMeasuredRounds = mobileLoopEnabled ? (autoSequenceMeta ? 1 : loopRepeatCount) : null
       const activeLoopPackageId = mobileLoopEnabled ? (mobileLoopPackage?.package_id ?? null) : null
@@ -1210,14 +2113,34 @@ export function MicSession({ availableModels, library }: Props) {
         sessionParams.mobile_loop_capture_speech_s = loopCaptureSpeechS
         sessionParams.mobile_loop_early_stop_s = loopEarlyStopS
         sessionParams.mobile_loop_pause_s = loopPauseS
+        sessionParams.mobile_loop_audio_start_delay_s = loopAudioStartDelayS
         sessionParams.mobile_loop_sync_first_round = activeLoopSyncFirstRound
         sessionParams.mobile_loop_measured_rounds = activeLoopMeasuredRounds
         sessionParams.mobile_loop_auto_stop = mobileLoopAutoStop
+        sessionParams.mobile_loop_package_id = activeLoopPackageId
+        sessionParams.mobile_loop_audio_start_source = 'external_mobile_loop'
+        sessionParams.mobile_loop_audio_start_known = loopAudioStartDelayS > 0
       }
       if (autoSequenceMeta) {
+        const sequenceQueue = autoSequenceMeta.queue_model_ids ?? autoModelSequenceIds
+        const sequenceSelected = autoSequenceMeta.selected_model_ids ?? autoModelSelectedOrdered
         sessionParams.auto_model_sequence_token = autoSequenceMeta.sequence_token
         sessionParams.auto_model_sequence_index = autoSequenceMeta.sequence_index + 1
         sessionParams.auto_model_sequence_total = autoSequenceMeta.sequence_total
+        sessionParams.auto_model_sequence_queue = sequenceQueue
+        sessionParams.auto_model_sequence_selected_models = sequenceSelected
+        sessionParams.auto_model_sequence_lead_start_s = autoModelLeadStartSeconds
+        sessionParams.auto_model_sequence_preparation_s = autoModelPreparationSeconds
+        sessionParams.auto_model_sequence_hard_trial_base_s = autoModelHardTrialBaseSeconds
+        sessionParams.auto_model_sequence_hard_trial_s = autoModelHardTrialSeconds
+        sessionParams.auto_model_sequence_effective_hard_trial_s = autoModelHardTrialSeconds
+        sessionParams.auto_model_sequence_silence_stop_s = autoModelSilenceStopSeconds
+        sessionParams.auto_model_sequence_silence_min_elapsed_s = autoModelMinSilenceStopElapsedS
+        sessionParams.auto_model_sequence_silence_min_audio_fraction = autoModelSilenceMinAudioFraction
+        sessionParams.auto_model_sequence_grace_s = autoModelGraceSeconds
+        sessionParams.auto_model_sequence_slot_s = autoModelSlotSeconds
+        sessionParams.auto_model_sequence_latency_guard_s = autoModelLatencyGuardSeconds
+        sessionParams.auto_model_sequence_adaptive_max_cut_s = autoModelAdaptiveMaxCutSeconds
       }
       activeSessionLoopConfigRef.current = {
         enabled: mobileLoopEnabled,
@@ -1225,6 +2148,7 @@ export function MicSession({ availableModels, library }: Props) {
         captureSpeechS: mobileLoopEnabled ? loopCaptureSpeechS : null,
         earlyStopS: mobileLoopEnabled ? loopEarlyStopS : null,
         pauseS: mobileLoopEnabled ? loopPauseS : null,
+        audioStartDelayS: mobileLoopEnabled ? loopAudioStartDelayS : null,
         syncFirstRound: activeLoopSyncFirstRound,
         measuredRounds: activeLoopMeasuredRounds,
         autoStop: mobileLoopEnabled ? mobileLoopAutoStop : null,
@@ -1241,9 +2165,42 @@ export function MicSession({ availableModels, library }: Props) {
         sessionParams.reference_clip_start_s = Math.max(0, Math.floor(clipFromS))
         sessionParams.reference_sample_seconds = Math.max(1, Math.floor(referenceSampleSeconds))
       }
+      if (autoSequenceMeta) {
+        const sequenceQueue = autoSequenceMeta.queue_model_ids ?? autoModelSequenceIds
+        const sequenceSelected = autoSequenceMeta.selected_model_ids ?? autoModelSelectedOrdered
+        logSequenceEvent('client_sequence_session_create_requested', {
+          ...buildSequencePlanPayload(
+            autoSequenceMeta.sequence_token,
+            sequenceQueue,
+            sequenceSelected,
+            autoSequenceMeta.sequence_index,
+            activeModelId,
+          ),
+          model_params_used: activeModelParamsUsed,
+          sequence_common_params_used: activeCommonParamsUsed,
+        })
+      }
       // 1. Vytvoř backend session
       const createResp = await api.mic.createSession(activeModelId, sessionParams)
       const { session_id } = createResp
+      activeSessionIdRef.current = session_id
+      if (autoSequenceMeta) {
+        const sequenceQueue = autoSequenceMeta.queue_model_ids ?? autoModelSequenceIds
+        const sequenceSelected = autoSequenceMeta.selected_model_ids ?? autoModelSelectedOrdered
+        logSequenceEvent('client_sequence_session_created', {
+          ...buildSequencePlanPayload(
+            autoSequenceMeta.sequence_token,
+            sequenceQueue,
+            sequenceSelected,
+            autoSequenceMeta.sequence_index,
+            activeModelId,
+          ),
+          session_id,
+          preflight_ok: createResp.preflight_ok !== false,
+          preflight_errors: createResp.preflight_errors ?? [],
+          preflight_warnings: createResp.preflight_warnings ?? [],
+        })
+      }
       if (createResp.preflight_ok === false) {
         const reasons = (createResp.preflight_errors ?? []).filter(Boolean)
         const detail = reasons.length > 0 ? reasons.join(', ') : 'preflight_failed'
@@ -1308,10 +2265,13 @@ export function MicSession({ availableModels, library }: Props) {
             && typeof session.sequence_timing === 'object'
             && !Array.isArray(session.sequence_timing)
           ) ? session.sequence_timing : undefined
+          const sessionFinal = asObjectRecord(session.final)
+          const sessionTranscript = String(sessionFinal?.text ?? session.transcript ?? currentTranscriptTextRef.current ?? '')
           if (sequenceTiming) parts.push('sequence_timing=logged')
           const reasonCode = session.reason_code || 'ws_transport_error'
           const reasonError = session.error || prefix
           persistFailureResult(reasonCode, reasonError, prefix, {
+            text: sessionTranscript,
             sequence_timing: sequenceTiming,
             // metriky ze session — jediný zdroj pravdy
             rtf: session.rtf,
@@ -1347,14 +2307,54 @@ export function MicSession({ availableModels, library }: Props) {
         _stopAudio()
         void explainWsFailure(prefix)
       }
+      const completeWithFinal = (msg: Record<string, unknown>) => {
+        if (wsFailureHandled || wsCompleted) return
+        wsCompleted = true
+        finalizedSessionIdsRef.current.add(session_id)
+        const finalText = String(msg.text ?? '')
+        setTranscript(finalText)
+        currentTranscriptTextRef.current = finalText
+        lastTranscriptUpdateAtPerfMsRef.current = performance.now()
+        setMetrics({
+          latency_ms: msg.first_word_latency_ms as number | undefined,
+          first_word_audio_ms: msg.first_word_audio_ms as number | undefined,
+          first_word_wall_ms: msg.first_word_wall_ms as number | undefined,
+          rtf: msg.rtf as number | undefined,
+          elapsed_s: msg.elapsed_s as number | undefined,
+          processing_ms_p95: msg.processing_ms_p95 as number | undefined,
+          segment_finalize_ms_p95: msg.segment_finalize_ms_p95 as number | undefined,
+          capture_jitter_ms_p95: msg.capture_jitter_ms_p95 as number | undefined,
+          capture_lag_ms_p95: msg.capture_lag_ms_p95 as number | undefined,
+          queue_depth_peak_ms: (typeof msg.queue_depth_peak_s === 'number') ? msg.queue_depth_peak_s * 1000 : undefined,
+          backpressure_events: msg.backpressure_events as number | undefined,
+          drop_rate: msg.drop_rate as number | undefined,
+          worker_rss_peak_mb: msg.worker_rss_peak_mb as number | undefined,
+          reason_code: msg.reason_code as string | null | undefined,
+        })
+        setStatus('done')
+        stopGraceCheckInFlightRef.current = false
+        stopRequestedAtPerfMsRef.current = null
+        trialHardLimitAtPerfMsRef.current = null
+        setRecordingStartedAtPerfMs(null)
+        _stopAudio()
+        void persistWebMicResult({
+          sessionId: session_id,
+          finalMsg: msg,
+          modelIdForSession: activeModelId,
+          referenceLabel,
+          referenceText,
+          autoSequenceMeta,
+        })
+      }
 
       ws.onopen = () => {
         const nowPerf = performance.now()
         const leadMs = autoModelLeadStartSeconds * 1000
+        const audioStartDelayMs = mobileLoopEnabled ? loopAudioStartDelayS * 1000 : 0
         if (autoSequenceMeta && autoSequenceMeta.sequence_index === 0) {
-          sequenceAnchorAtPerfMsRef.current = nowPerf
+          sequenceAnchorAtPerfMsRef.current = nowPerf + audioStartDelayMs
         }
-        const sequenceAnchorPerf = sequenceAnchorAtPerfMsRef.current ?? nowPerf
+        const sequenceAnchorPerf = sequenceAnchorAtPerfMsRef.current ?? (nowPerf + audioStartDelayMs)
         const nextSlotStopPerf = autoSequenceMeta
           ? (sequenceAnchorPerf + (autoSequenceMeta.sequence_index + 1) * loopCycleS * 1000 - leadMs)
           : (nowPerf + effectiveTrialPlanS * 1000)
@@ -1364,10 +2364,31 @@ export function MicSession({ availableModels, library }: Props) {
         trialAdaptiveEarlyStopMsRef.current = 0
         lastTranscriptUpdateAtPerfMsRef.current = nowPerf
         currentTranscriptTextRef.current = ''
+        silenceMinCaptureNotifiedRef.current = false
         stopRequestedAtPerfMsRef.current = null
         setRecordingStartedAtPerfMs(nowPerf)
         setRecordingElapsedS(0)
         setStatus('recording')
+        if (autoSequenceMeta) {
+          const sequenceQueue = autoSequenceMeta.queue_model_ids ?? autoModelSequenceIds
+          const sequenceSelected = autoSequenceMeta.selected_model_ids ?? autoModelSelectedOrdered
+          logSequenceEvent('client_sequence_trial_ws_opened', {
+            ...buildSequencePlanPayload(
+              autoSequenceMeta.sequence_token,
+              sequenceQueue,
+              sequenceSelected,
+              autoSequenceMeta.sequence_index,
+              activeModelId,
+            ),
+            session_id,
+            client_trial_started_perf_ms: nowPerf,
+            client_sequence_anchor_perf_ms: sequenceAnchorPerf,
+            client_planned_slot_stop_perf_ms: nextSlotStopPerf,
+            client_trial_deadline_perf_ms: trialDeadlineAtPerfMsRef.current,
+            client_trial_hard_limit_perf_ms: trialHardLimitAtPerfMsRef.current,
+            ui_message: `Auto sekvence: model ${autoSequenceMeta.sequence_index + 1}/${autoSequenceMeta.sequence_total} (${activeModelId}).`,
+          })
+        }
       }
 
       ws.onmessage = (event) => {
@@ -1402,39 +2423,7 @@ export function MicSession({ availableModels, library }: Props) {
           } else if (msg.type === 'started') {
             // no-op
           } else if (msg.type === 'final') {
-            wsCompleted = true
-            setTranscript(msg.text || '')
-            currentTranscriptTextRef.current = String(msg.text || '')
-            lastTranscriptUpdateAtPerfMsRef.current = performance.now()
-            setMetrics({
-              latency_ms: msg.first_word_latency_ms,
-              first_word_audio_ms: msg.first_word_audio_ms,
-              first_word_wall_ms: msg.first_word_wall_ms,
-              rtf: msg.rtf,
-              elapsed_s: msg.elapsed_s,
-              processing_ms_p95: msg.processing_ms_p95,
-              segment_finalize_ms_p95: msg.segment_finalize_ms_p95,
-              capture_jitter_ms_p95: msg.capture_jitter_ms_p95,
-              capture_lag_ms_p95: msg.capture_lag_ms_p95,
-              queue_depth_peak_ms: (typeof msg.queue_depth_peak_s === 'number') ? msg.queue_depth_peak_s * 1000 : undefined,
-              backpressure_events: msg.backpressure_events,
-              drop_rate: msg.drop_rate,
-              worker_rss_peak_mb: msg.worker_rss_peak_mb,
-              reason_code: msg.reason_code,
-            })
-            setStatus('done')
-            stopRequestedAtPerfMsRef.current = null
-            trialHardLimitAtPerfMsRef.current = null
-            setRecordingStartedAtPerfMs(null)
-            _stopAudio()
-            void persistWebMicResult({
-              sessionId: session_id,
-              finalMsg: msg as Record<string, unknown>,
-              modelIdForSession: activeModelId,
-              referenceLabel,
-              referenceText,
-              autoSequenceMeta,
-            })
+            completeWithFinal(msg as Record<string, unknown>)
           } else if (msg.error) {
             wsFailureHandled = true
             const reasonCode = (typeof msg.reason_code === 'string' && msg.reason_code.trim().length > 0)
@@ -1460,12 +2449,30 @@ export function MicSession({ availableModels, library }: Props) {
 
       ws.onclose = (event) => {
         if (wsCompleted || wsFailureHandled) return
-        if (stopRequestedAtPerfMsRef.current != null) return
         const parts: string[] = []
         if (typeof event.code === 'number') parts.push(`code=${event.code}`)
         if (event.reason) parts.push(`reason=${event.reason}`)
         parts.push(`clean=${event.wasClean ? '1' : '0'}`)
         const suffix = parts.length > 0 ? ` (${parts.join(', ')})` : ''
+        if (event.code === 1000 && event.wasClean) {
+          void api.mic.getSession(session_id)
+            .then((session) => {
+              if (wsCompleted || wsFailureHandled || finalizedSessionIdsRef.current.has(session_id)) return
+              const finalMsg = asObjectRecord(session.final)
+              if (session.status === 'stopped' && finalMsg && !session.error) {
+                completeWithFinal(finalMsg)
+                return
+              }
+              if (stopRequestedAtPerfMsRef.current != null) return
+              handleWsFailure(`WebSocket spojení bylo neočekávaně ukončeno${suffix}`)
+            })
+            .catch(() => {
+              if (stopRequestedAtPerfMsRef.current != null) return
+              handleWsFailure(`WebSocket spojení bylo neočekávaně ukončeno${suffix}`)
+            })
+          return
+        }
+        if (stopRequestedAtPerfMsRef.current != null) return
         handleWsFailure(`WebSocket spojení bylo neočekávaně ukončeno${suffix}`)
       }
 
@@ -1559,11 +2566,15 @@ export function MicSession({ availableModels, library }: Props) {
       setError(err instanceof Error ? err.message : String(err))
       setStatus('error')
       setRecordingStartedAtPerfMs(null)
+      activeSessionIdRef.current = null
     }
   }, [
     modelId,
     params,
     paramsByModel,
+    sequenceCommonParamsEnabled,
+    sequenceCommonParams,
+    effectiveSequenceParamProfileLabel,
     availableModels,
     deviceIndex,
     devices,
@@ -1578,19 +2589,31 @@ export function MicSession({ availableModels, library }: Props) {
     loopCaptureSpeechS,
     loopEarlyStopS,
     loopPauseS,
+    loopAudioStartDelayS,
     mobileLoopSyncFirstRound,
     loopRepeatCount,
     mobileLoopAutoStop,
     loopCycleS,
     effectiveTrialPlanS,
+    autoModelSequenceIds,
+    autoModelSelectedOrdered,
     autoModelLeadStartSeconds,
+    autoModelPreparationSeconds,
+    autoModelHardTrialBaseSeconds,
     autoModelHardTrialSeconds,
+    autoModelSilenceStopSeconds,
+    autoModelMinSilenceStopElapsedS,
+    autoModelSilenceMinAudioFraction,
+    autoModelGraceSeconds,
+    autoModelSlotSeconds,
     autoModelLatencyGuardSeconds,
     autoModelAdaptiveMaxCutSeconds,
     orchestratorMode,
     selectedReferenceTextId,
     selectedReferenceText,
     referenceTexts,
+    logSequenceEvent,
+    buildSequencePlanPayload,
     persistWebMicResult,
   ])
 
@@ -1610,10 +2633,11 @@ export function MicSession({ availableModels, library }: Props) {
         setStatus('error')
         return
       }
-      const queueLength = Math.max(1, loopRepeatCount)
-      const queue = Array.from({ length: queueLength }, (_, idx) => selectedModelIds[idx % selectedModelIds.length])
+      const queue = [...selectedModelIds]
       const token = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`
       autoModelSequenceTokenRef.current = token
+      clientSequenceRunIdRef.current = `run_client_${token}`
+      clientSequenceAnchorAtPerfMsRef.current = performance.now()
       sequenceAnchorAtPerfMsRef.current = null
       autoModelAdvanceLockRef.current = false
       setAutoModelSequenceIds(queue)
@@ -1629,11 +2653,22 @@ export function MicSession({ availableModels, library }: Props) {
       const firstModel = availableModels.find((m) => m.model_id === firstModelId)
       setModelId(firstModelId)
       setParams(buildMicParamsWithSaved(firstModel, paramsByModel[firstModelId]))
-      setSaveMsg(`Auto sekvence: model 1/${queue.length} (${firstModelId}).`)
+      const firstMsg = `Auto sekvence: model 1/${queue.length} (${firstModelId}).`
+      setSaveMsg(firstMsg)
+      logSequenceEvent('client_sequence_started', {
+        ...buildSequencePlanPayload(token, queue, selectedModelIds, 0, firstModelId),
+        ui_message: firstMsg,
+      })
+      logSequenceEvent('client_sequence_trial_start_requested', {
+        ...buildSequencePlanPayload(token, queue, selectedModelIds, 0, firstModelId),
+        ui_message: firstMsg,
+      })
       await startSession(firstModelId, {
         sequence_token: token,
         sequence_index: 0,
         sequence_total: queue.length,
+        queue_model_ids: queue,
+        selected_model_ids: selectedModelIds,
       })
       return
     }
@@ -1643,14 +2678,29 @@ export function MicSession({ availableModels, library }: Props) {
     autoModelCycleEnabled,
     availableModels,
     autoModelSelectedOrdered,
-    loopRepeatCount,
     paramsByModel,
+    logSequenceEvent,
+    buildSequencePlanPayload,
     startSession,
   ])
 
-  const stopAutoModelSequence = useCallback((note = 'Auto sekvence zastavena.') => {
+  const stopAutoModelSequence = useCallback((note = 'Auto sekvence zastavena.', clientReason = 'stopped') => {
+    const token = autoModelSequenceTokenRef.current
+    if (token) {
+      logSequenceEvent(clientReason === 'completed' ? 'client_sequence_completed' : 'client_sequence_stopped', {
+        sequence_token: token,
+        sequence_index: autoModelSequenceIndex + 1,
+        sequence_total: autoModelSequenceIds.length || null,
+        saved_count: autoModelSavedSlotsRef.current.size,
+        ui_message: note,
+        client_reason: clientReason,
+      })
+    }
     autoModelSequenceTokenRef.current = null
+    clientSequenceRunIdRef.current = null
+    clientSequenceAnchorAtPerfMsRef.current = null
     autoModelAdvanceLockRef.current = false
+    stopGraceCheckInFlightRef.current = false
     stopRequestedAtPerfMsRef.current = null
     trialStartedAtPerfMsRef.current = null
     trialDeadlineAtPerfMsRef.current = null
@@ -1665,11 +2715,16 @@ export function MicSession({ availableModels, library }: Props) {
       captureSpeechS: null,
       earlyStopS: null,
       pauseS: null,
+      audioStartDelayS: null,
       syncFirstRound: null,
       measuredRounds: null,
       autoStop: null,
       packageId: null,
     }
+    activeSessionModelParamsRef.current = {}
+    activeSessionCommonParamsRef.current = {}
+    activeSessionParamProfileRef.current = null
+    silenceMinCaptureNotifiedRef.current = false
     if (autoModelAdvanceTimerRef.current != null) {
       window.clearTimeout(autoModelAdvanceTimerRef.current)
       autoModelAdvanceTimerRef.current = null
@@ -1680,22 +2735,84 @@ export function MicSession({ availableModels, library }: Props) {
     setAutoModelSavedCount(0)
     autoModelSavedSlotsRef.current.clear()
     setSaveMsg(note)
-  }, [])
+  }, [autoModelSequenceIds.length, autoModelSequenceIndex, logSequenceEvent])
 
-  const requestTrialStop = useCallback((note?: string) => {
+  const requestTrialStop = useCallback((note?: string, stopContext: Record<string, unknown> = {}) => {
     if (note) setSaveMsg(note)
     setStatus('stopping')
-    stopRequestedAtPerfMsRef.current = performance.now()
+    const nowPerf = performance.now()
+    stopRequestedAtPerfMsRef.current = nowPerf
+    const trialStarted = trialStartedAtPerfMsRef.current
+    const trialElapsedS = trialStarted == null ? null : Math.max(0, (nowPerf - trialStarted) / 1000)
+    const sessionId = activeSessionIdRef.current
+    const loopCfg = activeSessionLoopConfigRef.current
+    const activeAudioStartDelayS = loopCfg.enabled && typeof loopCfg.audioStartDelayS === 'number'
+      ? Math.max(0, Math.min(30, loopCfg.audioStartDelayS))
+      : null
+    const effectiveHardTrialS = activeAudioStartDelayS == null
+      ? autoModelHardTrialSeconds
+      : autoModelHardTrialBaseSeconds + activeAudioStartDelayS
+    const effectiveSilenceMinElapsedS = activeAudioStartDelayS == null
+      ? autoModelMinSilenceStopElapsedS
+      : Math.max(
+        autoModelSilenceStopSeconds,
+        activeAudioStartDelayS + loopSpeechS * autoModelSilenceMinAudioFraction,
+      )
+    const runtimeStopContext = {
+      mobile_loop_audio_start_delay_s: activeAudioStartDelayS,
+      mobile_loop_audio_start_known: activeAudioStartDelayS != null && activeAudioStartDelayS > 0,
+      mobile_loop_audio_start_source: activeAudioStartDelayS != null && activeAudioStartDelayS > 0
+        ? 'manual_mark_or_offset'
+        : 'manual_start_together_with_start_sequence',
+      auto_model_sequence_hard_trial_base_s: autoModelHardTrialBaseSeconds,
+      auto_model_sequence_hard_trial_s: effectiveHardTrialS,
+      auto_model_sequence_effective_hard_trial_s: effectiveHardTrialS,
+      auto_model_sequence_silence_min_elapsed_s: effectiveSilenceMinElapsedS,
+      auto_model_sequence_silence_min_audio_fraction: autoModelSilenceMinAudioFraction,
+    }
+    if (autoModelSequenceActive || autoModelSequenceTokenRef.current) {
+      logSequenceEvent('client_sequence_trial_stop_requested', {
+        sequence_token: autoModelSequenceTokenRef.current,
+        sequence_index: autoModelSequenceIndex + 1,
+        sequence_total: autoModelSequenceIds.length || null,
+        session_id: sessionId,
+        model_id: modelId,
+        ui_message: note ?? null,
+        client_stop_elapsed_s: trialElapsedS,
+        ...runtimeStopContext,
+        ...stopContext,
+      })
+    }
     setRecordingStartedAtPerfMs(null)
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ action: 'stop' }))
+      wsRef.current.send(JSON.stringify({
+        action: 'stop',
+        client_stop_note: note ?? null,
+        client_stop_elapsed_s: trialElapsedS,
+        ...runtimeStopContext,
+        ...stopContext,
+      }))
     }
     _stopAudio()
-  }, [])
+  }, [
+    autoModelHardTrialBaseSeconds,
+    autoModelHardTrialSeconds,
+    autoModelSequenceActive,
+    autoModelSequenceIndex,
+    autoModelSequenceIds.length,
+    autoModelSilenceMinAudioFraction,
+    autoModelSilenceStopSeconds,
+    autoModelMinSilenceStopElapsedS,
+    logSequenceEvent,
+    loopSpeechS,
+    modelId,
+  ])
 
   const stop = useCallback(() => {
     if (autoModelSequenceActive) {
-      stopAutoModelSequence('Auto sekvence zastavena uživatelem.')
+      requestTrialStop('Auto sekvence zastavena uživatelem.', { client_stop_reason: 'user_stop' })
+      stopAutoModelSequence('Auto sekvence zastavena uživatelem.', 'user_stop')
+      return
     }
     requestTrialStop()
   }, [autoModelSequenceActive, stopAutoModelSequence, requestTrialStop])
@@ -1756,7 +2873,14 @@ export function MicSession({ availableModels, library }: Props) {
       const stopNote = adaptiveCutMs > Math.max(reserveMs, userEarlyCutMs)
         ? `, zkráceno o ${(adaptiveCutMs / 1000).toFixed(1)}s (latence > ${autoModelLatencyGuardSeconds}s)`
         : `, rezerva ${(reserveMs / 1000).toFixed(1)}s + user-cut ${(userEarlyCutMs / 1000).toFixed(1)}s`
-      requestTrialStop(`Auto sekvence: konec slotu ${formatDurationHms(loopCycleS)}${stopNote}.`)
+      requestTrialStop(`Auto sekvence: konec slotu ${formatDurationHms(loopCycleS)}${stopNote}.`, {
+        client_stop_reason: 'slot_end',
+        client_planned_slot_s: loopCycleS,
+        client_effective_cut_s: effectiveCutMs / 1000,
+        client_reserve_s: reserveMs / 1000,
+        client_user_early_cut_s: userEarlyCutMs / 1000,
+        client_adaptive_cut_s: adaptiveCutMs / 1000,
+      })
     }, 200)
 
     return () => window.clearInterval(timer)
@@ -1771,7 +2895,10 @@ export function MicSession({ availableModels, library }: Props) {
       const hardLimitPerf = trialHardLimitAtPerfMsRef.current
       if (hardLimitPerf == null) return
       if (performance.now() < hardLimitPerf) return
-      requestTrialStop(`Auto sekvence: hard cap ${autoModelHardTrialSeconds}s (forced stop).`)
+      requestTrialStop(`Auto sekvence: hard cap ${autoModelHardTrialSeconds}s (forced stop).`, {
+        client_stop_reason: 'hard_cap',
+        client_hard_trial_s: autoModelHardTrialSeconds,
+      })
     }, 150)
 
     return () => window.clearInterval(timer)
@@ -1784,16 +2911,55 @@ export function MicSession({ availableModels, library }: Props) {
     const timer = window.setInterval(() => {
       if (stopRequestedAtPerfMsRef.current != null) return
       const nowPerf = performance.now()
-      const lastUpdatePerf = lastTranscriptUpdateAtPerfMsRef.current ?? trialStartedAtPerfMsRef.current
-      if (lastUpdatePerf == null) return
+      const trialStartedPerf = trialStartedAtPerfMsRef.current
+      const lastUpdatePerf = lastTranscriptUpdateAtPerfMsRef.current ?? trialStartedPerf
+      if (lastUpdatePerf == null || trialStartedPerf == null) return
+      const trialElapsedS = (nowPerf - trialStartedPerf) / 1000
       const silentS = (nowPerf - lastUpdatePerf) / 1000
       if (silentS < autoModelSilenceStopSeconds) return
+      if (trialElapsedS < autoModelMinSilenceStopElapsedS) {
+        if (!silenceMinCaptureNotifiedRef.current) {
+          silenceMinCaptureNotifiedRef.current = true
+          logSequenceEvent('client_sequence_silence_stop_deferred', {
+            sequence_token: autoModelSequenceTokenRef.current,
+            sequence_index: autoModelSequenceIndex + 1,
+            sequence_total: autoModelSequenceIds.length || null,
+            session_id: activeSessionIdRef.current,
+            model_id: modelId,
+            client_silence_stop_s: autoModelSilenceStopSeconds,
+            client_observed_silence_s: silentS,
+            client_trial_elapsed_s: trialElapsedS,
+            client_min_elapsed_before_silence_stop_s: autoModelMinSilenceStopElapsedS,
+            client_min_audio_fraction_before_silence_stop: autoModelSilenceMinAudioFraction,
+            ui_message: `Auto sekvence: stop při mezeře odložen do ${autoModelMinSilenceStopElapsedS.toFixed(1)}s (75 % audia).`,
+          })
+        }
+        return
+      }
       setError(`Auto sekvence: ${autoModelSilenceStopSeconds}s bez nového přepisu.`)
-      requestTrialStop(`Auto sekvence: ${autoModelSilenceStopSeconds}s bez nového textu (stop trialu).`)
+      requestTrialStop(`Auto sekvence: ${autoModelSilenceStopSeconds}s bez nového textu (stop trialu).`, {
+        client_stop_reason: 'silence_no_new_text',
+        client_silence_stop_s: autoModelSilenceStopSeconds,
+        client_observed_silence_s: silentS,
+        client_trial_elapsed_s: trialElapsedS,
+        client_min_elapsed_before_silence_stop_s: autoModelMinSilenceStopElapsedS,
+        client_min_audio_fraction_before_silence_stop: autoModelSilenceMinAudioFraction,
+      })
     }, 250)
 
     return () => window.clearInterval(timer)
-  }, [autoModelSequenceActive, status, autoModelSilenceStopSeconds, requestTrialStop])
+  }, [
+    autoModelSequenceActive,
+    status,
+    autoModelSilenceStopSeconds,
+    autoModelMinSilenceStopElapsedS,
+    autoModelSilenceMinAudioFraction,
+    autoModelSequenceIndex,
+    autoModelSequenceIds.length,
+    logSequenceEvent,
+    modelId,
+    requestTrialStop,
+  ])
 
   useEffect(() => {
     if (!autoModelSequenceActive) return
@@ -1819,18 +2985,51 @@ export function MicSession({ availableModels, library }: Props) {
         Math.max(0.1, remainingHardS),
       )
       if (elapsedStopS < cappedGraceS) return
+      const forceSkip = () => {
+        stopRequestedAtPerfMsRef.current = null
+        stopGraceCheckInFlightRef.current = false
+        try {
+          wsRef.current?.close()
+        } catch {}
+        _stopAudio()
+        setError(`Model nestihl doběhnout do ${cappedGraceS.toFixed(1)}s po stopu (auto-skip).`)
+        setStatus('error')
+        setSaveMsg(`Auto sekvence: přeskočen model po timeoutu doběhu (${cappedGraceS.toFixed(1)}s).`)
+        logSequenceEvent('client_sequence_trial_skipped', {
+          sequence_token: autoModelSequenceTokenRef.current,
+          sequence_index: autoModelSequenceIndex + 1,
+          sequence_total: autoModelSequenceIds.length || null,
+          session_id: activeSessionIdRef.current,
+          model_id: modelId,
+          elapsed_stop_s: elapsedStopS,
+          capped_grace_s: cappedGraceS,
+          time_to_next_start_s: timeToNextStartS,
+          remaining_hard_s: remainingHardS,
+          ui_message: `Auto sekvence: přeskočen model po timeoutu doběhu (${cappedGraceS.toFixed(1)}s).`,
+        })
+      }
+      const sessionId = activeSessionIdRef.current
+      if (sessionId && !stopGraceCheckInFlightRef.current) {
+        stopGraceCheckInFlightRef.current = true
+        void api.mic.getSession(sessionId)
+          .then((session) => {
+            const finalMsg = asObjectRecord(session.final)
+            if (session.status === 'stopped' && finalMsg && !session.error) {
+              setSaveMsg('Auto sekvence: model doběhl po stopu, čekám na finální zprávu.')
+              return
+            }
+            forceSkip()
+          })
+          .catch(() => forceSkip())
+        return
+      }
+      if (stopGraceCheckInFlightRef.current) return
       stopRequestedAtPerfMsRef.current = null
-      try {
-        wsRef.current?.close()
-      } catch {}
-      _stopAudio()
-      setError(`Model nestihl doběhnout do ${cappedGraceS.toFixed(1)}s po stopu (auto-skip).`)
-      setStatus('error')
-      setSaveMsg(`Auto sekvence: přeskočen model po timeoutu doběhu (${cappedGraceS.toFixed(1)}s).`)
+      forceSkip()
     }, 300)
 
     return () => window.clearInterval(timer)
-  }, [autoModelSequenceActive, status, autoModelGraceSeconds, autoModelSequenceIndex, loopCycleS, autoModelLeadStartSeconds, autoModelHardTrialSeconds])
+  }, [autoModelSequenceActive, status, autoModelGraceSeconds, autoModelSequenceIndex, autoModelSequenceIds.length, loopCycleS, autoModelLeadStartSeconds, autoModelHardTrialSeconds, logSequenceEvent, modelId])
 
   useEffect(() => {
     if (!autoModelSequenceActive) return
@@ -1847,6 +3046,11 @@ export function MicSession({ availableModels, library }: Props) {
       const retryModelId = autoModelSequenceIds[autoModelSequenceIndex]
       const retryModel = availableModels.find((m) => m.model_id === retryModelId)
       setSaveMsg(`Retry (${autoModelRetryCountRef.current}/1): ${retryModelId}`)
+      logSequenceEvent('client_sequence_trial_retry', {
+        ...buildSequencePlanPayload(token, autoModelSequenceIds, autoModelSelectedOrdered, autoModelSequenceIndex, retryModelId),
+        retry_count: autoModelRetryCountRef.current,
+        ui_message: `Retry (${autoModelRetryCountRef.current}/1): ${retryModelId}`,
+      })
       autoModelAdvanceLockRef.current = true
       autoModelAdvanceTimerRef.current = window.setTimeout(() => {
         autoModelAdvanceTimerRef.current = null
@@ -1857,6 +3061,8 @@ export function MicSession({ availableModels, library }: Props) {
           sequence_token: token,
           sequence_index: autoModelSequenceIndex,
           sequence_total: autoModelSequenceIds.length,
+          queue_model_ids: autoModelSequenceIds,
+          selected_model_ids: autoModelSelectedOrdered,
         }).finally(() => { autoModelAdvanceLockRef.current = false })
       }, 3000)
       return
@@ -1865,7 +3071,7 @@ export function MicSession({ availableModels, library }: Props) {
 
     const nextIndex = autoModelSequenceIndex + 1
     if (nextIndex >= autoModelSequenceIds.length) {
-      stopAutoModelSequence(`Auto sekvence dokončena (${autoModelSequenceIds.length}/${autoModelSequenceIds.length}).`)
+      stopAutoModelSequence(`Auto sekvence dokončena (${autoModelSequenceIds.length}/${autoModelSequenceIds.length}).`, 'completed')
       return
     }
 
@@ -1875,6 +3081,14 @@ export function MicSession({ availableModels, library }: Props) {
     const leadMs = autoModelLeadStartSeconds * 1000
     const targetStartPerf = anchorPerf + nextIndex * loopCycleS * 1000 - leadMs
     const waitMs = Math.max(0, targetStartPerf - nowPerf)
+    const nextModelId = autoModelSequenceIds[nextIndex]
+    logSequenceEvent('client_sequence_next_scheduled', {
+      ...buildSequencePlanPayload(token, autoModelSequenceIds, autoModelSelectedOrdered, nextIndex, nextModelId),
+      client_wait_ms: waitMs,
+      client_target_start_perf_ms: targetStartPerf,
+      client_pause_from_now_s: waitMs / 1000,
+      ui_message: `Další model ${nextIndex + 1}/${autoModelSequenceIds.length} (${nextModelId}) za ${(waitMs / 1000).toFixed(1)}s.`,
+    })
 
     autoModelAdvanceLockRef.current = true
     autoModelAdvanceTimerRef.current = window.setTimeout(() => {
@@ -1884,17 +3098,23 @@ export function MicSession({ availableModels, library }: Props) {
         return
       }
 
-      const nextModelId = autoModelSequenceIds[nextIndex]
       const nextModel = availableModels.find((m) => m.model_id === nextModelId)
       setAutoModelSequenceIndex(nextIndex)
       setModelId(nextModelId)
       setParams(buildMicParamsWithSaved(nextModel, paramsByModel[nextModelId]))
-      setSaveMsg(`Auto sekvence: model ${nextIndex + 1}/${autoModelSequenceIds.length} (${nextModelId}).`)
+      const nextMsg = `Auto sekvence: model ${nextIndex + 1}/${autoModelSequenceIds.length} (${nextModelId}).`
+      setSaveMsg(nextMsg)
+      logSequenceEvent('client_sequence_trial_start_requested', {
+        ...buildSequencePlanPayload(token, autoModelSequenceIds, autoModelSelectedOrdered, nextIndex, nextModelId),
+        ui_message: nextMsg,
+      })
 
       void startSession(nextModelId, {
         sequence_token: token,
         sequence_index: nextIndex,
         sequence_total: autoModelSequenceIds.length,
+        queue_model_ids: autoModelSequenceIds,
+        selected_model_ids: autoModelSelectedOrdered,
       }).finally(() => {
         autoModelAdvanceLockRef.current = false
       })
@@ -1906,8 +3126,11 @@ export function MicSession({ availableModels, library }: Props) {
     status,
     loopCycleS,
     autoModelLeadStartSeconds,
+    autoModelSelectedOrdered,
     availableModels,
     paramsByModel,
+    logSequenceEvent,
+    buildSequencePlanPayload,
     startSession,
     stopAutoModelSequence,
     error,
@@ -1927,9 +3150,22 @@ export function MicSession({ availableModels, library }: Props) {
     <div className="bg-gray-800 rounded-lg p-4 space-y-4">
       <h3 className="text-white font-semibold text-lg">Mic — live přepis</h3>
 
-      {/* Výběr modelu */}
-      <div className="flex gap-3 flex-wrap">
-        <div>
+      <div className="rounded-lg border border-red-900/60 border-l-4 border-l-red-600 bg-red-950/10 p-3 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-semibold text-red-100">Test přepisu sekvencí</div>
+            <div className="text-[11px] text-gray-400">
+              Vše v tomto bloku ovlivní spuštění a vyhodnocení tlačítkem `Start sekvenci`.
+            </div>
+          </div>
+          <span className="rounded-full border border-red-700 bg-red-950/50 px-2 py-1 text-[11px] text-red-200">
+            ● Start sekvenci
+          </span>
+        </div>
+
+      {/* Výběr modelu a parametrů */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,1fr)_minmax(240px,0.9fr)_minmax(380px,1.6fr)] gap-3 items-start">
+        <div className="min-w-0">
           <label className="block text-xs text-gray-400 mb-1">Model</label>
           <select
             value={modelId}
@@ -1940,7 +3176,7 @@ export function MicSession({ availableModels, library }: Props) {
               setParams(buildMicParamsWithSaved(nextModel, paramsByModel[nextModelId]))
             }}
             disabled={uiLocked}
-            className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
+            className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
           >
             {availableModels.map(m => (
               <option key={m.model_id} value={m.model_id}>
@@ -1949,26 +3185,263 @@ export function MicSession({ availableModels, library }: Props) {
             ))}
           </select>
           <div className="mt-1 text-[11px] text-gray-500">
-            Výchozí mic: small `threads=4, beam=5`; turbo `threads=8, beam=2` (data 27.-29. 3.).
+            Výchozí mic: VOSK `chunk=0.4, gain=+1`; whisper.cpp base `threads=8, beam=1, interval=2000 ms` (data 26. 4.).
           </div>
         </div>
 
-        {devices.length > 0 && (
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Mikrofon</label>
+        <div className="min-w-0">
+          <label className="block text-xs text-gray-400 mb-1">Mikrofon</label>
+          {devices.length > 0 ? (
             <select
               value={deviceIndex ?? ''}
               onChange={e => setDeviceIndex(e.target.value === '' ? null : Number(e.target.value))}
               disabled={uiLocked}
-              className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
+              className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
             >
               <option value="">výchozí</option>
               {devices.map(d => (
                 <option key={d.index} value={d.index}>{d.name}</option>
               ))}
             </select>
-          </div>
-        )}
+          ) : (
+            <div className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-400">nenačteno</div>
+          )}
+        </div>
+
+        <div className="space-y-2 min-w-0">
+          {selectedModel && selectedModel.params.length > 0 && (
+            <details className="text-sm rounded border border-gray-700 bg-gray-900/40 px-3 py-2">
+              <summary className="text-gray-300 cursor-pointer hover:text-gray-100 select-none">
+                Parametry aktuálního modelu
+              </summary>
+              <div className="mt-2 border-l border-gray-700 pl-2">
+                <ModelParamsForm
+                  modelId={modelId}
+                  params={selectedModel.params}
+                  values={params}
+                  onChange={updateModelParams}
+                  compact
+                  hints={MIC_PARAM_HINTS}
+                  disabled={uiLocked}
+                  recommendations={selectedModelRecommendedParams}
+                  onApplyRecommended={(name, value) => updateModelParams({ ...params, [name]: value })}
+                />
+              </div>
+            </details>
+          )}
+
+          {sequenceCommonParamSpecs.length > 0 && (
+            <details className="text-sm rounded border border-gray-700 bg-gray-900/40 px-3 py-2">
+              <summary className="text-gray-300 cursor-pointer hover:text-gray-100 select-none">
+                Společné parametry sekvence
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <label className="inline-flex items-center gap-2 text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={sequenceCommonParamsEnabled}
+                      onChange={(e) => {
+                        markSequenceProfileManual()
+                        setSequenceCommonParamsEnabled(e.target.checked)
+                      }}
+                      disabled={uiLocked}
+                      className="accent-blue-500"
+                    />
+                    Použít společné hodnoty
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => updateSequenceCommonParams({
+                      ...sequenceCommonParams,
+                      ...pickModelSupportedParams(selectedModel, params),
+                    })}
+                    disabled={uiLocked || !selectedModel}
+                    className="px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white disabled:opacity-50"
+                  >
+                    Načíst z aktuálního
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateSequenceCommonParams({ ...sequenceCommonParams, ...sequenceCommonDefaultParams })}
+                    disabled={uiLocked}
+                    className="px-2 py-1 rounded border border-gray-700 text-gray-300 hover:text-white disabled:opacity-50"
+                  >
+                    Výchozí
+                  </button>
+                </div>
+                <div className="border-l border-gray-700 pl-2">
+                  <ModelParamsForm
+                    modelId="__sequence_common__"
+                    params={sequenceCommonParamSpecs}
+                    values={sequenceCommonParams}
+                    onChange={updateSequenceCommonParams}
+                    compact
+                    hints={MIC_PARAM_HINTS}
+                    disabled={uiLocked}
+                  />
+                </div>
+              </div>
+            </details>
+          )}
+
+          {sequenceCommonParamSpecs.length > 0 && sequenceMatrixModels.length > 0 && (
+            <details className="text-sm rounded border border-gray-700 bg-gray-900/40 px-3 py-2">
+              <summary className="text-gray-300 cursor-pointer hover:text-gray-100 select-none">
+                UI matice parametrů
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="text-gray-400">Použít profil:</span>
+                  {SEQUENCE_PARAM_PROFILES.map((profile) => (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      onClick={() => applySequenceParamProfile(profile.id)}
+                      disabled={uiLocked || sequenceMatrixModels.length === 0}
+                      title={profile.description}
+                      className="px-2 py-1 rounded border border-emerald-800 text-emerald-200 hover:text-white hover:border-emerald-600 disabled:opacity-50"
+                    >
+                      {profile.label}
+                    </button>
+                  ))}
+                  {effectiveSequenceParamProfileLabel && (
+                    <span className="rounded border border-gray-700 px-2 py-1 text-gray-300">
+                      aktivní: {effectiveSequenceParamProfileLabel}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  Profil vyplní každému vybranému modelu jen podporované parametry. Potom můžeš upravit sloupec `Všem`
+                  nebo jednotlivé buňky jako výjimky.
+                </div>
+                <div className="overflow-x-auto">
+                <table className="min-w-full text-[11px] text-gray-300 border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-700 text-gray-500">
+                      <th className="text-left py-1 pr-3">Parametr</th>
+                      <th
+                        className="text-left py-1 pr-3"
+                        title="Nastaví stejnou hodnotu všem podporovaným modelům; doporučení se použije pro každý model podle jeho vlastního profilu."
+                      >
+                        Všem
+                      </th>
+                      {sequenceMatrixModels.map((m) => (
+                        <th key={m.model_id} className="text-left py-1 pr-3 max-w-[150px] truncate" title={m.label}>
+                          {m.label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sequenceCommonParamSpecs.map((param) => {
+                      const bulkSpec = buildBulkParamSpec(param, sequenceMatrixModels)
+                      const bulkModels = sequenceMatrixModels.filter((m) => (
+                        m.params.some((modelParam) => modelParam.name === param.name)
+                      ))
+                      const bulkValues = bulkModels.map((m) => editableMatrixParamsByModel.get(m.model_id)?.[param.name])
+                      const firstBulkValue = bulkValues[0]
+                      const bulkMixed = bulkValues.length > 1 && bulkValues.some((value) => !sameParamValue(value, firstBulkValue))
+                      const bulkRecommendedValues = bulkModels.map((m) => recommendedMatrixParamsByModel.get(m.model_id)?.[param.name])
+                      const firstBulkRecommendedValue = bulkRecommendedValues[0]
+                      const bulkRecommendedMixed = bulkRecommendedValues.length > 1
+                        && bulkRecommendedValues.some((value) => !sameParamValue(value, firstBulkRecommendedValue))
+                      return (
+                        <tr key={param.name} className="border-b border-gray-800/80">
+                          <td className="py-1 pr-3 text-gray-400 whitespace-nowrap" title={param.name}>
+                            {param.label}
+                          </td>
+                          <td
+                            className="py-1 pr-3 whitespace-nowrap text-gray-300"
+                            title={`Nastaví ${param.name} všem vybraným modelům, které ho podporují (${bulkModels.length}/${sequenceMatrixModels.length}).`}
+                          >
+                            {bulkSpec ? (
+                              <div className="space-y-1">
+                                <BulkParamInput
+                                  param={bulkSpec}
+                                  value={firstBulkValue}
+                                  mixed={bulkMixed}
+                                  disabled={uiLocked || bulkModels.length === 0}
+                                  onChange={(value) => updateMatrixParamForAll(param.name, value)}
+                                />
+                                <div className="flex items-center gap-1 text-[10px] text-emerald-300">
+                                  <span title={bulkRecommendedMixed ? 'Doporučení se liší podle modelu.' : `Doporučeno: ${formatParamValue(firstBulkRecommendedValue)}`}>
+                                    dop: {bulkRecommendedMixed ? 'dle modelů' : formatParamValue(firstBulkRecommendedValue)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => applyRecommendedMatrixParamForAll(param.name)}
+                                    disabled={uiLocked || bulkModels.length === 0}
+                                    className="rounded border border-emerald-800 px-1 py-0 text-[10px] text-emerald-200 hover:text-white disabled:opacity-50"
+                                  >
+                                    Použít
+                                  </button>
+                                </div>
+                              </div>
+                            ) : '—'}
+                          </td>
+                          {sequenceMatrixModels.map((m) => {
+                            const modelParam = m.params.find((p) => p.name === param.name)
+                            const supported = Boolean(modelParam)
+                            const editableParams = editableMatrixParamsByModel.get(m.model_id)
+                            const effectiveParams = effectiveMatrixParamsByModel.get(m.model_id)
+                            const editableValue = editableParams?.[param.name]
+                            const effectiveValue = effectiveParams?.[param.name]
+                            const recommendedValue = recommendedMatrixParamsByModel.get(m.model_id)?.[param.name]
+                            const commonUsed = sequenceCommonParamsEnabled
+                              && Object.prototype.hasOwnProperty.call(sequenceCommonParams, param.name)
+                              && supported
+                            return (
+                              <td
+                                key={`${m.model_id}:${param.name}`}
+                                className={`py-1 pr-3 whitespace-nowrap ${supported ? 'text-gray-200' : 'text-gray-600'}`}
+                                title={supported ? `${param.name}=${formatParamValue(editableValue)}` : 'Model parametr nepodporuje'}
+                              >
+                                {modelParam ? (
+                                  <div className="space-y-0.5">
+                                    <ParamInput
+                                      param={modelParam}
+                                      value={editableValue}
+                                      onChange={(value) => updateMatrixModelParam(m, modelParam.name, value)}
+                                      compact
+                                      disabled={uiLocked}
+                                    />
+                                    {commonUsed && (
+                                      <div
+                                        className="text-[10px] text-blue-300"
+                                        title={`Při startu se použije společná hodnota ${formatParamValue(effectiveValue)}`}
+                                      >
+                                        společně: {formatParamValue(effectiveValue)}
+                                      </div>
+                                    )}
+                                    <div className="flex items-center gap-1 text-[10px] text-emerald-300">
+                                      <span title={`Doporučeno: ${formatParamValue(recommendedValue)}`}>
+                                        dop: {formatParamValue(recommendedValue)}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => updateMatrixModelParam(m, modelParam.name, recommendedValue)}
+                                        disabled={uiLocked || sameParamValue(editableValue, recommendedValue)}
+                                        className="rounded border border-emerald-800 px-1 py-0 text-[10px] text-emerald-200 hover:text-white disabled:opacity-50"
+                                      >
+                                        Použít
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : '—'}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                </div>
+              </div>
+            </details>
+          )}
+        </div>
       </div>
 
       <div className="bg-gray-900/50 border border-gray-700 rounded p-3 space-y-2">
@@ -2042,7 +3515,7 @@ export function MicSession({ availableModels, library }: Props) {
               {autoModelSequenceActive && (
                 <button
                   type="button"
-                  onClick={() => stopAutoModelSequence('Auto sekvence zastavena uživatelem.')}
+                  onClick={stop}
                   className="px-2 py-1 border border-red-700 rounded text-[11px] text-red-300 hover:text-red-200"
                 >
                   Zastavit sekvenci
@@ -2073,8 +3546,13 @@ export function MicSession({ availableModels, library }: Props) {
                 disabled={uiLocked}
                 className="w-20 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-[11px] text-white disabled:opacity-60"
               />
-              <span className="text-[11px] text-gray-500">bez nového textu</span>
-              <span className="text-[11px] text-gray-500">hard cap trialu {autoModelHardTrialSeconds.toFixed(0)}s</span>
+              <span className="text-[11px] text-gray-500">
+                bez nového textu, nejdřív po {autoModelMinSilenceStopElapsedS.toFixed(1)}s (75 % audia)
+              </span>
+              <span className="text-[11px] text-gray-500">
+                hard cap trialu {autoModelHardTrialSeconds.toFixed(0)}s
+                {loopAudioStartDelayS > 0 ? ` (včetně start audia +${loopAudioStartDelayS.toFixed(1)}s)` : ''}
+              </span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
               {autoModelDisplayOrdered.map((m) => {
@@ -2106,12 +3584,18 @@ export function MicSession({ availableModels, library }: Props) {
             </div>
             <div className="text-[11px] text-gray-400">
               Pořadí běhu: podle pořadí naklikání modelů. Vybráno: {autoModelSelectedOrdered.length}.
-              Kola: {loopRepeatCount}. Slot: {formatDurationHms(autoModelSlotSeconds)} (řeč {Math.round(loopSpeechS)}s + pauza {loopPauseS}s),
+              Audio kola: {loopRepeatCount}. Slot: {formatDurationHms(autoModelSlotSeconds)} (řeč {Math.round(loopSpeechS)}s + pauza {loopPauseS}s),
               sběr řeči: ~{Math.round(loopCaptureSpeechS)}s (konec dříve o {loopEarlyStopS.toFixed(1)}s),
               další start ~{autoModelLeadStartSeconds.toFixed(1)}s před slotem, max doběh {autoModelGraceSeconds}s.
-              Pokud je vybraných modelů méně než kol, jedou dokola.
+              Sekvence STT spustí jen vybrané modely; audio kola navíc se nepřepisují.
               Stop má pevnou přípravu {autoModelPreparationSeconds}s + hard cap {autoModelHardTrialSeconds.toFixed(0)}s/trial.
+              {loopAudioStartDelayS > 0 ? ` Základ hard capu po startu audia: ${autoModelHardTrialBaseSeconds.toFixed(0)}s.` : ''}
               Při latenci prvního slova nad {autoModelLatencyGuardSeconds}s se trial zkrátí ještě víc (adaptivně).
+              {autoModelSelectedOrdered.length !== loopRepeatCount && (
+                <span className="block text-amber-300">
+                  Pozor: počet vybraných modelů ({autoModelSelectedOrdered.length}) se liší od počtu audio kol ({loopRepeatCount}).
+                </span>
+              )}
             </div>
           </>
         )}
@@ -2257,9 +3741,14 @@ export function MicSession({ availableModels, library }: Props) {
               {' '}Sběr lze ukončit dříve o {loopEarlyStopS.toFixed(1)}s.
               {selectedReferenceVideo ? ` (${videoLabel(selectedReferenceVideo.title, selectedReferenceVideo.video_id)})` : ''}
             </p>
-            <div className="rounded border border-gray-700 bg-gray-900/70 p-2 space-y-2">
+            <div className="rounded border border-gray-700 border-l-4 border-l-amber-500 bg-gray-900/70 p-2 space-y-2">
               <div className="flex items-center justify-between">
-                <div className="text-xs text-gray-300 font-semibold">Mobil loop asistent</div>
+                <div>
+                  <div className="text-xs text-amber-200 font-semibold">Tvorba audio loop balíčku</div>
+                  <div className="text-[11px] text-gray-500">
+                    Soubor pro mobil je příprava; jeho délky a pauzy se potom použijí při testu sekvence.
+                  </div>
+                </div>
                 <label className="text-xs text-gray-300 inline-flex items-center gap-1">
                   <input
                     type="checkbox"
@@ -2271,7 +3760,7 @@ export function MicSession({ availableModels, library }: Props) {
                   Zapnuto
                 </label>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
+              <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
                 <div className="rounded border border-gray-700 bg-gray-900 px-2 py-1.5">
                   <div className="text-[11px] text-gray-400">Pasáž (od-do)</div>
                   <div className="text-xs text-gray-200">{clipFromS.toFixed(1)}s → {clipToS.toFixed(1)}s</div>
@@ -2300,6 +3789,28 @@ export function MicSession({ availableModels, library }: Props) {
                     disabled={!mobileLoopEnabled || uiLocked}
                     className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-60"
                   />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-gray-400 mb-1">Start audia + (s)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    step={0.5}
+                    value={mobileLoopAudioStartDelaySeconds}
+                    onChange={e => applyMobileLoopAudioStartDelay(Number(e.target.value) || 0, 'manual_input')}
+                    disabled={!mobileLoopEnabled || (uiLocked && status !== 'recording')}
+                    className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    onClick={markMobileLoopAudioStartedNow}
+                    disabled={!mobileLoopEnabled || status !== 'recording'}
+                    className="mt-1 w-full rounded border border-blue-700 bg-blue-950/40 px-2 py-1 text-[11px] text-blue-100 hover:border-blue-500 disabled:opacity-50"
+                    title="Klikni v okamžiku, kdy z mobilu reálně začne hrát testovací audio."
+                  >
+                    Audio začalo teď
+                  </button>
                 </div>
                 <div>
                   <label className="block text-[11px] text-gray-400 mb-1">Opakování</label>
@@ -2364,7 +3875,7 @@ export function MicSession({ availableModels, library }: Props) {
                 <div className="text-[11px] text-gray-400">
                   Plán: {mobileLoopSyncFirstRound ? '1 sync kolo + ' : ''}{loopRepeatCount} měřené kolo(a),
                   režim {loopSpeechS.toFixed(1)}-{loopEarlyStopS.toFixed(1)}+{loopPauseS}s
-                  {' '}=&gt; sběr {loopCaptureSpeechS.toFixed(1)}s + pauza {loopPauseS}s, slot {loopCycleS.toFixed(1)}s, celkem {formatDurationHms(loopPlanS)}.
+                  {' '}=&gt; sběr {loopCaptureSpeechS.toFixed(1)}s + pauza {loopPauseS}s, start audia +{loopAudioStartDelayS.toFixed(1)}s, slot {loopCycleS.toFixed(1)}s, celkem {formatDurationHms(loopPlanS + loopAudioStartDelayS)}.
                 </div>
               )}
               {mobileLoopPackageError && (
@@ -2535,25 +4046,6 @@ export function MicSession({ availableModels, library }: Props) {
         )}
       </div>
 
-      {/* Parametry modelu */}
-      {selectedModel && selectedModel.params.length > 0 && (
-        <details className="text-sm">
-          <summary className="text-gray-400 cursor-pointer hover:text-gray-200 select-none">
-            Parametry modelu
-          </summary>
-          <div className="mt-2 pl-2 border-l border-gray-600">
-            <ModelParamsForm
-              modelId={modelId}
-              params={selectedModel.params}
-              values={params}
-              onChange={updateModelParams}
-              compact
-              hints={MIC_PARAM_HINTS}
-            />
-          </div>
-        </details>
-      )}
-
       {/* Ovládání */}
       <div className="flex gap-2 items-center">
         {status === 'idle' || status === 'done' || status === 'error' ? (
@@ -2613,6 +4105,8 @@ export function MicSession({ availableModels, library }: Props) {
           </div>
         </div>
       )}
+
+      </div>
 
       {/* Chyba */}
       {error && (
@@ -2713,6 +4207,58 @@ export function MicSession({ availableModels, library }: Props) {
               {typeof seqReport.summary.avg_drop_rate === 'number' ? ` | avg drop ${(seqReport.summary.avg_drop_rate * 100).toFixed(1)}%` : ''}
             </div>
           )}
+          {seqReportProfileLabel && (
+            <div className="mb-2 text-[11px] text-emerald-300">
+              Profil nastavení: <strong>{seqReportProfileLabel}</strong>
+            </div>
+          )}
+          {seqReportPauseValidation && (seqReportPauseValidation.checked_points ?? 0) > 0 && (
+            <div className={`mb-2 text-[11px] ${seqReportPauseValidation.ok ? 'text-emerald-300' : 'text-red-300'}`}>
+              Pauzy: <strong>{seqReportPauseValidation.ok ? 'OK' : 'POZOR'}</strong>
+              {typeof seqReportPauseValidation.planned_pause_s === 'number'
+                ? ` | plán ${seqReportPauseValidation.planned_pause_s.toFixed(1)}s`
+                : ''}
+              {typeof seqReportPauseValidation.observed_pause_min_s === 'number' && typeof seqReportPauseValidation.observed_pause_max_s === 'number'
+                ? ` | real ${seqReportPauseValidation.observed_pause_min_s.toFixed(1)}-${seqReportPauseValidation.observed_pause_max_s.toFixed(1)}s`
+                : ''}
+              {typeof seqReportPauseValidation.max_abs_deviation_s === 'number'
+                ? ` | max odchylka ${seqReportPauseValidation.max_abs_deviation_s.toFixed(1)}s`
+                : ''}
+              {Array.isArray(seqReportPauseValidation.violations) && seqReportPauseValidation.violations.length > 0
+                ? ` | problém: #${seqReportPauseValidation.violations[0].seq_index ?? '?'} ${seqReportPauseValidation.violations[0].model_id ?? ''} (${seqReportPauseValidation.violations[0].observed_pause_s?.toFixed(1) ?? '?'}s)`
+                : ''}
+            </div>
+          )}
+          {seqReportConclusion && (
+            <div className="mb-2 rounded border border-gray-700 bg-gray-950/60 p-2 text-[11px] text-gray-300">
+              <div className="font-semibold text-gray-100">
+                Závěr: {seqReportConclusion.headline || '—'}
+              </div>
+              <div className="mt-1 grid grid-cols-1 lg:grid-cols-2 gap-x-4 gap-y-1">
+                <div>
+                  <span className="text-emerald-300">Použitelné:</span>{' '}
+                  {formatConclusionModels(seqReportConclusion.usable_models)}
+                </div>
+                <div>
+                  <span className="text-yellow-300">Hraniční:</span>{' '}
+                  {formatConclusionModels(seqReportConclusion.borderline_models)}
+                </div>
+                <div>
+                  <span className="text-red-300">Selhalo výkonem:</span>{' '}
+                  {formatConclusionModels(seqReportConclusion.performance_failed_models)}
+                </div>
+                <div>
+                  <span className="text-amber-300">Text nehodnotit kvůli dropům:</span>{' '}
+                  {formatConclusionModels(seqReportConclusion.quality_not_reliable_models)}
+                </div>
+              </div>
+              {Array.isArray(seqReportConclusion.notes) && seqReportConclusion.notes.length > 0 && (
+                <div className="mt-1 text-gray-400">
+                  {seqReportConclusion.notes.join(' ')}
+                </div>
+              )}
+            </div>
+          )}
           {seqReport.readiness && (
             <div className={`mb-2 text-[11px] ${seqReport.readiness.pass ? 'text-emerald-300' : 'text-amber-300'}`}>
               Readiness: <strong>{seqReport.readiness.pass ? 'PASS' : 'FAIL'}</strong>
@@ -2727,6 +4273,9 @@ export function MicSession({ availableModels, library }: Props) {
                 <tr className="text-gray-500 border-b border-gray-700">
                   <th className="text-left pr-2 py-1">#</th>
                   <th className="text-left pr-2 py-1">Model</th>
+                  <th className="text-left pr-2 py-1">Profil</th>
+                  <th className="text-right pr-2 py-1">Pauza s</th>
+                  <th className="text-left pr-2 py-1">Parametry</th>
                   <th className="text-left pr-2 py-1">Status</th>
                   <th className="text-left pr-2 py-1">Fáze</th>
                   <th className="text-right pr-2 py-1">RTF</th>
@@ -2748,10 +4297,27 @@ export function MicSession({ availableModels, library }: Props) {
                     fail: 'text-red-400',
                   }
                   const cls = statusColor[t.trial_status] ?? 'text-gray-400'
+                  const pauseDeviation = typeof t.pause_deviation_s === 'number' ? t.pause_deviation_s : null
+                  const pauseWarn = pauseDeviation != null && Math.abs(pauseDeviation) > 2
                   return (
                     <tr key={t.session_id} className="border-b border-gray-800 hover:bg-gray-800/40">
                       <td className="pr-2 py-0.5">{t.seq_index ?? '—'}</td>
                       <td className="pr-2 py-0.5 max-w-[140px] truncate" title={t.model_id}>{t.model_id}</td>
+                      <td className="pr-2 py-0.5 max-w-[150px] truncate text-[11px] text-emerald-300" title={t.sequence_param_profile ?? undefined}>
+                        {t.sequence_param_profile || '—'}
+                      </td>
+                      <td
+                        className={`text-right pr-2 py-0.5 ${pauseWarn ? 'text-red-300 font-semibold' : 'text-gray-400'}`}
+                        title={pauseDeviation != null ? `Odchylka od plánu: ${pauseDeviation.toFixed(1)}s` : undefined}
+                      >
+                        {t.observed_pause_after_prev_stop_s != null ? t.observed_pause_after_prev_stop_s.toFixed(1) : '—'}
+                      </td>
+                      <td
+                        className="pr-2 py-0.5 max-w-[240px] truncate text-[11px] text-gray-400"
+                        title={formatParamsSummary(t.model_params_used, 50)}
+                      >
+                        {formatParamsSummary(t.model_params_used, 5) || '—'}
+                      </td>
                       <td className={`pr-2 py-0.5 font-semibold ${cls}`}>{t.trial_status}</td>
                       <td className="pr-2 py-0.5 text-gray-400">{t.phase ?? t.status ?? '—'}</td>
                       <td className="text-right pr-2 py-0.5">{t.rtf != null ? t.rtf.toFixed(3) : '—'}</td>
@@ -2864,6 +4430,8 @@ export function MicSession({ availableModels, library }: Props) {
                   <th className="text-right py-1 pr-3">Q-peak s</th>
                   <th className="text-right py-1 pr-3">RAM MB</th>
                   <th className="text-left py-1 pr-3">Reason</th>
+                  <th className="text-left py-1 pr-3">Profil</th>
+                  <th className="text-left py-1 pr-3">Parametry</th>
                   <th className="text-left py-1">Přepis</th>
                   <th className="text-left py-1 pl-2">Akce</th>
                 </tr>
@@ -2872,7 +4440,7 @@ export function MicSession({ availableModels, library }: Props) {
                 {historyVisibleRows.map((r, idx) => {
                   const hasTranscript = !!r.transcript?.trim()
                   const isExpanded = expandedHistoryRecordIds.includes(r.record_id)
-                  const canExpand = hasTranscript && r.transcript.trim().length > 180
+                  const canExpand = hasTranscript && transcriptWords(r.transcript).length > 8
                   const prev = idx > 0 ? historyVisibleRows[idx - 1] : null
                   const separatorBefore = Boolean(
                     prev
@@ -2905,10 +4473,26 @@ export function MicSession({ availableModels, library }: Props) {
                         <td className="py-1 pr-3 text-right">{r.q_peak_s != null ? r.q_peak_s.toFixed(2) : '—'}</td>
                         <td className="py-1 pr-3 text-right">{r.rss_peak_mb != null ? Math.round(r.rss_peak_mb) : '—'}</td>
                         <td className="py-1 pr-3 text-gray-400 text-[11px]">{r.reason_code || '—'}</td>
+                        <td className="py-1 pr-3 text-emerald-300 text-[11px] max-w-[180px] truncate" title={r.sequence_param_profile ?? undefined}>
+                          {r.sequence_param_profile || '—'}
+                        </td>
+                        <td
+                          className="py-1 pr-3 text-gray-400 text-[11px] max-w-[260px]"
+                          title={formatParamsSummary(r.model_params_used, 50)}
+                        >
+                          {r.model_params_used ? (
+                            <div className="space-y-0.5">
+                              {r.sequence_common_params_enabled && (
+                                <div className="text-blue-300">společné</div>
+                              )}
+                              <div className="truncate">{formatParamsSummary(r.model_params_used, 6) || '—'}</div>
+                            </div>
+                          ) : '—'}
+                        </td>
                         <td className="py-1 text-gray-200 max-w-xs">
                           {hasTranscript ? (
                             <div className="space-y-1">
-                              <div>{isExpanded ? r.transcript.trim() : clipText(r.transcript, 120)}</div>
+                              <div>{isExpanded ? r.transcript.trim() : clipWords(r.transcript, 8)}</div>
                               {canExpand && (
                                 <button
                                   type="button"
@@ -2934,7 +4518,7 @@ export function MicSession({ availableModels, library }: Props) {
                       </tr>
                       {isExpanded && hasTranscript && (
                         <tr className="border-b border-gray-800/80">
-                          <td colSpan={16} className="py-2 pl-2 pr-1">
+                          <td colSpan={18} className="py-2 pl-2 pr-1">
                             <div className="rounded border border-gray-700 bg-gray-950/70 p-2 whitespace-pre-wrap text-[12px] text-gray-100">
                               {r.transcript.trim()}
                             </div>

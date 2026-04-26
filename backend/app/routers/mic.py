@@ -63,6 +63,17 @@ class ManualMicRecordResponse(BaseModel):
     saved_at: str
 
 
+class MicClientSequenceEventRequest(BaseModel):
+    event: str = Field(min_length=1, max_length=80)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class MicClientSequenceEventResponse(BaseModel):
+    ok: bool
+    event: str
+    session_id: str | None = None
+
+
 class ManualMicRecordListItem(BaseModel):
     record_id: str
     saved_at: str
@@ -192,6 +203,12 @@ def save_manual_record(req: ManualMicRecordRequest):
         source=req.source or "manual_user_input",
     )
     return ManualMicRecordResponse(**result)
+
+
+@router.post("/sequence-events", response_model=MicClientSequenceEventResponse, status_code=201)
+def log_client_sequence_event(req: MicClientSequenceEventRequest):
+    result = mic_service.log_client_sequence_event(req.event, req.payload or {})
+    return MicClientSequenceEventResponse(**result)
 
 
 @router.get("/manual-records", response_model=ManualMicRecordListResponse)
@@ -381,6 +398,7 @@ def get_session(session_id: str):
         "preflight_warnings": list(state.preflight_warnings or []),
         "reason_code": state.reason_code,
         "error": state.error,
+        "final": dict(state.final) if isinstance(state.final, dict) else None,
     }
 
 
@@ -486,7 +504,13 @@ async def ws_mic_stream(websocket: WebSocket, session_id: str):
 
                 action = payload.get("action", "")
                 if action == "stop":
-                    mic_service.log_transport_event(session_id, "ws_stop_action")
+                    stop_extra = {
+                        str(key): value
+                        for key, value in payload.items()
+                        if key != "action" and not str(key).startswith("samples")
+                    }
+                    mic_service.update_session_runtime_metadata(session_id, stop_extra)
+                    mic_service.log_transport_event(session_id, "ws_stop_action", stop_extra)
                     break
 
                 # Alternativa: JSON {"samples": [...]}

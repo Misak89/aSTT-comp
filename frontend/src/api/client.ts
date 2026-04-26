@@ -18,6 +18,8 @@ import type {
   MicMobileLoopPackageResponse,
   MicMobileLoopPackageListResponse,
   MicMobileLoopPackageDeleteResponse,
+  MicClientSequenceEventRequest,
+  MicClientSequenceEventResponse,
   MicSequenceReport,
   MicSequenceReadinessResponse,
   LocalFileEntry,
@@ -253,6 +255,8 @@ export const api = {
     },
     deleteMobileLoopPackage: (packageId: string) =>
       delJson<MicMobileLoopPackageDeleteResponse>(`/mic/mobile-loop-packages/${encodeURIComponent(packageId)}`),
+    logSequenceEvent: (req: MicClientSequenceEventRequest) =>
+      post<MicClientSequenceEventResponse>('/mic/sequence-events', req),
     getSequenceReport: (token: string) =>
       get<MicSequenceReport>(`/mic/sequences/${encodeURIComponent(token)}`),
     getSequenceReadiness: (token: string, min_models = 3) =>

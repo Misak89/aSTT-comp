@@ -181,6 +181,7 @@ export interface MicSessionState {
   rtf: number
   total_audio_s: number
   error: string | null
+  final?: Record<string, unknown> | null
 }
 
 export interface AudioDevice {
@@ -293,7 +294,55 @@ export interface MicMobileLoopPackageDeleteResponse {
   deleted: boolean
 }
 
+export interface MicClientSequenceEventRequest {
+  event: string
+  payload?: Record<string, unknown>
+}
+
+export interface MicClientSequenceEventResponse {
+  ok: boolean
+  event: string
+  session_id?: string | null
+}
+
 export type MicTrialStatus = 'ok' | 'borderline' | 'too_slow_for_slot' | 'fail'
+
+export interface MicSequencePauseValidation {
+  ok?: boolean
+  checked_points?: number
+  tolerance_s?: number
+  planned_pause_s?: number | null
+  planned_pause_values_s?: number[]
+  observed_pause_min_s?: number | null
+  observed_pause_max_s?: number | null
+  max_abs_deviation_s?: number | null
+  violations?: {
+    seq_index?: number | null
+    model_id?: string | null
+    planned_pause_s?: number | null
+    observed_pause_s?: number | null
+    deviation_s?: number | null
+  }[]
+}
+
+export interface MicSequenceConclusion {
+  headline?: string
+  best_model_id?: string | null
+  usable_models?: MicSequenceConclusionModel[]
+  borderline_models?: MicSequenceConclusionModel[]
+  performance_failed_models?: MicSequenceConclusionModel[]
+  quality_not_reliable_models?: MicSequenceConclusionModel[]
+  notes?: string[]
+}
+
+export interface MicSequenceConclusionModel {
+  seq_index?: number | null
+  model_id?: string | null
+  trial_status?: MicTrialStatus | string | null
+  rtf?: number | null
+  drop_rate?: number | null
+  reason_code?: string | null
+}
 
 export interface MicSequenceTrial {
   seq_index: number | null
@@ -321,6 +370,32 @@ export interface MicSequenceTrial {
   worker_rss_peak_mb: number | null
   reason_code: string | null
   error: string | null
+  model_params_used?: Record<string, unknown> | null
+  sequence_common_params_enabled?: boolean | null
+  sequence_common_params_used?: Record<string, unknown> | null
+  sequence_param_profile?: string | null
+  sequence_timing?: Record<string, unknown> | null
+  planned_pause_s?: number | null
+  observed_pause_after_prev_stop_s?: number | null
+  pause_deviation_s?: number | null
+  observed_start_gap_s?: number | null
+  start_gap_error_s?: number | null
+  observed_duration_s?: number | null
+  stop_drift_vs_planned_speech_ms?: number | null
+  mobile_loop_speech_s?: number | null
+  mobile_loop_capture_speech_s?: number | null
+  mobile_loop_early_stop_s?: number | null
+  mobile_loop_pause_s?: number | null
+  mobile_loop_cycle_s?: number | null
+  mobile_loop_package_id?: string | null
+  auto_model_sequence_slot_s?: number | null
+  auto_model_sequence_hard_trial_base_s?: number | null
+  auto_model_sequence_hard_trial_s?: number | null
+  auto_model_sequence_effective_hard_trial_s?: number | null
+  auto_model_sequence_silence_stop_s?: number | null
+  auto_model_sequence_silence_min_elapsed_s?: number | null
+  auto_model_sequence_silence_min_audio_fraction?: number | null
+  auto_model_sequence_grace_s?: number | null
 }
 
 export interface MicSequenceSummary {
@@ -335,6 +410,8 @@ export interface MicSequenceSummary {
   reasons?: Record<string, number>
   avg_rtf?: number | null
   avg_drop_rate?: number | null
+  pause_validation?: MicSequencePauseValidation
+  conclusion?: MicSequenceConclusion
 }
 
 export interface MicSequenceReport {
@@ -358,6 +435,8 @@ export interface MicSequenceReport {
     min_timeline_ms?: number | null
     max_timeline_ms?: number | null
   }
+  pause_validation?: MicSequencePauseValidation
+  conclusion?: MicSequenceConclusion
   kpi?: {
     hard_limit_ms?: number
     hard_limit_violations?: number
@@ -379,6 +458,7 @@ export interface MicSequenceReport {
     checks?: { id: string; pass: boolean; actual: unknown; expected: unknown }[]
     failed_checks?: string[]
   }
+  sequence_plan?: Record<string, unknown>
   trials: MicSequenceTrial[]
 }
 

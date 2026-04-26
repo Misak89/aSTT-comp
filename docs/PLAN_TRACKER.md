@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-20T20:01:12Z
+- last_updated_utc: 2026-04-25T10:49:40Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -129,6 +129,11 @@ Stavy V7 jsou zavazne vedeny dvojici `implementation` + `validation`.
 Aktualni stav V7-S5 (2026-04-20):
 - Readiness checklist probe byl spusten nad `shared_seq` a skoncil `FAIL`.
 - Hlavni blokery: model coverage `<3`, trialy nejsou `started/finalized`, chybi latency evidence, dashboard runtime mapping hlasi `warn`.
+
+Aktualni UI/sequence stav (2026-04-25):
+- MIC sekvence umi volitelne spolecne parametry i hromadne profily nad vybranymi modely; kazdy model pouzije pouze podporovane klice.
+- Manualni MIC historie i `runtime/mic_sequences/<sequence_token>/report.json` ukladaji `model_params_used` a aktivni profil nastaveni pro audit porovnani.
+- Nemeni to V7-S5 readiness: fyzicky validacni run 3-5 modelu stale chybi.
 
 Poznamka k readiness:
 - `green`: implementation=`implemented` a validation=`passed`

@@ -32,6 +32,28 @@ def test_create_session_defaults_to_legacy_mode() -> None:
     assert payload.get("event_contract_version") == "1.0.0"
 
 
+def test_create_session_merges_registry_mic_defaults() -> None:
+    vosk_id = mic_service.create_session("vosk_small_cs_0_4", {})
+    vosk = mic_service.get_session(vosk_id)
+    assert vosk is not None
+    assert vosk.model_params["chunk_seconds"] == 0.4
+    assert vosk.model_params["input_gain_db"] == 1.0
+    assert vosk.model_params["backpressure_high_s"] == 1.4
+    assert vosk.model_params["backpressure_low_s"] == 0.5
+
+    whisper_id = mic_service.create_session("whisper_cpp_base", {"threads": 6})
+    whisper = mic_service.get_session(whisper_id)
+    assert whisper is not None
+    assert whisper.model_params["threads"] == 6
+    assert whisper.model_params["beam_size"] == 1
+    assert whisper.model_params["best_of"] == 1
+    assert whisper.model_params["no_fallback"] is False
+    assert whisper.model_params["initial_prompt"] == "Aspergerův syndrom"
+    assert whisper.model_params["analysis_interval_ms"] == 2000
+    assert whisper.model_params["backpressure_high_s"] == 2.0
+    assert whisper.model_params["backpressure_low_s"] == 0.8
+
+
 def test_create_session_v7_mode_sets_ids_from_sequence_metadata() -> None:
     session_id = mic_service.create_session(
         "whisper_cpp_small",
