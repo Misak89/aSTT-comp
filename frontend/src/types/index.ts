@@ -247,6 +247,7 @@ export interface MicMobileLoopPackageRequest {
 
 export interface MicMobileLoopPackageResponse {
   package_id: string
+  pairing_code?: string | null
   created_at: string
   video_id: string
   video_title: string
@@ -266,6 +267,7 @@ export interface MicMobileLoopPackageResponse {
 
 export interface MicMobileLoopPackageListItem {
   package_id: string
+  pairing_code?: string | null
   created_at: string
   video_id: string
   video_title: string
@@ -374,6 +376,18 @@ export interface MicSequenceTrial {
   sequence_common_params_enabled?: boolean | null
   sequence_common_params_used?: Record<string, unknown> | null
   sequence_param_profile?: string | null
+  tuning_series_id?: string | null
+  tuning_mode?: string | null
+  tuning_step_size?: number | null
+  tuning_slot_index?: number | null
+  tuning_slot_total?: number | null
+  tuning_variant_id?: string | null
+  tuning_variant_label?: string | null
+  tuning_repeat_index?: number | null
+  tuning_repeat_total?: number | null
+  tuning_changed_params?: Record<string, unknown> | null
+  tuning_baseline_params?: Record<string, unknown> | null
+  tuning_max_lag_s?: number | null
   sequence_timing?: Record<string, unknown> | null
   planned_pause_s?: number | null
   observed_pause_after_prev_stop_s?: number | null

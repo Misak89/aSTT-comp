@@ -1,0 +1,6 @@
+{"doc_meta":{"owner":"engineering","status":"draft","doc_file":"latemic_implementacni_plan_2026-04-27.jsonl","last_updated_utc":"2026-04-27T21:59:43Z","review_due_utc":"2026-05-11T00:00:00Z","source_md":"docs/latemic_implementacni_plan_2026-04-27.md","source_json":"docs/latemic_implementacni_plan_2026-04-27.json","format_role":"event_log"},"event":"doc_created","event_utc":"2026-04-27T21:59:43Z"}
+{"event":"plan_initialized","event_utc":"2026-04-27T21:59:43Z","plan_id":"late-mic-v1","route":"/benchmark/latemic","mode":"late_mic"}
+{"event":"goal_declared","event_utc":"2026-04-27T21:59:43Z","goal":"Find highest quality transcription from real microphone input at the smallest practical delayed-segment latency."}
+{"event":"lag_sweep_declared","event_utc":"2026-04-27T21:59:43Z","lag_sweep":{"optional_fast_start_s":5,"recommended_start_s":10,"max_s":60,"step_s":5,"primary_metric":"max_visible_lag_s"}}
+{"event":"reuse_targets_declared","event_utc":"2026-04-27T21:59:43Z","frontend":["MicSession mic capture/proof","BenchmarkPage tab pattern","buildTuningSweepPlan"],"backend":["model registry","mic endpoint style","streaming runner segment dispatch","matrix real-mode WAV path"]}
+{"event":"phases_declared","event_utc":"2026-04-27T21:59:43Z","phases":["L0","L1","L2","L3","L4","L5","L6"]}

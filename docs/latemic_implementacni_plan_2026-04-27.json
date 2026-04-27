@@ -1,0 +1,104 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "draft",
+    "doc_file": "latemic_implementacni_plan_2026-04-27.json",
+    "last_updated_utc": "2026-04-27T21:59:43Z",
+    "review_due_utc": "2026-05-11T00:00:00Z",
+    "source_md": "docs/latemic_implementacni_plan_2026-04-27.md",
+    "format_role": "canonical_structured_snapshot"
+  },
+  "plan_id": "late-mic-v1",
+  "route": "/benchmark/latemic",
+  "mode": "late_mic",
+  "main_goal": "Find the highest quality STT transcription from real microphone input with the smallest practical delayed-segment latency.",
+  "constraints": {
+    "input_source": "real_microphone",
+    "not_live_stream": true,
+    "not_simulation": true,
+    "language_code_default": "cs",
+    "audio_format": {
+      "sample_rate_hz": 16000,
+      "channels": 1,
+      "sample_width_bits": 16
+    },
+    "transcript_source": "latemic_segment_wav"
+  },
+  "lag_sweep": {
+    "recommended_start_s": 10,
+    "optional_fast_start_s": 5,
+    "max_s": 60,
+    "step_s": 5,
+    "primary_metric": "max_visible_lag_s",
+    "secondary_metric": "tail_lag_s"
+  },
+  "latency_metrics": {
+    "segment_audio_s": "actual captured segment duration",
+    "queue_wait_s": "time between segment close and model decode start",
+    "decode_s": "model processing time",
+    "tail_lag_s": "queue_wait_s + decode_s",
+    "max_visible_lag_s": "segment_audio_s + queue_wait_s + decode_s",
+    "over_budget_s": "max(0, max_visible_lag_s - lag_budget_s)"
+  },
+  "recommended_segment_mapping": [
+    { "lag_budget_s": 5, "target_segment_s": 3, "max_pause_wait_s": 1, "overlap_s": 0.5 },
+    { "lag_budget_s": 10, "target_segment_s": 5, "max_pause_wait_s": 2, "overlap_s": 1 },
+    { "lag_budget_s": 15, "target_segment_s": 8, "max_pause_wait_s": 3, "overlap_s": 1.5 },
+    { "lag_budget_s": 20, "target_segment_s": 10, "max_pause_wait_s": 3, "overlap_s": 2 },
+    { "lag_budget_s": 25, "target_segment_s": 12, "max_pause_wait_s": 4, "overlap_s": 2 },
+    { "lag_budget_s": 30, "target_segment_s": 15, "max_pause_wait_s": 5, "overlap_s": 2 },
+    { "lag_budget_s": 35, "target_segment_s": 18, "max_pause_wait_s": 5, "overlap_s": 2 },
+    { "lag_budget_s": 40, "target_segment_s": 20, "max_pause_wait_s": 5, "overlap_s": 3 },
+    { "lag_budget_s": 45, "target_segment_s": 22, "max_pause_wait_s": 5, "overlap_s": 3 },
+    { "lag_budget_s": 50, "target_segment_s": 25, "max_pause_wait_s": 5, "overlap_s": 3 },
+    { "lag_budget_s": 55, "target_segment_s": 28, "max_pause_wait_s": 5, "overlap_s": 3 },
+    { "lag_budget_s": 60, "target_segment_s": 30, "max_pause_wait_s": 5, "overlap_s": 3 }
+  ],
+  "reuse_targets": {
+    "frontend": [
+      "frontend/src/App.tsx route pattern",
+      "frontend/src/pages/BenchmarkPage.tsx benchmark tab pattern",
+      "frontend/src/components/MicSession.tsx mic capture and proof logic",
+      "MicSession.computePcmStats",
+      "MicSession.buildTuningSweepPlan",
+      "frontend/src/api/client.ts REST client pattern"
+    ],
+    "backend": [
+      "packages/adapters/_registry.py model registry and params",
+      "backend/app/routers/mic.py schema and endpoint style",
+      "backend/app/services/mic_service.py event and metrics patterns",
+      "packages/benchmarks/runners/streaming_runner.py segment dispatch inspiration",
+      "packages/benchmarks/runners/matrix_benchmark_runner.py local WAV real-mode inspiration"
+    ]
+  },
+  "proposed_backend": {
+    "router": "backend/app/routers/latemic.py",
+    "service": "backend/app/services/latemic_service.py",
+    "runtime_root": "runtime/late_mic",
+    "endpoints": [
+      "POST /api/latemic/runs",
+      "GET /api/latemic/runs",
+      "GET /api/latemic/runs/{run_id}",
+      "POST /api/latemic/runs/{run_id}/segments",
+      "POST /api/latemic/runs/{run_id}/stop",
+      "POST /api/latemic/runs/{run_id}/cleanup",
+      "GET /api/latemic/runs/{run_id}/export.csv"
+    ]
+  },
+  "deletion_policies": [
+    "delete_immediately_after_transcript",
+    "delete_after_1_minute",
+    "delete_after_5_minutes",
+    "retain_until_run_end",
+    "retain_for_debug"
+  ],
+  "phases": [
+    { "id": "L0", "title": "Documentation and contract", "status": "draft" },
+    { "id": "L1", "title": "Shared frontend mic helpers", "status": "planned" },
+    { "id": "L2", "title": "LateMic backend skeleton", "status": "planned" },
+    { "id": "L3", "title": "Single model segment test", "status": "planned" },
+    { "id": "L4", "title": "Model by lag sweep", "status": "planned" },
+    { "id": "L5", "title": "Automatic parameter tuning reuse", "status": "planned" },
+    { "id": "L6", "title": "Validation and Dashboard separation", "status": "planned" }
+  ]
+}

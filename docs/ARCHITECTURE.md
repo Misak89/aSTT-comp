@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-25T10:49:40Z
+- last_updated_utc: 2026-04-27T05:24:01Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento dokument je centralni popis toho, jak projekt funguje.
@@ -31,6 +31,12 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 4. Vysledky a telemetrie se ukladaji do runtime souboru.
 5. Frontend polluje nebo odebira WS udalosti.
 
+## 3A. Library audio cache
+- Plna audio cache knihovny je v `runtime/audio_cache/`.
+- Preferovany nazev souboru je `{prefix8}_{video_id}.wav`, kde `prefix8` je osm znaku odvozenych z pole `title` v knihovne a `video_id` zustava stabilni identifikator.
+- Backend resolver v `backend/app/services/library_service.py` zachovava kompatibilitu s legacy tvarem `{video_id}.wav` a umi dohledat i stary prefixed soubor po zmene nazvu v knihovne.
+- Benchmark, MIC loop, transcript serving a tuning workery maji pouzivat resolver cache, ne skladat cestu k WAV souboru rucne.
+
 ## 4. Mic pipeline
 - API/WS: `backend/app/routers/mic.py`
 - Orchestrace: `backend/app/services/mic_service.py`
@@ -40,6 +46,8 @@ Detailni specializovane analyzy zustavaji v `docs/tuning_*.md`.
 - Event stream: `runtime/logs/mic_sequence_events.jsonl`
 - Sequence report artefakty: `runtime/mic_sequences/<sequence_token>/report.json` + `report.csv`
 - MIC UI muze vyplnit spolecne parametry nebo hromadne profily sekvence; backend i frontend ukladaji auditni snapshot `model_params_used` a aktivni profil s hodnotami skutecne pouzitymi pro konkretni model.
+- Frontend MIC pipeline pocita vstupni dukazni metriky primo z PCM chunku pred odeslanim na WebSocket: RMS/peak dBFS, VAD/silence, clipping, chunk count a odeslane audio/WS bytes.
+- Automaticky MIC transcript v historii je autoritativni jen z WebSocket session `final.text` (`transcript_source=mic_ws_final`); top-level transcript, history snapshot, reference text ani simulace se do MIC radku nedoplnuji.
 - V7 operational endpoints:
   - `GET /api/mic/contract` (schema/version, event names, reason-code vocabulary)
   - `GET /api/mic/sequences/{token}/readiness` (PASS/FAIL checker nad timeline + KPI + kontrakt)

@@ -18,7 +18,7 @@ def test_save_manual_record_uses_authoritative_transcript_from_linked_session(mo
 
     try:
         (root / "mic_abc123.json").write_text(
-            json.dumps({"session_id": "mic_abc123", "transcript": "Dobrý den, test přepisu."}),
+            json.dumps({"session_id": "mic_abc123", "final": {"text": "Dobrý den, test přepisu."}}),
             encoding="utf-8",
         )
 
@@ -32,6 +32,7 @@ def test_save_manual_record_uses_authoritative_transcript_from_linked_session(mo
         saved = json.loads(Path(result["history_path"]).read_text(encoding="utf-8"))
 
         assert saved["transcript"] == "Dobrý den, test přepisu."
+        assert saved["metrics"]["transcript_source"] == "mic_ws_final"
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -100,6 +101,45 @@ def test_list_manual_records_clears_snapshot_when_linked_session_has_no_text(mon
         records = mic_service.list_manual_records(limit=10)
 
         assert records[0]["transcript"] == ""
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_list_manual_records_ignores_history_transcript_for_linked_session(monkeypatch):
+    root = _prepare_runtime_root("ignore_history_snapshot")
+    history = root / "history"
+    history.mkdir(parents=True)
+    monkeypatch.setattr(mic_service, "MIC_SESSIONS_ROOT", root)
+
+    try:
+        (history / "20260425_183719_mic_history_final.json").write_text(
+            json.dumps(
+                {
+                    "session_id": "mic_history",
+                    "phase": "final",
+                    "transcript": "Text z historie se nesmí použít.",
+                    "final": {"text": "Ani final z history snapshotu se nesmí použít."},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (history / "20260425_183720_whisper_cpp_base_manual.json").write_text(
+            json.dumps(
+                {
+                    "session_id": "manual_old",
+                    "snapshot_at": "2026-04-25T18:37:20+00:00",
+                    "model_id": "whisper_cpp_base",
+                    "transcript": "Snapshot se nesmí zobrazit.",
+                    "metrics": {"mic_session_id": "mic_history"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        records = mic_service.list_manual_records(limit=10)
+
+        assert records[0]["transcript"] == ""
+        assert records[0]["metrics"]["transcript_source"] == "none"
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

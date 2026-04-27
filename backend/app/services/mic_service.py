@@ -15,9 +15,13 @@ Session lifecycle:
 from __future__ import annotations
 
 import base64
+import csv
+import io
 import json
 import math
+import secrets
 import shutil
+import string
 import struct
 import threading
 import time
@@ -30,7 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..config import AUDIO_CACHE_ROOT, MIC_SEQUENCES_ROOT, MIC_SESSIONS_ROOT, MODEL_STORE_ROOT, RUNTIME_ROOT, SUBTITLES_ROOT
+from ..config import MIC_SEQUENCES_ROOT, MIC_SESSIONS_ROOT, MODEL_STORE_ROOT, RUNTIME_ROOT, SUBTITLES_ROOT
 from .mic_v7_contract import (
     MIC_V7_EVENT_SCHEMA,
     MIC_V7_EVENT_VERSION,
@@ -54,6 +58,8 @@ SAMPLE_RATE = 16000
 WS_AUDIO_FRAME_MAGIC = b"ASTT"
 MOBILE_LOOP_ROOT = MIC_SESSIONS_ROOT / "mobile_loops"
 MIC_EVENTS_LOG_PATH = RUNTIME_ROOT / "logs" / "mic_sequence_events.jsonl"
+MOBILE_LOOP_PAIRING_CODE_LEN = 6
+MOBILE_LOOP_PAIRING_ALPHABET = string.ascii_letters + string.digits
 _AUTO_SEQUENCE_MAX_TRACKED = 256
 _V7_SEQUENCE_MAX_TRACKED = 256
 ORCHESTRATOR_MODE_LEGACY = "legacy_sequence"
@@ -259,6 +265,10 @@ def _safe_str_list(value: Any, *, limit: int = 200) -> list[str]:
     return out
 
 
+def _safe_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _normalize_reason_code(raw_reason: Any, *, allow_none: bool = True, fallback: str = "unknown") -> str | None:
     return normalize_reason_code(
         raw_reason,
@@ -331,6 +341,18 @@ def _parse_auto_sequence_meta(model_params: dict[str, Any]) -> dict[str, Any]:
         "grace_s": _safe_float(model_params.get("auto_model_sequence_grace_s")),
         "latency_guard_s": _safe_float(model_params.get("auto_model_sequence_latency_guard_s")),
         "adaptive_max_cut_s": _safe_float(model_params.get("auto_model_sequence_adaptive_max_cut_s")),
+        "tuning_series_id": str(model_params.get("tuning_series_id") or "").strip() or None,
+        "tuning_mode": str(model_params.get("tuning_mode") or "").strip() or None,
+        "tuning_step_size": _safe_float(model_params.get("tuning_step_size")),
+        "tuning_slot_index": _safe_int(model_params.get("tuning_slot_index")),
+        "tuning_slot_total": _safe_int(model_params.get("tuning_slot_total")),
+        "tuning_variant_id": str(model_params.get("tuning_variant_id") or "").strip() or None,
+        "tuning_variant_label": str(model_params.get("tuning_variant_label") or "").strip() or None,
+        "tuning_repeat_index": _safe_int(model_params.get("tuning_repeat_index")),
+        "tuning_repeat_total": _safe_int(model_params.get("tuning_repeat_total")),
+        "tuning_changed_params": _safe_dict(model_params.get("tuning_changed_params")),
+        "tuning_baseline_params": _safe_dict(model_params.get("tuning_baseline_params")),
+        "tuning_max_lag_s": _safe_float(model_params.get("tuning_max_lag_s")),
     }
 
 
@@ -363,6 +385,18 @@ def _sequence_plan_payload_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
         "auto_model_sequence_slot_s": meta.get("slot_s"),
         "auto_model_sequence_latency_guard_s": meta.get("latency_guard_s"),
         "auto_model_sequence_adaptive_max_cut_s": meta.get("adaptive_max_cut_s"),
+        "tuning_series_id": meta.get("tuning_series_id"),
+        "tuning_mode": meta.get("tuning_mode"),
+        "tuning_step_size": meta.get("tuning_step_size"),
+        "tuning_slot_index": meta.get("tuning_slot_index"),
+        "tuning_slot_total": meta.get("tuning_slot_total"),
+        "tuning_variant_id": meta.get("tuning_variant_id"),
+        "tuning_variant_label": meta.get("tuning_variant_label"),
+        "tuning_repeat_index": meta.get("tuning_repeat_index"),
+        "tuning_repeat_total": meta.get("tuning_repeat_total"),
+        "tuning_changed_params": dict(meta.get("tuning_changed_params") or {}),
+        "tuning_baseline_params": dict(meta.get("tuning_baseline_params") or {}),
+        "tuning_max_lag_s": meta.get("tuning_max_lag_s"),
     }
 
 
@@ -1217,6 +1251,18 @@ def _persist_sequence_report(
         "seq_total",
         "model_id",
         "sequence_param_profile",
+        "tuning_series_id",
+        "tuning_mode",
+        "tuning_step_size",
+        "tuning_slot_index",
+        "tuning_slot_total",
+        "tuning_variant_id",
+        "tuning_variant_label",
+        "tuning_repeat_index",
+        "tuning_repeat_total",
+        "tuning_changed_params",
+        "tuning_baseline_params",
+        "tuning_max_lag_s",
         "mobile_loop_speech_s",
         "mobile_loop_capture_speech_s",
         "mobile_loop_early_stop_s",
@@ -1275,10 +1321,19 @@ def _persist_sequence_report(
         "updated_at",
     ]
     try:
-        lines = [",".join(csv_cols)]
+        sio = io.StringIO()
+        writer = csv.writer(sio, lineterminator="\n")
+        writer.writerow(csv_cols)
         for trial in trials_sorted:
-            lines.append(",".join(str(trial.get(col, "")) for col in csv_cols))
-        csv_path.write_text("\n".join(lines), encoding="utf-8")
+            row: list[str] = []
+            for col in csv_cols:
+                value = trial.get(col, "")
+                if isinstance(value, (dict, list)):
+                    row.append(json.dumps(value, ensure_ascii=False, sort_keys=True))
+                else:
+                    row.append("" if value is None else str(value))
+            writer.writerow(row)
+        csv_path.write_text(sio.getvalue(), encoding="utf-8")
     except Exception:
         pass
 
@@ -1391,6 +1446,12 @@ def get_sequence_report(token: str) -> dict[str, Any] | None:
                     "mobile_loop_pause_s",
                     "mobile_loop_cycle_s",
                     "mobile_loop_package_id",
+                    "tuning_series_id",
+                    "tuning_mode",
+                    "tuning_step_size",
+                    "tuning_slot_total",
+                    "tuning_repeat_total",
+                    "tuning_max_lag_s",
                     "auto_model_sequence_slot_s",
                     "auto_model_sequence_hard_trial_s",
                     "auto_model_sequence_silence_stop_s",
@@ -1917,7 +1978,7 @@ def _read_json_dict(path: Path) -> dict[str, Any] | None:
     return payload
 
 
-def _extract_transcript_from_session_payload(payload: dict[str, Any] | None) -> str:
+def _extract_ws_final_transcript_from_session_payload(payload: dict[str, Any] | None) -> str:
     if not isinstance(payload, dict):
         return ""
     final = payload.get("final")
@@ -1925,9 +1986,6 @@ def _extract_transcript_from_session_payload(payload: dict[str, Any] | None) -> 
         final_text = final.get("text")
         if isinstance(final_text, str) and final_text.strip():
             return final_text
-    transcript = payload.get("transcript")
-    if isinstance(transcript, str) and transcript.strip():
-        return transcript
     return ""
 
 
@@ -1950,33 +2008,12 @@ def _session_transcript_from_manual_metrics(metrics: dict[str, Any]) -> str:
         state = _sessions.get(session_id)
     if state is not None:
         with state._lock:
-            transcript = _extract_transcript_from_session_payload(
-                {"transcript": state.transcript, "final": dict(state.final or {})}
-            )
+            transcript = _extract_ws_final_transcript_from_session_payload({"final": dict(state.final or {})})
         if transcript:
             return transcript
 
     latest_payload = _read_json_dict(MIC_SESSIONS_ROOT / f"{session_id}.json")
-    transcript = _extract_transcript_from_session_payload(latest_payload)
-    if transcript:
-        return transcript
-
-    history_dir = MIC_SESSIONS_ROOT / "history"
-    if not history_dir.exists():
-        return ""
-    try:
-        candidates = sorted(
-            history_dir.glob(f"*_{session_id}_*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-    except Exception:
-        return ""
-    for path in candidates:
-        transcript = _extract_transcript_from_session_payload(_read_json_dict(path))
-        if transcript:
-            return transcript
-    return ""
+    return _extract_ws_final_transcript_from_session_payload(latest_payload)
 
 
 def _apply_authoritative_manual_record_transcript(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1988,7 +2025,10 @@ def _apply_authoritative_manual_record_transcript(payload: dict[str, Any]) -> di
 
     transcript = _session_transcript_from_manual_metrics(metrics)
     next_payload = dict(payload)
+    next_metrics = dict(metrics)
+    next_metrics["transcript_source"] = "mic_ws_final" if transcript else "none"
     next_payload["transcript"] = transcript
+    next_payload["metrics"] = next_metrics
     return next_payload
 
 
@@ -2234,6 +2274,59 @@ def _seconds_tag(value: float) -> str:
     return text.replace(".", "p")
 
 
+def _mobile_loop_pairing_code_from_package_id(package_id: str) -> str | None:
+    if not package_id.startswith("loop_"):
+        return None
+    first_token = package_id[len("loop_"):].split("_", 1)[0]
+    code = first_token.split("-", 1)[0]
+    if len(code) != MOBILE_LOOP_PAIRING_CODE_LEN:
+        return None
+    if any(ch not in MOBILE_LOOP_PAIRING_ALPHABET for ch in code):
+        return None
+    return code
+
+
+def _mobile_loop_pairing_code_exists(code: str) -> bool:
+    if not MOBILE_LOOP_ROOT.exists():
+        return False
+    normalized = (code or "").strip()
+    if not normalized:
+        return False
+    package_prefix = f"loop_{normalized}-"
+    for package_dir in MOBILE_LOOP_ROOT.iterdir():
+        if not package_dir.is_dir():
+            continue
+        if package_dir.name.startswith(package_prefix):
+            return True
+        manifest_path = package_dir / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(raw, dict) and raw.get("pairing_code") == normalized:
+            return True
+    return False
+
+
+def _generate_mobile_loop_pairing_code() -> str:
+    for _ in range(500):
+        code = "".join(
+            secrets.choice(MOBILE_LOOP_PAIRING_ALPHABET)
+            for _ in range(MOBILE_LOOP_PAIRING_CODE_LEN)
+        )
+        if not any(ch.islower() for ch in code):
+            continue
+        if not any(ch.isupper() for ch in code):
+            continue
+        if not any(ch.isdigit() for ch in code):
+            continue
+        if not _mobile_loop_pairing_code_exists(code):
+            return code
+    raise ValueError("Nepodařilo se vygenerovat unikátní párovací kód balíčku.")
+
+
 def get_mobile_loop_package_files(package_id: str) -> dict[str, Path]:
     package_dir = _mobile_loop_package_dir(package_id)
     if not package_dir.exists():
@@ -2316,6 +2409,8 @@ def list_mobile_loop_packages(
 
         row: dict[str, Any] = {
             "package_id": package_id,
+            "pairing_code": str(payload.get("pairing_code") or "").strip()
+            or _mobile_loop_pairing_code_from_package_id(package_id),
             "created_at": created_at,
             "video_id": row_video_id,
             "video_title": str(payload.get("video_title") or ""),
@@ -2376,10 +2471,10 @@ def generate_mobile_loop_package(
     if item is None:
         raise ValueError(f"Video '{video_id_clean}' není v knihovně.")
 
-    source_wav = AUDIO_CACHE_ROOT / f"{video_id_clean}.wav"
-    if not source_wav.exists():
+    source_wav = library_service.resolve_audio_cache_file_for_library_item(video_id_clean, extensions=(".wav",))
+    if source_wav is None or not source_wav.exists():
         raise ValueError(
-            f"Audio cache chybí: '{source_wav.name}'. Otevři Knihovnu a stáhni audio cache pro toto video."
+            f"Audio cache chybí pro video '{video_id_clean}'. Otevři Knihovnu a stáhni audio cache pro toto video."
         )
 
     start_s = max(0.0, float(clip_from_s))
@@ -2428,13 +2523,11 @@ def generate_mobile_loop_package(
 
     created_at = _iso_now()
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    pairing_code = _generate_mobile_loop_pairing_code()
     range_tag = f"f{_seconds_tag(start_s)}-t{_seconds_tag(bounded_end_s)}"
     pause_tag = f"g{_seconds_tag(safe_pause_s)}"
-    repeats_tag = f"r{safe_repeats}"
     sync_tag = f"s{sync_rounds}"
-    package_id = (
-        f"loop_{video_id_clean}_{range_tag}_{pause_tag}_{repeats_tag}_{sync_tag}_{stamp}_{uuid.uuid4().hex[:6]}"
-    )
+    package_id = f"loop_{pairing_code}-{safe_repeats}x_{range_tag}_{pause_tag}_{sync_tag}_{stamp}"
     package_dir = MOBILE_LOOP_ROOT / package_id
     package_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2475,6 +2568,7 @@ def generate_mobile_loop_package(
         "4) První kolo je SYNC (pokud je zapnuto), další kola jsou měřená.",
         "5) Po dokončení testu porovnej modely podle RTF, latence, drop rate a přepisu.",
         "",
+        f"Párovací kód: {pairing_code}-{safe_repeats}x",
         f"Video: {item.title} ({video_id_clean})",
         f"Pasáž: {start_s:.2f}s až {bounded_end_s:.2f}s (délka {clip_duration_s:.2f}s)",
         f"Pauza mezi koly: {safe_pause_s:.2f}s",
@@ -2495,6 +2589,7 @@ def generate_mobile_loop_package(
 
     manifest = {
         "package_id": package_id,
+        "pairing_code": pairing_code,
         "created_at": created_at,
         "video_id": video_id_clean,
         "video_title": item.title,
@@ -2528,6 +2623,7 @@ def generate_mobile_loop_package(
         "mobile_loop_package_created",
         extra={
             "package_id": package_id,
+            "pairing_code": pairing_code,
             "video_id": video_id_clean,
             "clip_from_s": round(start_s, 3),
             "clip_to_s": round(bounded_end_s, 3),
@@ -2544,6 +2640,7 @@ def generate_mobile_loop_package(
 
     return {
         "package_id": package_id,
+        "pairing_code": pairing_code,
         "created_at": created_at,
         "video_id": video_id_clean,
         "video_title": item.title,

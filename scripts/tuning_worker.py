@@ -443,6 +443,20 @@ def _slice_wav_clip(full_wav: Path, clip_start_s: float, sample_seconds: int, ou
         wf_out.writeframes(raw)
 
 
+def _resolve_audio_cache_wav(audio_cache_dir: Path, video_id: str) -> Path | None:
+    legacy = audio_cache_dir / f"{video_id}.wav"
+    if legacy.exists():
+        return legacy
+    suffix = f"_{video_id}.wav"
+    try:
+        for path in sorted(audio_cache_dir.iterdir(), key=lambda p: p.name.lower()):
+            if path.is_file() and path.name.endswith(suffix):
+                return path
+    except FileNotFoundError:
+        return None
+    return None
+
+
 def _predownload_audio(
     video_id: str,
     clip_start_s: float,
@@ -464,10 +478,10 @@ def _predownload_audio(
     if wav_path.exists():
         return wav_path  # Už staženo v tomto jobu
 
-    # Zkontroluj globální cache: runtime/audio_cache/{video_id}.wav
+    # Zkontroluj globální cache: runtime/audio_cache/{prefix8}_{video_id}.wav
     if audio_cache_dir is not None:
-        full_wav = Path(audio_cache_dir) / f"{video_id}.wav"
-        if full_wav.exists():
+        full_wav = _resolve_audio_cache_wav(Path(audio_cache_dir), video_id)
+        if full_wav is not None and full_wav.exists():
             progress_cb(f"✂ Vyřezávám clip {video_id} ({sample_seconds}s od {int(clip_start_s)}s) z lokálního souboru...")
             _slice_wav_clip(full_wav, clip_start_s, sample_seconds, wav_path)
             progress_cb(f"✓ Audio {video_id} připraveno z cache ({wav_path.stat().st_size // 1024} kB)")

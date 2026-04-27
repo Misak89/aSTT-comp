@@ -65,10 +65,10 @@ def open_sub_dir(dir_key: str, subdir: str):
 def _open(path) -> None:
     try:
         if sys.platform == "win32":
-            subprocess.Popen(["explorer", str(path)])
+            subprocess.Popen(["explorer.exe", str(path)])
         elif sys.platform == "darwin":
             subprocess.Popen(["open", str(path)])
         else:
             subprocess.Popen(["xdg-open", str(path)])
-    except Exception:
-        pass
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to open directory: {exc}") from exc

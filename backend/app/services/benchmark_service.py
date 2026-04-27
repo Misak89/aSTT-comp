@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, unquote
 
-from ..config import JOBS_ROOT, RUNS_ROOT, SUBTITLES_ROOT, SCENARIOS_ROOT, MODEL_STORE_ROOT, AUDIO_CACHE_ROOT
+from ..config import JOBS_ROOT, RUNS_ROOT, SUBTITLES_ROOT, SCENARIOS_ROOT, MODEL_STORE_ROOT
 from ..models.benchmark import BenchmarkJobRequest, BenchmarkJobStatus, LiveJobProgress
 from . import library_service
 
@@ -358,8 +358,8 @@ def _resolve_sources(req_data: dict) -> list[str]:
             item = items.get(vid)
             if not item:
                 continue
-            cached = AUDIO_CACHE_ROOT / f"{vid}.wav"
-            if cached.exists():
+            cached = library_service.resolve_audio_file_for_library_item(vid)
+            if cached is not None and cached.exists():
                 result.append(str(cached))
             else:
                 source_value = item.url

@@ -1433,18 +1433,21 @@ export function LibraryPage() {
           </button>
           <button
             onClick={() => {
-              void api.openDir.audioCache().catch((e: unknown) => {
-                setMsg(`Chyba při otevření Down Audio: ${e instanceof Error ? e.message : String(e)}`)
-              })
+              void (async () => {
+                setMsg('Otevírám složku Down Audio...')
+                try {
+                  const res = await api.openDir.audioCache()
+                  setMsg(`Down Audio: ${res.path} (pokud se okno neotevřelo, použij tuto cestu).`)
+                } catch (e: unknown) {
+                  setMsg(`Chyba při otevření Down Audio: ${e instanceof Error ? e.message : String(e)}`)
+                }
+              })()
             }}
             className="text-sm px-3 py-1.5 rounded border bg-white text-amber-700 border-amber-300 hover:bg-amber-50"
-            title="Otevře složku runtime/audio_cache"
+            title="Dokumenty\aSTT-comp\runtime\audio_cache"
           >
             📁 Down Audio
           </button>
-          <span className="text-xs font-mono text-gray-400" title="Relativní cesta v projektu">
-            runtime/audio_cache
-          </span>
           <button
             onClick={() => { setLsArchive(listTranscripts()); setShowLsArchive(true) }}
             className="text-sm px-3 py-1.5 rounded border bg-white text-purple-700 border-purple-300 hover:bg-purple-50"
@@ -1479,7 +1482,7 @@ export function LibraryPage() {
           className="bg-blue-600 text-white px-4 py-1.5 rounded text-sm disabled:opacity-50">
           Přidat ručně
         </button>
-        {msg && <span className="text-sm text-gray-600">{msg}</span>}
+        {msg && <span className="text-sm text-gray-600 break-all">{msg}</span>}
       </div>
 
       {/* Tabulka videí */}

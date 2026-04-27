@@ -45,6 +45,14 @@ def _infer_video_id(video_id: Optional[str], canonical_url: Optional[str]) -> Op
         p = Path(raw_path)
         if p.suffix.lower() == ".wav" and p.parent.name == "audio_cache":
             stem = p.stem.strip()
+            try:
+                from . import library_service
+
+                for item in library_service.list_items():
+                    if stem == item.video_id or stem.endswith(f"_{item.video_id}"):
+                        return item.video_id
+            except Exception:
+                pass
             return stem or None
     except Exception:
         return None

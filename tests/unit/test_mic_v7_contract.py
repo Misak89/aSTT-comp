@@ -93,3 +93,44 @@ def test_mic_session_preflight_blocks_batch_only_model() -> None:
     assert "model_not_mic_capable" in (state.preflight_errors or [])
     with pytest.raises(RuntimeError, match="preflight_failed"):
         mic_service.start_recording(session_id)
+
+
+def test_sequence_trial_entry_preserves_tuning_metadata() -> None:
+    session_id = mic_service.create_session(
+        "whisper_cpp_base",
+        {
+            "auto_model_sequence_token": "tok_tuning_unit",
+            "auto_model_sequence_index": 1,
+            "auto_model_sequence_total": 2,
+            "tuning_series_id": "tune_tok_tuning_unit",
+            "tuning_mode": "focused",
+            "tuning_step_size": 1.5,
+            "tuning_slot_index": 1,
+            "tuning_slot_total": 2,
+            "tuning_variant_id": "whisper_cpp_base:interval_plus",
+            "tuning_variant_label": "interval +200 ms",
+            "tuning_repeat_index": 1,
+            "tuning_repeat_total": 5,
+            "tuning_changed_params": {"analysis_interval_ms": 2200},
+            "tuning_baseline_params": {"analysis_interval_ms": 2000},
+            "tuning_max_lag_s": 15,
+        },
+    )
+    state = mic_service.get_session(session_id)
+    assert state is not None
+
+    entry = mic_service._build_sequence_trial_entry(
+        state,
+        phase="created",
+        payload={},
+        seq_index=1,
+        seq_total=2,
+    )
+
+    assert entry["tuning_series_id"] == "tune_tok_tuning_unit"
+    assert entry["tuning_variant_label"] == "interval +200 ms"
+    assert entry["tuning_step_size"] == 1.5
+    assert entry["tuning_repeat_index"] == 1
+    assert entry["tuning_repeat_total"] == 5
+    assert entry["tuning_changed_params"] == {"analysis_interval_ms": 2200}
+    assert entry["tuning_baseline_params"] == {"analysis_interval_ms": 2000}

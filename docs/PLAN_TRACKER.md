@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-25T10:49:40Z
+- last_updated_utc: 2026-04-27T05:40:43Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -134,6 +134,21 @@ Aktualni UI/sequence stav (2026-04-25):
 - MIC sekvence umi volitelne spolecne parametry i hromadne profily nad vybranymi modely; kazdy model pouzije pouze podporovane klice.
 - Manualni MIC historie i `runtime/mic_sequences/<sequence_token>/report.json` ukladaji `model_params_used` a aktivni profil nastaveni pro audit porovnani.
 - Nemeni to V7-S5 readiness: fyzicky validacni run 3-5 modelu stale chybi.
+
+Aktualni UI/sequence stav (2026-04-26):
+- MIC auto sekvence ma rozsireni `Automaticke ladeni parametru`: plan generuje sloty `model + varianta nastaveni + opakovani` kolem aktualniho baseline nastaveni.
+- Sekvencni report a CSV export ukladaji `tuning_*` metadata, zmeny parametru proti baseline a souhrn kvality podle variant.
+- Nemeni to V7-S5 readiness: fyzicky validacni run 3-5 modelu stale chybi a musi byt proveden na realnem mikrofon/audio loop vstupu.
+
+Aktualni UI/sequence stav (2026-04-27):
+- `Automaticke ladeni parametru` ma nastavitelnou `Velikost kroku` pro `Uzke doladeni` i `Sirsi overeni`; default zustava `1x`, rychle volby jsou `0.5x`, `1x`, `2x`.
+- `tuning_step_size` se uklada do trial metadata, sequence planu, CSV exportu a historie, aby bylo zpetne videt, jak hrube se ladici parametry posouvaly.
+- Popisky `Opakovani varianty` a `Max lag (s)` maji hover napovedu; `Max lag` zustava pouze hodnotici limit pro souhrn ladeni, ne stop podminka trialu.
+- `Opakovani varianty` v automatickem ladeni je omezene na hodnoty `1x` az `10x` po jedne.
+- Library audio cache pouziva citelny tvar `{prefix8}_{video_id}.wav`; MIC audio loop a benchmark/tuning resolver zachovavaji stabilni `video_id` i po prejmenovani souboru.
+- MIC UI zobrazuje dukazni panel vstupu z realnych PCM chunku (dBFS/VAD/clipping/chunky/bytes) a historie uklada transcript pouze pri autoritativnim zdroji `mic_ws_final`.
+- MIC vyber `Video r. dle knihovny` pouziva stejne ulozene razeni jako `/library` vcetne priority, smeru a WER pri dostupnych vysledcich.
+- Nemeni to V7-S5 readiness: fyzicky validacni run 3-5 modelu stale chybi a musi byt proveden na realnem mikrofon/audio loop vstupu.
 
 Poznamka k readiness:
 - `green`: implementation=`implemented` a validation=`passed`

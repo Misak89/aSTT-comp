@@ -3,8 +3,160 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-25T10:54:48Z
+- last_updated_utc: 2026-04-27T21:59:43Z
 - review_due_utc: 2026-04-15T00:00:00Z
+
+---
+
+## Session 2026-04-27T05:40:43Z (mic-reference-video-library-sort)
+
+### Summary
+- Updated the MIC `Video r. dle knihovny` dropdown to use the same persisted library sort settings from `astt_library_settings_v1` as `/library`.
+- The MIC dropdown now follows library sort priority/direction for title, language, duration, genre, view count, subtitle languages, subtitle/audio availability, visibility, date, and WER.
+- When WER is part of the saved library sort, MIC fetches latest per-video WER values before sorting.
+
+### Impact
+- Reference video selection in `/benchmark/mic` matches the Library page ordering instead of using its older hard-coded date/title ordering.
+
+---
+
+## Session 2026-04-27T05:24:01Z (mic-input-proof-and-authority)
+
+### Summary
+- Added a MIC input proof panel in `/benchmark/mic` showing live PCM-derived RMS/peak dBFS, VAD/silence, clipping, chunk count, audio bytes, WebSocket bytes, sample rate, and selected device label.
+- Saved MIC records now include `mic_input_*` evidence metrics and `transcript_source`.
+- Tightened automatic MIC transcript authority: linked MIC rows can display transcript only from WebSocket session `final.text` (`mic_ws_final`), not from live partial text, top-level session transcript, history snapshots, reference text, or simulation/snapshot payloads.
+
+### Impact
+- A MIC run has visible evidence that real microphone PCM chunks are flowing, and MIC history rows no longer backfill text from non-final or non-WebSocket sources.
+
+---
+
+## Session 2026-04-27T04:54:18Z (library-audio-cache-title-prefix)
+
+### Summary
+- Renamed existing `runtime/audio_cache/*.wav` files to start with an 8-character prefix derived from the Library `title`, followed by the stable `video_id`.
+- Added shared backend audio-cache filename helpers and lookup support for both new `{prefix8}_{video_id}.wav` and legacy `{video_id}.wav` names.
+- Updated benchmark, MIC loop, transcript, tuning, smoke, and offline preseed paths so renamed cache files remain usable.
+
+### Impact
+- The `Down Audio` folder is easier to inspect in Explorer without losing the stable `video_id` needed by benchmark and MIC workflows.
+
+---
+
+## Session 2026-04-27T04:46:41Z (library-down-audio-tooltip)
+
+### Summary
+- Removed the redundant visible `runtime/audio_cache` helper text next to the Library `Down Audio` button.
+- Changed the button tooltip to show `Dokumenty\aSTT-comp\runtime\audio_cache`.
+
+### Impact
+- The Library toolbar is less cluttered while the expected audio-cache directory remains visible on hover.
+
+---
+
+## Session 2026-04-27T04:40:23Z (library-down-audio-open-feedback)
+
+### Summary
+- Verified that the Library `Down Audio` button targets `runtime/audio_cache`, where cached per-video WAV files are stored as `{video_id}.wav`.
+- Stopped suppressing backend open-directory failures so the API reports an error instead of silently returning success.
+- Added frontend success feedback with the resolved `Down Audio` path when the folder-open request succeeds.
+
+### Impact
+- If the OS file browser does not become visible after clicking `Down Audio`, the Library page still shows the exact directory path to use and real open failures become diagnosable.
+
+---
+
+## Session 2026-04-27T02:19:31Z (mic-tuning-repeat-range)
+
+### Summary
+- Pred docs editaci byl vytvoren backup do `docs/backups/2026-04-27_041926/docs/` (`session_log.md`, `PLAN_TRACKER.md`).
+- `frontend/src/components/MicSession.tsx` omezuje `Opakovani varianty` v automatickem ladeni na hodnoty `1x` az `10x` po jedne.
+- Stejna normalizace plati pri nacteni ulozene UI hodnoty i pri stavbe sweep planu, takze starsi hodnota nad `10` se stahne na `10`.
+- `docs/PLAN_TRACKER.md` synchronizovan kvuli V7 anti-drift pravidlu; V7-S5 readiness zustava nezmenena bez fyzicke validace.
+
+### Impact
+- Obsluha muze zvolit presny pocet opakovani od 1 do 10 a automaticky tuning uz nenabizi jen skoky 3/5/10.
+
+---
+
+## Session 2026-04-27T02:13:20Z (mic-tuning-help-tooltips)
+
+### Summary
+- Pred docs editaci byl vytvoren backup do `docs/backups/2026-04-27_041302/docs/` (`session_log.md`, `PLAN_TRACKER.md`).
+- `frontend/src/components/MicSession.tsx` doplnil hover napovedu pro `Opakovani varianty` a `Max lag (s)` v bloku `Automaticke ladeni parametru`.
+- Tooltip u `Max lag (s)` vysvetluje, ze jde o hodnotici limit pro zpozdeni v souhrnu ladeni, ne o automaticke zastaveni trialu.
+- `docs/PLAN_TRACKER.md` synchronizovan kvuli V7 anti-drift pravidlu; V7-S5 readiness zustava nezmenena bez fyzicke validace.
+
+### Impact
+- Obsluha vidi primo v UI, co ladici volby znamenaji, bez zmeny runtime chovani sekvence.
+
+---
+
+## Session 2026-04-27T01:55:57Z (mic-tuning-step-size)
+
+### Summary
+- Pred docs editaci byl vytvoren backup do `docs/backups/2026-04-27_035544/docs/` (`session_log.md`, `PLAN_TRACKER.md`).
+- `frontend/src/components/MicSession.tsx`:
+  - pridal `Velikost kroku` pro `Uzke doladeni` i `Sirsi overeni`,
+  - podporuje hodnoty `0.25x` az `4x` po kroku `0.25` a rychle volby `0.5x`, `1x`, `2x`,
+  - pouziva velikost kroku pri generovani variant pro VOSK, whisper.cpp i obecne modely,
+  - zobrazuje krok v odhadu planu a uklada ho do historie vysledku.
+- `backend/app/services/mic_service.py`, `frontend/src/types/index.ts` a `tests/unit/test_mic_v7_contract.py` doplnily persistenci `tuning_step_size`.
+- `docs/PLAN_TRACKER.md` synchronizovan kvuli V7 anti-drift pravidlu; V7-S5 readiness zustava nezmenena bez fyzicke validace.
+
+### Impact
+- Stejny automaticky tuning lze spustit jemneji i hrubeji bez zmeny kodu nebo rucniho prepisovani variant.
+- Vysledky sweepu maji ulozenou velikost kroku, takze jde zpetne posoudit, jak agresivne byly parametry posouvane.
+
+---
+
+## Session 2026-04-27T01:20:44Z (mic-auto-sequence-discoverability)
+
+### Summary
+- Pred docs editaci byl vytvoren backup do `docs/backups/2026-04-27_032033/docs/session_log.md`.
+- `frontend/src/components/MicSession.tsx`:
+  - kdyz neni zapnute `Auto stridani STT modelu (sekvencne)`, zobrazuje jasny informacni panel,
+  - panel vysvetluje, ze vyber testovanych modelu a `Automaticke ladeni parametru` se zobrazi po zapnuti auto sekvence,
+  - pridal tlacitko `Zapnout vyber testovanych modelu`.
+- Overeni:
+  - `npm --prefix frontend run build`,
+  - restart webu pres `cmd /c web-down.cmd`, `cmd /c web-up-bg.cmd`, `cmd /c web-status.cmd`,
+  - browser smoke na `http://127.0.0.1:8012/benchmark/mic`.
+
+### Impact
+- Uživatel uz nemusi odhadovat, ze nezaskrtnuty checkbox skryva vyber testovanych modelu i ladici sweep.
+- Funkce sekvence ani timing trialu se nemeni.
+
+---
+
+## Session 2026-04-26T18:41:08Z (mic-auto-tuning-sweep)
+
+### Summary
+- Pred docs editaci byl vytvoren backup do `docs/backups/2026-04-26_204055/docs/` (`session_log.md`, `PLAN_TRACKER.md`).
+- `frontend/src/components/MicSession.tsx`:
+  - pridal rozbalovaci `Automaticke ladeni parametru` do bloku auto sekvence,
+  - umi sestavit sweep plan kolem aktualniho baseline nastaveni vybranych modelu,
+  - podporuje rezimy `Uzke doladeni` a `Sirsi overeni`, opakovani varianty 3/5/10x a limit `Max lag (s)`,
+  - frontu auto sekvence rozsiruje na sloty `model + varianta + opakovani`,
+  - pri startu trialu pouzije konkretni parametry varianty a ulozi skutecny `model_params_used`,
+  - v reportu zobrazuje souhrn ladeni podle modelu/varianty vcetne prumerneho RTF, dropu, prvniho slova, Q-peak, score a verdiktu,
+  - v historii vysledku ukazuje variantu ladeni a zmenu proti baseline.
+- `backend/app/services/mic_service.py`:
+  - uklada `tuning_*` metadata do sekvencniho trial entry, sequence planu a CSV exportu,
+  - CSV export prepnul na `csv.writer`, aby slovniky parametru neporusily sloupce.
+- `frontend/src/types/index.ts` doplnen o tuning pole v `MicSequenceTrial`.
+- `tests/unit/test_mic_v7_contract.py` doplnen o kontrolu prenosu tuning metadat do trial entry.
+- `docs/PLAN_TRACKER.md` synchronizovan kvuli V7 anti-drift pravidlu; V7-S5 readiness zustava nezmenena bez fyzicke validace.
+- Overeni:
+  - `npm --prefix frontend run build`,
+  - `.venv\Scripts\python -m pytest tests\unit\test_mic_orchestrator_mode.py tests\unit\test_mic_v7_contract.py tests\unit\test_mic_v7_runtime_mapping.py tests\unit\test_mic_manual_records.py` (`17 passed`),
+  - `git diff --check`.
+
+### Impact
+- Lze automaticky projet vice modelu pres vice malych variant nastaveni bez rucniho preklikavani.
+- Vystupy jsou dohledatelne podle tuning serie, varianty, opakovani a realne pouzitych parametru.
+- Stavajici auto sekvence zustava kompatibilni: tuning stale loguje bezny `client_sequence_started` a navic doplnuje `client_tuning_sweep_started`.
 
 ---
 
@@ -1497,3 +1649,87 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - New MIC tests and sequence reports start from the best currently verified settings for the two leading CZ online candidates while still allowing per-run overrides.
+
+---
+
+## Session 2026-04-27T06:11:39Z (mic-sequence-ui-workflow-order)
+
+### Summary
+- Reworked the `/benchmark/mic` sequence test panel into a numbered workflow: source/reference, audio loop package, microphone/models, auto sequence/tuning, and start.
+- Moved the visible priority of reference-video setup before model and tuning controls so the physical audio source is configured first.
+- Added concise section copy explaining which controls feed the actual sequence start.
+
+### Impact
+- The MIC sequence UI now follows the operator's real test flow and makes the boundary between external audio preparation, model configuration, and sequence execution clearer without changing backend behavior.
+
+---
+
+## Session 2026-04-27T06:52:34Z (mic-loop-browser-audio-controls)
+
+### Summary
+- Added browser-side audio-plan playback controls to the MIC reference-video loop block: `Přehrát audio plán`, `Zastavit audio`, and `Spustit audio automaticky při Start sekvenci`.
+- The playback button prepares the current loop WAV package when needed, then plays that package through the browser.
+- Sequence-start metadata now records whether the expected audio source is the browser audio plan or an external mobile loop.
+
+### Impact
+- Operators can now run the configured audio loop directly from the app or opt into automatic audio playback when starting a sequence, instead of only downloading a mobile package.
+
+---
+
+## Session 2026-04-27T08:16:41Z (mic-tuning-custom-ranges)
+
+### Summary
+- Added configurable numeric tuning ranges to `/benchmark/mic` automatic parameter tuning.
+- Operators can switch from fixed preset variants to `Vlastní rozsahy parametrů`, choose exact numeric parameters, and set `Od / Do / Krok`.
+- The tuning plan applies each enabled parameter only to selected STT models that support it, preserving a baseline row per model and generating one-parameter variants.
+
+### Impact
+- MIC tuning can now compare different STT model families with explicit parameter ranges instead of relying on hard-coded model-specific sweep choices.
+
+---
+
+## Session 2026-04-27T08:56:23Z (mic-tuning-range-tooltips)
+
+### Summary
+- Added hover help for automatic tuning range parameters in `/benchmark/mic`.
+- Each parameter tooltip now shows the parameter description, current recommendation, recommended default value for selected supported models, and expected effect of moving the tested value lower or higher.
+- Covered the numeric tuning parameters used by the MIC sweep UI, including chunk size, analysis interval/window, gain, backpressure, CPU threads, beam size, and sample rate.
+
+### Impact
+- Operators can decide which tuning range to enable without guessing what plus/minus changes are expected to do for each selected STT model.
+
+---
+
+## Session 2026-04-27T09:02:30Z (mic-tuning-empty-range-guidance)
+
+### Summary
+- Expanded the warning for custom tuning ranges when no supported parameter is active.
+- The start-time validation now explains how to fix the state instead of only saying that no supported parameter is selected.
+- The custom range panel also shows the same guidance inline while active parameter count is zero.
+
+### Impact
+- Operators can recover from an empty custom sweep setup without guessing whether they need to select a parameter, choose a supported model, or use recommended ranges.
+
+---
+
+## Session 2026-04-27T18:25:38Z (mic-mobile-loop-pairing-code)
+
+### Summary
+- Added 6-character mobile loop pairing codes with lowercase, uppercase, and digit characters.
+- New mobile loop package IDs no longer include model names and now start with the reusable test code plus measured repeat count, for example `loop_aB3dE9-30x_...`.
+- Added `/benchmark/mic` controls to create a mobile package from the current sequence/tuning trial count and to reapply a saved package by pairing code.
+
+### Impact
+- A physical mobile audio package can be paired back to the exact test setup by code while remaining reusable across different STT model selections.
+
+---
+
+## Session 2026-04-27T21:59:43Z (latemic-design-doc)
+
+### Summary
+- Added a LateMic implementation plan triplet: `docs/latemic_implementacni_plan_2026-04-27.md`, `.json`, and `.jsonl`.
+- Defined `/benchmark/latemic` as real microphone input with delayed segment transcription, not live stream and not simulation.
+- Documented reusable code paths from the current MIC frontend, model registry, benchmark runners, and backend mic service patterns.
+
+### Impact
+- LateMic now has a concrete design contract for testing 5/10-60s delay budgets, segment sizing, pause-aware boundaries, temporary audio deletion, metrics, and phased implementation.

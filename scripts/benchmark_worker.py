@@ -216,6 +216,42 @@ def _write_partial_matrix(run_dir, run_id, sample_seconds, source_entries, by_mo
     )
 
 
+def _audio_cache_video_ids(repo_root: Path) -> list[str]:
+    try:
+        items_path = repo_root / "runtime" / "library" / "items.json"
+        items = json.loads(items_path.read_text(encoding="utf-8"))
+        return [str(item.get("video_id") or "").strip() for item in items if str(item.get("video_id") or "").strip()]
+    except Exception:
+        return []
+
+
+def _infer_audio_cache_video_id(path: Path, repo_root: Path) -> str | None:
+    if path.suffix.lower() != ".wav" or path.parent.name != "audio_cache":
+        return None
+    stem = path.stem.strip()
+    for video_id in _audio_cache_video_ids(repo_root):
+        if stem == video_id or stem.endswith(f"_{video_id}"):
+            return video_id
+    return stem or None
+
+
+def _resolve_audio_cache_wav(audio_cache_root: Path, video_id: str | None) -> Path | None:
+    clean_video_id = str(video_id or "").strip()
+    if not clean_video_id:
+        return None
+    legacy = audio_cache_root / f"{clean_video_id}.wav"
+    if legacy.exists():
+        return legacy
+    suffix = f"_{clean_video_id}.wav"
+    try:
+        for path in sorted(audio_cache_root.iterdir(), key=lambda p: p.name.lower()):
+            if path.is_file() and path.name.endswith(suffix):
+                return path
+    except FileNotFoundError:
+        return None
+    return None
+
+
 def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, model_store_root, progress_cb, transcript_cb=None):
     """Spustí benchmark v streaming módu: iteruje source × model × setting."""
     from datetime import datetime, timezone
@@ -258,7 +294,7 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
             try:
                 src_path = Path(str(source.value))
                 if src_path.suffix.lower() == ".wav" and src_path.parent.name == "audio_cache":
-                    inferred = src_path.stem.strip()
+                    inferred = _infer_audio_cache_video_id(src_path, _repo_root)
                     if inferred:
                         source_video_id = inferred
             except Exception:
@@ -306,7 +342,7 @@ def _run_streaming_matrix(*, config, source_entries, runs_root, subtitles_root, 
                 # nebo máme cached audio pro toto video_id.
                 # Pokud je požadovaný start offset > 0, jedeme přes stream_audio_chunks(start_offset),
                 # aby se opravdu přepisoval jen daný úsek.
-                _cached_wav = _audio_cache_root / f"{source_video_id}.wav" if source_video_id else None
+                _cached_wav = _resolve_audio_cache_wav(_audio_cache_root, source_video_id)
                 local_media_path: str | None = None
                 effective_source = source
                 if source.origin_type == "local_file" and source.value:

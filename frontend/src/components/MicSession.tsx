@@ -21,6 +21,7 @@ import type {
   MicMobileLoopPackageListItem,
   MicSequenceReport,
   MicSequenceConclusionModel,
+  MicSequenceTrial,
   MicTrialStatus,
 } from '../types'
 import { api } from '../api/client'
@@ -39,6 +40,36 @@ type Status = 'idle' | 'connecting' | 'recording' | 'stopping' | 'done' | 'error
 type MicTestMode = 'free_speech' | 'reference_video'
 type MicOrchestratorMode = 'legacy_sequence' | 'v7_cs_online'
 type SequenceParamProfileId = 'recommended_per_model' | 'fast_online' | 'quality_online'
+type TuningSweepMode = 'focused' | 'wide'
+
+type TuningSweepSlot = {
+  slotIndex: number
+  slotTotal: number
+  modelId: string
+  variantId: string
+  variantLabel: string
+  repeatIndex: number
+  repeatTotal: number
+  mode: TuningSweepMode
+  stepSize: number
+  params: Record<string, unknown>
+  baselineParams: Record<string, unknown>
+  changedParams: Record<string, unknown>
+}
+
+type TuningSweepRangeConfig = {
+  enabled: boolean
+  from: number
+  to: number
+  step: number
+}
+
+type TuningSweepRangeConfigMap = Record<string, TuningSweepRangeConfig>
+
+type TuningParamEffectHint = {
+  minus: string
+  plus: string
+}
 
 type MicMetrics = {
   latency_ms?: number
@@ -58,6 +89,20 @@ type MicMetrics = {
   reason_code?: string | null
 }
 
+type MicInputProof = {
+  device_label: string
+  sample_rate: number
+  chunk_count: number
+  audio_payload_bytes: number
+  ws_payload_bytes: number
+  rms_dbfs: number | null
+  peak_dbfs: number | null
+  clipping_pct: number
+  vad_speech: boolean
+  silence_ms: number
+  last_chunk_age_ms: number | null
+}
+
 type ReferenceTextId = 'prepared_1' | 'prepared_2' | 'custom_1' | 'custom_2'
 type ClipDurationAnchor = 'from' | 'to'
 
@@ -68,6 +113,7 @@ type SavedWebMicResult = {
   reference_label: string
   mic_test_mode: 'free_speech' | 'reference_video' | 'unknown'
   transcript: string
+  transcript_source?: string | null
   note: string
   quality_assessment: string
   source: string
@@ -88,6 +134,13 @@ type SavedWebMicResult = {
   sequence_common_params_enabled?: boolean | null
   sequence_common_params_used?: Record<string, unknown> | null
   sequence_param_profile?: string | null
+  tuning_series_id?: string | null
+  tuning_variant_id?: string | null
+  tuning_variant_label?: string | null
+  tuning_step_size?: number | null
+  tuning_repeat_index?: number | null
+  tuning_repeat_total?: number | null
+  tuning_changed_params?: Record<string, unknown> | null
 }
 
 type AutoModelSequenceMeta = {
@@ -96,6 +149,8 @@ type AutoModelSequenceMeta = {
   sequence_total: number
   queue_model_ids?: string[]
   selected_model_ids?: string[]
+  tuning_series_id?: string | null
+  tuning_slot?: TuningSweepSlot | null
 }
 
 type ActiveSessionLoopConfig = {
@@ -113,6 +168,98 @@ type ActiveSessionLoopConfig = {
 
 type HistoryModeFilter = 'all' | 'free_speech' | 'reference_video'
 type HistorySortKey = 'saved_at' | 'model_id' | 'mic_test_mode' | 'reference_label' | 'rtf' | 'drop_rate'
+type LibrarySortKey =
+  | 'title'
+  | 'language'
+  | 'duration'
+  | 'genre'
+  | 'view_count'
+  | 'subtitle_languages'
+  | 'subtitles'
+  | 'audio'
+  | 'visible_in_menus'
+  | 'added_at'
+  | 'wer'
+
+const LIB_SETTINGS_KEY = 'astt_library_settings_v1'
+const LIB_SORT_DEFAULT_DIR: Record<LibrarySortKey, 'asc' | 'desc'> = {
+  title: 'asc',
+  language: 'asc',
+  duration: 'asc',
+  genre: 'asc',
+  view_count: 'desc',
+  subtitle_languages: 'asc',
+  subtitles: 'desc',
+  audio: 'desc',
+  visible_in_menus: 'desc',
+  added_at: 'desc',
+  wer: 'asc',
+}
+
+function isLibrarySortKey(value: unknown): value is LibrarySortKey {
+  return (
+    value === 'title' ||
+    value === 'language' ||
+    value === 'duration' ||
+    value === 'genre' ||
+    value === 'view_count' ||
+    value === 'subtitle_languages' ||
+    value === 'subtitles' ||
+    value === 'audio' ||
+    value === 'visible_in_menus' ||
+    value === 'added_at' ||
+    value === 'wer'
+  )
+}
+
+function loadLibrarySortSettings(): {
+  sortOrder: LibrarySortKey[]
+  sortDirMap: Record<LibrarySortKey, 'asc' | 'desc'>
+} {
+  try {
+    const raw = window.localStorage.getItem(LIB_SETTINGS_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    const rawOrder = Array.isArray(parsed?.sortOrder) ? parsed.sortOrder : []
+    const sortOrder = rawOrder.filter(isLibrarySortKey)
+    const rawDirMap = parsed?.sortDirMap && typeof parsed.sortDirMap === 'object' ? parsed.sortDirMap : {}
+    const sortDirMap = { ...LIB_SORT_DEFAULT_DIR }
+    for (const key of Object.keys(rawDirMap)) {
+      if (!isLibrarySortKey(key)) continue
+      const dir = rawDirMap[key]
+      if (dir === 'asc' || dir === 'desc') sortDirMap[key] = dir
+    }
+    return { sortOrder: sortOrder.length > 0 ? sortOrder : ['added_at'], sortDirMap }
+  } catch {
+    return { sortOrder: ['added_at'], sortDirMap: { ...LIB_SORT_DEFAULT_DIR } }
+  }
+}
+
+function sortLikeLibraryPage(items: LibraryItem[], werByVideoId: Record<string, number | null> = {}): LibraryItem[] {
+  const { sortOrder, sortDirMap } = loadLibrarySortSettings()
+  return [...items].sort((a, b) => {
+    for (const key of sortOrder) {
+      let va: string | number = ''
+      let vb: string | number = ''
+      if (key === 'title') { va = (a.title || '').toLowerCase(); vb = (b.title || '').toLowerCase() }
+      else if (key === 'language') { va = a.language || ''; vb = b.language || '' }
+      else if (key === 'duration') { va = a.duration_seconds ?? -1; vb = b.duration_seconds ?? -1 }
+      else if (key === 'genre') { va = (a.genre || '').toLowerCase(); vb = (b.genre || '').toLowerCase() }
+      else if (key === 'view_count') { va = a.view_count ?? -1; vb = b.view_count ?? -1 }
+      else if (key === 'subtitle_languages') {
+        va = (a.subtitle_languages || []).join(',').toLowerCase()
+        vb = (b.subtitle_languages || []).join(',').toLowerCase()
+      }
+      else if (key === 'subtitles') { va = a.subtitles_local ? 1 : 0; vb = b.subtitles_local ? 1 : 0 }
+      else if (key === 'audio') { va = a.audio_cached ? 1 : 0; vb = b.audio_cached ? 1 : 0 }
+      else if (key === 'visible_in_menus') { va = a.visible_in_menus !== false ? 1 : 0; vb = b.visible_in_menus !== false ? 1 : 0 }
+      else if (key === 'added_at') { va = a.upload_date ?? a.added_at ?? ''; vb = b.upload_date ?? b.added_at ?? '' }
+      else if (key === 'wer') { va = werByVideoId[a.video_id] ?? 999; vb = werByVideoId[b.video_id] ?? 999 }
+      const cmp = va < vb ? -1 : va > vb ? 1 : 0
+      if (cmp !== 0) return sortDirMap[key] === 'asc' ? cmp : -cmp
+    }
+    return 0
+  })
+}
 
 function computeTrialStatus(
   drop: number | undefined,
@@ -127,6 +274,41 @@ function computeTrialStatus(
   if ((fwMs != null && fwMs > 10000) || q > 3.0) return 'too_slow_for_slot'
   if (d > 0.10 || (rtf ?? 0) > 0.8 || (fwMs != null && fwMs > 5000)) return 'borderline'
   return 'ok'
+}
+
+function dbfsFromLinear(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return -120
+  return Math.max(-120, Math.min(0, 20 * Math.log10(value)))
+}
+
+function computePcmStats(int16: Int16Array): {
+  rmsDbfs: number
+  peakDbfs: number
+  clippingPct: number
+  vadSpeech: boolean
+} {
+  if (int16.length === 0) {
+    return { rmsDbfs: -120, peakDbfs: -120, clippingPct: 0, vadSpeech: false }
+  }
+  let sumSquares = 0
+  let peak = 0
+  let clipped = 0
+  for (let i = 0; i < int16.length; i++) {
+    const abs = Math.abs(int16[i])
+    const normalized = abs / 32768
+    sumSquares += normalized * normalized
+    if (normalized > peak) peak = normalized
+    if (abs >= 32700) clipped += 1
+  }
+  const rmsDbfs = dbfsFromLinear(Math.sqrt(sumSquares / int16.length))
+  const peakDbfs = dbfsFromLinear(peak)
+  const clippingPct = (clipped / int16.length) * 100
+  return {
+    rmsDbfs,
+    peakDbfs,
+    clippingPct,
+    vadSpeech: rmsDbfs > -45 || peakDbfs > -35,
+  }
 }
 
 const WS_BASE = `ws://${window.location.host}`
@@ -236,6 +418,56 @@ const MIC_PARAM_HINTS: Record<string, string> = {
   model_arch: 'Na slabším HW `tiny/small`, `medium` jen pokud drží RTF pod 1.',
 }
 
+const TUNING_PARAM_EFFECT_HINTS: Record<string, TuningParamEffectHint> = {
+  threads: {
+    minus: 'Méně vláken = nižší zátěž PC a často stabilnější běh, ale model může být pomalejší.',
+    plus: 'Více vláken = vyšší šance stíhat realtime, ale po určité hranici může růst režie a nestabilita.',
+  },
+  num_threads: {
+    minus: 'Méně vláken = nižší zátěž PC a často stabilnější běh, ale model může být pomalejší.',
+    plus: 'Více vláken = vyšší šance stíhat realtime, ale po určité hranici může růst režie a nestabilita.',
+  },
+  beam_size: {
+    minus: 'Nižší beam = rychlejší přepis a menší latence, ale může klesnout přesnost.',
+    plus: 'Vyšší beam = může zlepšit přesnost, ale zvyšuje latenci a riziko, že model nestihne online běh.',
+  },
+  best_of: {
+    minus: 'Nižší best_of = rychlejší live běh s menší zátěží.',
+    plus: 'Vyšší best_of = víc výpočtu pro výběr výsledku, obvykle vyšší latence a malý přínos pro live.',
+  },
+  analysis_interval_ms: {
+    minus: 'Kratší interval = častější aktualizace a nižší zpoždění, ale vyšší zátěž a riziko backpressure.',
+    plus: 'Delší interval = menší zátěž a stabilnější běh, ale pomalejší první/nový text.',
+  },
+  analysis_window_seconds: {
+    minus: 'Kratší okno = nižší latence a zátěž, ale méně kontextu pro přesnost.',
+    plus: 'Delší okno = víc kontextu a někdy lepší přesnost, ale vyšší latence a CPU/RAM zátěž.',
+  },
+  input_gain_db: {
+    minus: 'Nižší gain = méně šumu a clippingu, ale tichá řeč může být hůř rozpoznaná.',
+    plus: 'Vyšší gain = pomůže tichému vstupu, ale může přidat šum, clipping a falešnou řeč.',
+  },
+  backpressure_high_s: {
+    minus: 'Nižší mez = dřívější ochrana fronty a menší zpoždění, ale větší riziko dropů.',
+    plus: 'Vyšší mez = méně dropů při pomalém modelu, ale může narůst zpoždění přepisu.',
+  },
+  backpressure_low_s: {
+    minus: 'Nižší návratová mez = rychlejší návrat z backpressure, ale častější kolísání.',
+    plus: 'Vyšší návratová mez = stabilnější hystereze, ale déle trvá návrat do normálního toku.',
+  },
+  sample_rate: {
+    minus: 'Nižší sample rate může snížit zátěž, ale u mic testů se očekává 16 kHz a změna může zhoršit kompatibilitu.',
+    plus: 'Vyšší sample rate obvykle zvyšuje režii bez jasného přínosu pro současné mic modely.',
+  },
+  chunk_seconds: {
+    minus: 'Menší chunk = nižší latence, ale víc overheadu a vyšší riziko nestability na slabším CPU.',
+    plus: 'Větší chunk = stabilnější zpracování a méně overheadu, ale pomalejší reakce přepisu.',
+  },
+}
+
+const TUNING_CUSTOM_RANGE_NO_PARAM_HINT =
+  'Vlastní rozsahy ladění jsou zapnuté, ale není aktivní žádný parametr použitelný pro vybrané modely. V tabulce zaškrtni ve sloupci Zapnout aspoň jeden řádek, kde sloupec Modely ukazuje podporovaný model, nebo klikni Doporučené rozsahy. Pokud je u parametru napsáno, že ho žádný vybraný model nepodporuje, vyber jiný model nebo jiný parametr.'
+
 const SEQUENCE_PARAM_PROFILES: Array<{
   id: SequenceParamProfileId
   label: string
@@ -257,6 +489,24 @@ const SEQUENCE_PARAM_PROFILES: Array<{
     description: 'Vyšší kvalita za cenu latence: delší okno, vyšší beam kde to model podporuje.',
   },
 ]
+
+const TUNING_SWEEP_MODES: Array<{
+  id: TuningSweepMode
+  label: string
+  description: string
+}> = [
+  {
+    id: 'focused',
+    label: 'Úzké doladění',
+    description: 'Baseline + malé kroky kolem dvou nejpravděpodobnějších parametrů.',
+  },
+  {
+    id: 'wide',
+    label: 'Širší ověření',
+    description: 'Přidá ještě bezpečné změny okna/beam/backpressure pro hledání rezervy.',
+  },
+]
+const TUNING_SWEEP_REPEAT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 function buildMicDefaultParams(model?: ModelDescriptor): Record<string, unknown> {
   if (!model) return {}
@@ -344,6 +594,7 @@ type MicUiPersistedState = {
   mobileLoopSyncFirstRound: boolean
   mobileLoopRepeatCount: number
   mobileLoopAutoStop: boolean
+  mobileLoopAutoPlayOnSequenceStart: boolean
   autoModelCycleEnabled: boolean
   autoModelSelectedIds: string[]
   autoModelGraceSeconds: number
@@ -353,6 +604,13 @@ type MicUiPersistedState = {
   sequenceCommonParams: Record<string, unknown>
   sequenceParamProfileLabel: string
   sequenceParamProfileDirty: boolean
+  tuningSweepEnabled: boolean
+  tuningSweepMode: TuningSweepMode
+  tuningSweepStepSize: number
+  tuningSweepRepeatCount: number
+  tuningSweepMaxLagSeconds: number
+  tuningSweepCustomRangesEnabled: boolean
+  tuningSweepRangeConfigs: TuningSweepRangeConfigMap
 }
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -663,6 +921,365 @@ function buildParamsForSequenceProfile(profileId: SequenceParamProfileId, model:
   return values
 }
 
+function normalizeTuningSweepMode(value: unknown): TuningSweepMode {
+  return value === 'wide' ? 'wide' : 'focused'
+}
+
+function normalizeTuningSweepRepeatCount(value: unknown): number {
+  const raw = typeof value === 'number' && Number.isFinite(value) ? value : 5
+  return Math.max(1, Math.min(10, Math.floor(raw) || 5))
+}
+
+function normalizeTuningSweepStepSize(value: unknown): number {
+  const raw = typeof value === 'number' && Number.isFinite(value) ? value : 1
+  return Math.max(0.25, Math.min(4, Math.round(raw * 4) / 4))
+}
+
+function tuningParamSupportsRange(param: ParamSpec): boolean {
+  return param.type === 'int' || param.type === 'float'
+}
+
+function numberParamDefault(param: ParamSpec, fallback = 0): number {
+  return typeof param.default === 'number' && Number.isFinite(param.default)
+    ? param.default
+    : fallback
+}
+
+function decimalPlaces(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  const text = String(value)
+  const dot = text.indexOf('.')
+  return dot >= 0 ? Math.min(6, text.length - dot - 1) : 0
+}
+
+function roundForParam(param: ParamSpec, value: number, step: number): number {
+  if (param.type === 'int') return Math.round(value)
+  const places = Math.max(2, decimalPlaces(step))
+  return Number(value.toFixed(places))
+}
+
+function defaultTuningRangeConfig(param: ParamSpec): TuningSweepRangeConfig {
+  const current = numberParamDefault(param, 0)
+  const min = typeof param.min === 'number' && Number.isFinite(param.min) ? param.min : -999999
+  const max = typeof param.max === 'number' && Number.isFinite(param.max) ? param.max : 999999
+  const clamp = (value: number) => Math.max(min, Math.min(max, value))
+  if (param.name === 'chunk_seconds') return { enabled: true, from: clamp(0.2), to: clamp(0.6), step: 0.05 }
+  if (param.name === 'analysis_interval_ms') return { enabled: true, from: clamp(1000), to: clamp(2200), step: 200 }
+  if (param.name === 'input_gain_db') return { enabled: false, from: clamp(-2), to: clamp(3), step: 1 }
+  if (param.name === 'analysis_window_seconds') return { enabled: false, from: clamp(8), to: clamp(16), step: 2 }
+  if (param.name === 'backpressure_high_s') return { enabled: false, from: clamp(1), to: clamp(2.4), step: 0.2 }
+  if (param.name === 'backpressure_low_s') return { enabled: false, from: clamp(0.3), to: clamp(1), step: 0.1 }
+  if (param.name === 'threads' || param.name === 'num_threads') return { enabled: false, from: clamp(4), to: clamp(8), step: 2 }
+  if (param.name === 'beam_size') return { enabled: false, from: clamp(1), to: clamp(3), step: 1 }
+  const step = param.type === 'int' ? 1 : 0.5
+  return {
+    enabled: false,
+    from: clamp(current - step),
+    to: clamp(current + step),
+    step,
+  }
+}
+
+function normalizeTuningRangeConfig(param: ParamSpec, raw?: Partial<TuningSweepRangeConfig> | null): TuningSweepRangeConfig {
+  const defaults = defaultTuningRangeConfig(param)
+  const min = typeof param.min === 'number' && Number.isFinite(param.min) ? param.min : -999999
+  const max = typeof param.max === 'number' && Number.isFinite(param.max) ? param.max : 999999
+  const clamp = (value: unknown, fallback: number) => {
+    const n = typeof value === 'number' && Number.isFinite(value) ? value : fallback
+    return Math.max(min, Math.min(max, n))
+  }
+  let from = clamp(raw?.from, defaults.from)
+  let to = clamp(raw?.to, defaults.to)
+  if (to < from) [from, to] = [to, from]
+  const rawStep = typeof raw?.step === 'number' && Number.isFinite(raw.step) ? Math.abs(raw.step) : defaults.step
+  const step = Math.max(param.type === 'int' ? 1 : 0.001, rawStep || defaults.step)
+  return {
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : defaults.enabled,
+    from: roundForParam(param, from, step),
+    to: roundForParam(param, to, step),
+    step: roundForParam(param, step, step),
+  }
+}
+
+function normalizeTuningRangeConfigMap(value: unknown): TuningSweepRangeConfigMap {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: TuningSweepRangeConfigMap = {}
+  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const obj = raw as Record<string, unknown>
+    const from = typeof obj.from === 'number' && Number.isFinite(obj.from) ? obj.from : undefined
+    const to = typeof obj.to === 'number' && Number.isFinite(obj.to) ? obj.to : undefined
+    const step = typeof obj.step === 'number' && Number.isFinite(obj.step) ? obj.step : undefined
+    out[name] = {
+      enabled: obj.enabled === true,
+      from: from ?? 0,
+      to: to ?? 0,
+      step: step ?? 1,
+    }
+  }
+  return out
+}
+
+function tuningRangeValues(param: ParamSpec, config: TuningSweepRangeConfig, maxValues = 40): number[] {
+  if (!config.enabled || !tuningParamSupportsRange(param)) return []
+  const normalized = normalizeTuningRangeConfig(param, config)
+  const values: number[] = []
+  const step = Math.max(param.type === 'int' ? 1 : 0.001, Math.abs(normalized.step))
+  for (let value = normalized.from, guard = 0; value <= normalized.to + step / 2 && guard < maxValues; value += step, guard += 1) {
+    const rounded = roundForParam(param, value, step)
+    if (!values.some((existing) => sameParamValue(existing, rounded))) values.push(rounded)
+  }
+  return values
+}
+
+function modelSupportsParam(model: ModelDescriptor, name: string): boolean {
+  return model.params.some((param) => param.name === name)
+}
+
+function tuningNumberParamValue(
+  model: ModelDescriptor,
+  baseline: Record<string, unknown>,
+  name: string,
+  fallback: number,
+): number {
+  const value = baseline[name]
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const spec = model.params.find((param) => param.name === name)
+  return typeof spec?.default === 'number' && Number.isFinite(spec.default) ? spec.default : fallback
+}
+
+function buildTuningVariant(
+  model: ModelDescriptor,
+  baseline: Record<string, unknown>,
+  variantId: string,
+  variantLabel: string,
+  patch: Record<string, unknown>,
+): { variantId: string; variantLabel: string; params: Record<string, unknown>; changedParams: Record<string, unknown> } | null {
+  const params = { ...baseline }
+  const changedParams: Record<string, unknown> = {}
+  for (const [name, value] of Object.entries(patch)) {
+    if (!modelSupportsParam(model, name)) continue
+    const before = params[name]
+    setProfileParam(model, params, name, value)
+    const after = params[name]
+    if (!sameParamValue(before, after)) {
+      changedParams[name] = after
+    }
+  }
+  if (Object.keys(changedParams).length === 0) return null
+  return { variantId, variantLabel, params, changedParams }
+}
+
+function addTuningVariant(
+  variants: Array<{ variantId: string; variantLabel: string; params: Record<string, unknown>; changedParams: Record<string, unknown> }>,
+  seen: Set<string>,
+  model: ModelDescriptor,
+  baseline: Record<string, unknown>,
+  variantId: string,
+  variantLabel: string,
+  patch: Record<string, unknown>,
+) {
+  const variant = buildTuningVariant(model, baseline, variantId, variantLabel, patch)
+  if (!variant) return
+  const signature = JSON.stringify(
+    Object.entries(pickModelSupportedParams(model, variant.params)).sort(([a], [b]) => a.localeCompare(b)),
+  )
+  if (seen.has(signature)) return
+  seen.add(signature)
+  variants.push(variant)
+}
+
+function buildTuningVariantsForModel(
+  model: ModelDescriptor,
+  baseline: Record<string, unknown>,
+  mode: TuningSweepMode,
+  stepSizeRaw: number,
+): Array<{ variantId: string; variantLabel: string; params: Record<string, unknown>; changedParams: Record<string, unknown> }> {
+  const baselineParams = pickModelSupportedParams(model, baseline)
+  const stepSize = normalizeTuningSweepStepSize(stepSizeRaw)
+  const variants: Array<{ variantId: string; variantLabel: string; params: Record<string, unknown>; changedParams: Record<string, unknown> }> = [
+    { variantId: 'baseline', variantLabel: 'Baseline', params: { ...baselineParams }, changedParams: {} },
+  ]
+  const seen = new Set<string>([
+    JSON.stringify(Object.entries(baselineParams).sort(([a], [b]) => a.localeCompare(b))),
+  ])
+  const id = model.model_id.toLowerCase()
+
+  if (id.includes('vosk')) {
+    const chunk = tuningNumberParamValue(model, baselineParams, 'chunk_seconds', 0.4)
+    const gain = tuningNumberParamValue(model, baselineParams, 'input_gain_db', 1)
+    const chunkStep = Number((0.05 * stepSize).toFixed(3))
+    const gainStep = Number((1 * stepSize).toFixed(2))
+    addTuningVariant(variants, seen, model, baselineParams, 'chunk_minus', `chunk -${chunkStep} s`, { chunk_seconds: Number((chunk - chunkStep).toFixed(3)) })
+    addTuningVariant(variants, seen, model, baselineParams, 'chunk_plus', `chunk +${chunkStep} s`, { chunk_seconds: Number((chunk + chunkStep).toFixed(3)) })
+    addTuningVariant(variants, seen, model, baselineParams, 'gain_minus', `gain -${gainStep} dB`, { input_gain_db: Number((gain - gainStep).toFixed(2)) })
+    addTuningVariant(variants, seen, model, baselineParams, 'gain_plus', `gain +${gainStep} dB`, { input_gain_db: Number((gain + gainStep).toFixed(2)) })
+    if (mode === 'wide') {
+      const bpHighStep = Number((0.3 * stepSize).toFixed(2))
+      const bpLowStep = Number((0.1 * stepSize).toFixed(2))
+      addTuningVariant(variants, seen, model, baselineParams, 'bp_plus', `backpressure +${bpHighStep}/+${bpLowStep}`, {
+        backpressure_high_s: Number((tuningNumberParamValue(model, baselineParams, 'backpressure_high_s', 1.4) + bpHighStep).toFixed(2)),
+        backpressure_low_s: Number((tuningNumberParamValue(model, baselineParams, 'backpressure_low_s', 0.5) + bpLowStep).toFixed(2)),
+      })
+    }
+    return variants
+  }
+
+  if (id.includes('whisper')) {
+    const interval = tuningNumberParamValue(model, baselineParams, 'analysis_interval_ms', 2000)
+    const high = tuningNumberParamValue(model, baselineParams, 'backpressure_high_s', 1.8)
+    const low = tuningNumberParamValue(model, baselineParams, 'backpressure_low_s', 0.6)
+    const intervalStep = Math.max(50, Math.round((200 * stepSize) / 50) * 50)
+    const bpHighMinusStep = Number((0.3 * stepSize).toFixed(2))
+    const bpLowMinusStep = Number((0.1 * stepSize).toFixed(2))
+    const bpHighPlusStep = Number((0.4 * stepSize).toFixed(2))
+    const bpLowPlusStep = Number((0.2 * stepSize).toFixed(2))
+    addTuningVariant(variants, seen, model, baselineParams, 'interval_minus', `interval -${intervalStep} ms`, { analysis_interval_ms: interval - intervalStep })
+    addTuningVariant(variants, seen, model, baselineParams, 'interval_plus', `interval +${intervalStep} ms`, { analysis_interval_ms: interval + intervalStep })
+    addTuningVariant(variants, seen, model, baselineParams, 'bp_minus', `backpressure -${bpHighMinusStep}/-${bpLowMinusStep}`, {
+      backpressure_high_s: Number((high - bpHighMinusStep).toFixed(2)),
+      backpressure_low_s: Number((low - bpLowMinusStep).toFixed(2)),
+    })
+    addTuningVariant(variants, seen, model, baselineParams, 'bp_plus', `backpressure +${bpHighPlusStep}/+${bpLowPlusStep}`, {
+      backpressure_high_s: Number((high + bpHighPlusStep).toFixed(2)),
+      backpressure_low_s: Number((low + bpLowPlusStep).toFixed(2)),
+    })
+    if (mode === 'wide') {
+      const windowStep = Math.max(1, Math.round(2 * stepSize))
+      const beamStep = Math.max(1, Math.round(stepSize))
+      const beam = tuningNumberParamValue(model, baselineParams, 'beam_size', 1)
+      addTuningVariant(variants, seen, model, baselineParams, 'window_plus', `okno +${windowStep} s`, {
+        analysis_window_seconds: tuningNumberParamValue(model, baselineParams, 'analysis_window_seconds', 10) + windowStep,
+      })
+      addTuningVariant(variants, seen, model, baselineParams, 'beam_plus', `beam +${beamStep}`, { beam_size: beam + beamStep })
+    }
+    return variants
+  }
+
+  const gain = tuningNumberParamValue(model, baselineParams, 'input_gain_db', 0)
+  const gainStep = Number((1 * stepSize).toFixed(2))
+  addTuningVariant(variants, seen, model, baselineParams, 'gain_minus', `gain -${gainStep} dB`, { input_gain_db: Number((gain - gainStep).toFixed(2)) })
+  addTuningVariant(variants, seen, model, baselineParams, 'gain_plus', `gain +${gainStep} dB`, { input_gain_db: Number((gain + gainStep).toFixed(2)) })
+  if (modelSupportsParam(model, 'analysis_interval_ms')) {
+    const interval = tuningNumberParamValue(model, baselineParams, 'analysis_interval_ms', 1400)
+    const intervalStep = Math.max(50, Math.round((200 * stepSize) / 50) * 50)
+    addTuningVariant(variants, seen, model, baselineParams, 'interval_minus', `interval -${intervalStep} ms`, { analysis_interval_ms: interval - intervalStep })
+    addTuningVariant(variants, seen, model, baselineParams, 'interval_plus', `interval +${intervalStep} ms`, { analysis_interval_ms: interval + intervalStep })
+  }
+  return variants
+}
+
+function buildTuningVariantsFromRangesForModel(
+  model: ModelDescriptor,
+  baseline: Record<string, unknown>,
+  rangeConfigs: TuningSweepRangeConfigMap,
+): Array<{ variantId: string; variantLabel: string; params: Record<string, unknown>; changedParams: Record<string, unknown> }> {
+  const baselineParams = pickModelSupportedParams(model, baseline)
+  const variants: Array<{ variantId: string; variantLabel: string; params: Record<string, unknown>; changedParams: Record<string, unknown> }> = [
+    { variantId: 'baseline', variantLabel: 'Baseline', params: { ...baselineParams }, changedParams: {} },
+  ]
+  const seen = new Set<string>([
+    JSON.stringify(Object.entries(baselineParams).sort(([a], [b]) => a.localeCompare(b))),
+  ])
+
+  for (const [paramName, rawConfig] of Object.entries(rangeConfigs)) {
+    const modelParam = model.params.find((param) => param.name === paramName)
+    if (!modelParam || !tuningParamSupportsRange(modelParam)) continue
+    const config = normalizeTuningRangeConfig(modelParam, rawConfig)
+    if (!config.enabled) continue
+    const values = tuningRangeValues(modelParam, config)
+    for (const value of values) {
+      const before = baselineParams[paramName]
+      if (sameParamValue(before, value)) continue
+      addTuningVariant(
+        variants,
+        seen,
+        model,
+        baselineParams,
+        `range_${paramName}_${formatParamValue(value).replace(/[^a-z0-9_.-]+/gi, '_')}`,
+        `${modelParam.label || paramName} = ${formatParamValue(value)}`,
+        { [paramName]: value },
+      )
+    }
+  }
+
+  return variants
+}
+
+function buildTuningSweepPlan(
+  models: ModelDescriptor[],
+  baselineParamsByModel: Map<string, Record<string, unknown>>,
+  repeatCount: number,
+  mode: TuningSweepMode,
+  stepSizeRaw: number,
+  customRangeConfigs?: TuningSweepRangeConfigMap | null,
+): TuningSweepSlot[] {
+  const repeats = normalizeTuningSweepRepeatCount(repeatCount)
+  const stepSize = normalizeTuningSweepStepSize(stepSizeRaw)
+  const variantsByModel = models.map((model) => ({
+    model,
+    variants: customRangeConfigs
+      ? buildTuningVariantsFromRangesForModel(
+        model,
+        baselineParamsByModel.get(model.model_id) ?? buildMicDefaultParams(model),
+        customRangeConfigs,
+      )
+      : buildTuningVariantsForModel(
+        model,
+        baselineParamsByModel.get(model.model_id) ?? buildMicDefaultParams(model),
+        mode,
+        stepSize,
+      ),
+  }))
+  const maxVariants = Math.max(0, ...variantsByModel.map((item) => item.variants.length))
+  const slots: TuningSweepSlot[] = []
+  for (let repeatIndex = 1; repeatIndex <= repeats; repeatIndex += 1) {
+    for (let variantIndex = 0; variantIndex < maxVariants; variantIndex += 1) {
+      for (const { model, variants } of variantsByModel) {
+        const variant = variants[variantIndex]
+        if (!variant) continue
+        slots.push({
+          slotIndex: 0,
+          slotTotal: 0,
+          modelId: model.model_id,
+          variantId: `${model.model_id}:${variant.variantId}`,
+          variantLabel: variant.variantLabel,
+          repeatIndex,
+          repeatTotal: repeats,
+          mode,
+          stepSize,
+          params: { ...variant.params },
+          baselineParams: pickModelSupportedParams(model, baselineParamsByModel.get(model.model_id) ?? buildMicDefaultParams(model)),
+          changedParams: { ...variant.changedParams },
+        })
+      }
+    }
+  }
+  return slots.map((slot, index) => ({ ...slot, slotIndex: index, slotTotal: slots.length }))
+}
+
+function buildTuningSlotPayload(
+  slot: TuningSweepSlot | null | undefined,
+  seriesId: string | null | undefined,
+  maxLagS: number | null | undefined,
+): Record<string, unknown> {
+  if (!slot) return {}
+  return {
+    tuning_series_id: seriesId ?? null,
+    tuning_mode: slot.mode,
+    tuning_step_size: slot.stepSize,
+    tuning_slot_index: slot.slotIndex + 1,
+    tuning_slot_total: slot.slotTotal,
+    tuning_variant_id: slot.variantId,
+    tuning_variant_label: slot.variantLabel,
+    tuning_repeat_index: slot.repeatIndex,
+    tuning_repeat_total: slot.repeatTotal,
+    tuning_changed_params: slot.changedParams,
+    tuning_baseline_params: slot.baselineParams,
+    tuning_max_lag_s: maxLagS ?? null,
+  }
+}
+
 function formatParamValue(value: unknown): string {
   if (value == null || value === '') return '—'
   if (typeof value === 'boolean') return value ? 'ano' : 'ne'
@@ -673,6 +1290,48 @@ function formatParamValue(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+function formatRecommendedTuningValues(
+  param: ParamSpec,
+  supportedModels: ModelDescriptor[],
+  recommendedParamsByModel: Map<string, Record<string, unknown>>,
+): string {
+  if (supportedModels.length === 0) return 'žádný vybraný model parametr nepodporuje'
+  const entries = supportedModels.map((model) => {
+    const recommendedParams = recommendedParamsByModel.get(model.model_id)
+    const modelParam = model.params.find((p) => p.name === param.name)
+    const value = recommendedParams && Object.prototype.hasOwnProperty.call(recommendedParams, param.name)
+      ? recommendedParams[param.name]
+      : modelParam?.default ?? param.default
+    return {
+      label: model.label,
+      valueText: formatParamValue(value),
+    }
+  })
+  const uniqueValues = new Set(entries.map((entry) => entry.valueText))
+  if (uniqueValues.size === 1) {
+    return `všechny podporované vybrané modely: ${entries[0]?.valueText ?? '—'}`
+  }
+  const visible = entries.slice(0, 6).map((entry) => `${entry.label}: ${entry.valueText}`)
+  const suffix = entries.length > visible.length ? `; +${entries.length - visible.length} modelů` : ''
+  return `${visible.join('; ')}${suffix}`
+}
+
+function buildTuningRangeParamTooltip(
+  param: ParamSpec,
+  supportedModels: ModelDescriptor[],
+  recommendedParamsByModel: Map<string, Record<string, unknown>>,
+): string {
+  const effect = TUNING_PARAM_EFFECT_HINTS[param.name]
+  return [
+    `${param.label} (${param.name})`,
+    param.description ? `Popis: ${param.description}` : '',
+    MIC_PARAM_HINTS[param.name] ? `Doporučení: ${MIC_PARAM_HINTS[param.name]}` : '',
+    `Výchozí doporučené: ${formatRecommendedTuningValues(param, supportedModels, recommendedParamsByModel)}`,
+    `Mínus: ${effect?.minus ?? 'nižší testovaná hodnota; konkrétní dopad ověř v sérii testů.'}`,
+    `Plus: ${effect?.plus ?? 'vyšší testovaná hodnota; konkrétní dopad ověř v sérii testů.'}`,
+  ].filter(Boolean).join('\n')
 }
 
 function formatParamsSummary(params?: Record<string, unknown> | null, maxItems = 6): string {
@@ -694,6 +1353,84 @@ function formatConclusionModels(models?: MicSequenceConclusionModel[]): string {
     if (model.reason_code) parts.push(String(model.reason_code))
     return `${prefix}${id}${parts.length > 0 ? ` (${parts.join(', ')})` : ''}`
   }).join(', ')
+}
+
+type TuningSweepSummaryRow = {
+  key: string
+  modelId: string
+  variantLabel: string
+  changedParams: Record<string, unknown>
+  count: number
+  repeatTotal: number | null
+  avgRtf: number | null
+  avgDropRate: number | null
+  avgFirstWordMs: number | null
+  avgQueuePeakS: number | null
+  failCount: number
+  score: number | null
+  verdict: string
+}
+
+function averageFinite(values: Array<number | null | undefined>): number | null {
+  const finite = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (finite.length === 0) return null
+  return finite.reduce((sum, value) => sum + value, 0) / finite.length
+}
+
+function buildTuningSweepSummaryRows(trials: MicSequenceTrial[]): TuningSweepSummaryRow[] {
+  const groups = new Map<string, MicSequenceTrial[]>()
+  for (const trial of trials) {
+    if (!trial.tuning_variant_id && !trial.tuning_series_id) continue
+    const key = `${trial.model_id}::${trial.tuning_variant_id ?? trial.tuning_variant_label ?? 'unknown'}`
+    groups.set(key, [...(groups.get(key) ?? []), trial])
+  }
+  const rows: TuningSweepSummaryRow[] = []
+  for (const [key, group] of groups.entries()) {
+    const first = group[0]
+    const avgRtf = averageFinite(group.map((trial) => trial.rtf))
+    const avgDropRate = averageFinite(group.map((trial) => trial.drop_rate))
+    const avgFirstWordMs = averageFinite(group.map((trial) => trial.first_word_wall_ms))
+    const avgQueuePeakS = averageFinite(group.map((trial) => trial.queue_depth_peak_s))
+    const failCount = group.filter((trial) => trial.trial_status === 'fail' || trial.trial_status === 'too_slow_for_slot').length
+    const repeatTotal = typeof first.tuning_repeat_total === 'number' ? first.tuning_repeat_total : null
+    const maxLagS = typeof first.tuning_max_lag_s === 'number' ? first.tuning_max_lag_s : null
+    const lagLimitExceeded = maxLagS != null && avgFirstWordMs != null && avgFirstWordMs > maxLagS * 1000
+    const score = avgRtf == null && avgDropRate == null && avgFirstWordMs == null && avgQueuePeakS == null
+      ? null
+      : (avgRtf ?? 1.5) * 2
+        + (avgDropRate ?? 0.2) * 10
+        + (avgFirstWordMs ?? 12000) / 12000
+        + (avgQueuePeakS ?? 2) / 3
+        + failCount * 2
+    const incomplete = repeatTotal != null && group.length < repeatTotal
+    const verdict = incomplete
+      ? `neúplné ${group.length}/${repeatTotal}`
+      : lagLimitExceeded
+        ? `zpoždění > ${maxLagS}s`
+        : failCount > 0 || (avgDropRate ?? 0) > 0.1 || (avgRtf ?? 0) > 1.0
+        ? 'nestabilní'
+        : 'kandidát'
+    rows.push({
+      key,
+      modelId: first.model_id,
+      variantLabel: first.tuning_variant_label || first.tuning_variant_id || '—',
+      changedParams: first.tuning_changed_params ?? {},
+      count: group.length,
+      repeatTotal,
+      avgRtf,
+      avgDropRate,
+      avgFirstWordMs,
+      avgQueuePeakS,
+      failCount,
+      score,
+      verdict,
+    })
+  }
+  return rows.sort((a, b) => {
+    const byModel = a.modelId.localeCompare(b.modelId, 'cs')
+    if (byModel !== 0) return byModel
+    return (a.score ?? Number.POSITIVE_INFINITY) - (b.score ?? Number.POSITIVE_INFINITY)
+  })
 }
 
 function sameParamValue(a: unknown, b: unknown): boolean {
@@ -866,6 +1603,30 @@ export function MicSession({ availableModels, library }: Props) {
   const [sequenceParamProfileDirty, setSequenceParamProfileDirty] = useState(
     typeof persistedUi.sequenceParamProfileDirty === 'boolean' ? persistedUi.sequenceParamProfileDirty : false,
   )
+  const [tuningSweepEnabled, setTuningSweepEnabled] = useState(
+    typeof persistedUi.tuningSweepEnabled === 'boolean' ? persistedUi.tuningSweepEnabled : false,
+  )
+  const [tuningSweepMode, setTuningSweepMode] = useState<TuningSweepMode>(
+    normalizeTuningSweepMode(persistedUi.tuningSweepMode),
+  )
+  const [tuningSweepStepSize, setTuningSweepStepSize] = useState(
+    normalizeTuningSweepStepSize(persistedUi.tuningSweepStepSize),
+  )
+  const [tuningSweepRepeatCount, setTuningSweepRepeatCount] = useState(
+    normalizeTuningSweepRepeatCount(asFiniteNumberOr(persistedUi.tuningSweepRepeatCount, 5)),
+  )
+  const [tuningSweepMaxLagSeconds, setTuningSweepMaxLagSeconds] = useState(
+    Math.max(1, Math.min(60, asFiniteNumberOr(persistedUi.tuningSweepMaxLagSeconds, 15))),
+  )
+  const [tuningSweepCustomRangesEnabled, setTuningSweepCustomRangesEnabled] = useState(
+    typeof persistedUi.tuningSweepCustomRangesEnabled === 'boolean' ? persistedUi.tuningSweepCustomRangesEnabled : false,
+  )
+  const [tuningSweepRangeConfigs, setTuningSweepRangeConfigs] = useState<TuningSweepRangeConfigMap>(
+    () => normalizeTuningRangeConfigMap(persistedUi.tuningSweepRangeConfigs),
+  )
+  const [tuningSweepActive, setTuningSweepActive] = useState(false)
+  const [tuningSweepSeriesId, setTuningSweepSeriesId] = useState<string | null>(null)
+  const [tuningSweepPlan, setTuningSweepPlan] = useState<TuningSweepSlot[]>([])
   const [autoModelCycleEnabled, setAutoModelCycleEnabled] = useState(
     typeof persistedUi.autoModelCycleEnabled === 'boolean' ? persistedUi.autoModelCycleEnabled : false,
   )
@@ -886,8 +1647,10 @@ export function MicSession({ availableModels, library }: Props) {
   const [status, setStatus] = useState<Status>('idle')
   const [transcript, setTranscript] = useState('')
   const [metrics, setMetrics] = useState<MicMetrics | null>(null)
+  const [micInputProof, setMicInputProof] = useState<MicInputProof | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [devices, setDevices] = useState<AudioDevice[]>([])
+  const [libraryWerByVideoId, setLibraryWerByVideoId] = useState<Record<string, number | null>>({})
   const [deviceIndex, setDeviceIndex] = useState<number | null>(
     typeof persistedUi.deviceIndex === 'number' && Number.isFinite(persistedUi.deviceIndex)
       ? Math.trunc(persistedUi.deviceIndex)
@@ -942,13 +1705,21 @@ export function MicSession({ availableModels, library }: Props) {
   const [mobileLoopAutoStop, setMobileLoopAutoStop] = useState(
     typeof persistedUi.mobileLoopAutoStop === 'boolean' ? persistedUi.mobileLoopAutoStop : true,
   )
+  const [mobileLoopAutoPlayOnSequenceStart, setMobileLoopAutoPlayOnSequenceStart] = useState(
+    typeof persistedUi.mobileLoopAutoPlayOnSequenceStart === 'boolean'
+      ? persistedUi.mobileLoopAutoPlayOnSequenceStart
+      : true,
+  )
   const [mobileLoopPackage, setMobileLoopPackage] = useState<MicMobileLoopPackageResponse | null>(null)
   const [mobileLoopPackageLoading, setMobileLoopPackageLoading] = useState(false)
   const [mobileLoopPackageError, setMobileLoopPackageError] = useState<string | null>(null)
+  const [mobileLoopAudioPlaying, setMobileLoopAudioPlaying] = useState(false)
+  const [mobileLoopAudioStatus, setMobileLoopAudioStatus] = useState<string | null>(null)
   const [mobileLoopHistory, setMobileLoopHistory] = useState<MicMobileLoopPackageListItem[]>([])
   const [mobileLoopHistoryLoading, setMobileLoopHistoryLoading] = useState(false)
   const [mobileLoopHistoryError, setMobileLoopHistoryError] = useState<string | null>(null)
   const [mobileLoopHistoryDeletingId, setMobileLoopHistoryDeletingId] = useState<string | null>(null)
+  const [mobileLoopPairingCodeInput, setMobileLoopPairingCodeInput] = useState('')
   const [showAllMobileLoopHistory, setShowAllMobileLoopHistory] = useState(false)
   const [expandedMobileLoopPackageIds, setExpandedMobileLoopPackageIds] = useState<string[]>([])
   const [recordingStartedAtPerfMs, setRecordingStartedAtPerfMs] = useState<number | null>(null)
@@ -990,6 +1761,8 @@ export function MicSession({ availableModels, library }: Props) {
   const activeSessionCommonParamsRef = useRef<Record<string, unknown>>({})
   const activeSessionParamProfileRef = useRef<string | null>(null)
   const autoModelSequenceTokenRef = useRef<string | null>(null)
+  const tuningSweepPlanRef = useRef<TuningSweepSlot[]>([])
+  const tuningSweepSeriesIdRef = useRef<string | null>(null)
   const autoModelAdvanceLockRef = useRef(false)
   const autoModelAdvanceTimerRef = useRef<number | null>(null)
   const autoModelRetryCountRef = useRef(0)
@@ -998,23 +1771,27 @@ export function MicSession({ availableModels, library }: Props) {
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const workletNodeRef = useRef<AudioWorkletNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const mobileLoopAudioRef = useRef<HTMLAudioElement | null>(null)
+  const mobileLoopPackageRef = useRef<MicMobileLoopPackageResponse | null>(null)
+  const micInputProofRef = useRef<MicInputProof | null>(null)
+  const micInputProofUiUpdatedAtRef = useRef(0)
 
   const selectedModel = availableModels.find(m => m.model_id === modelId)
   const referenceLibrary = useMemo(
     () =>
-      (library ?? [])
-        .filter(v => !!v.video_id && v.visible_in_menus !== false)
-        // Stejné základní řazení jako v knihovně: newest (upload/added) nahoře.
-        .sort((a, b) => {
-          const aKey = String(a.upload_date ?? a.added_at ?? '')
-          const bKey = String(b.upload_date ?? b.added_at ?? '')
-          const byDateDesc = bKey.localeCompare(aKey, 'cs')
-          if (byDateDesc !== 0) return byDateDesc
-          return videoLabel(a.title, a.video_id).localeCompare(videoLabel(b.title, b.video_id), 'cs')
-        }),
-    [library],
+      sortLikeLibraryPage(
+        (library ?? []).filter(v => !!v.video_id && v.visible_in_menus !== false),
+        libraryWerByVideoId,
+      ),
+    [library, libraryWerByVideoId],
   )
   const selectedReferenceVideo = referenceLibrary.find(v => v.video_id === referenceVideoId)
+  const selectedAudioDevice = deviceIndex !== null
+    ? devices.find(d => d.index === deviceIndex) ?? devices[deviceIndex] ?? null
+    : null
+  const selectedMicDeviceLabel = selectedAudioDevice
+    ? selectedAudioDevice.name
+    : 'výchozí mikrofon'
   const selectedModelRecommendedParams = useMemo(
     () => buildMicDefaultParams(selectedModel),
     [selectedModel],
@@ -1040,6 +1817,22 @@ export function MicSession({ availableModels, library }: Props) {
   const loopCycleS = Math.max(1, loopSpeechS + loopPauseS)
   const loopTotalRounds = loopSyncRounds + loopRepeatCount
   const loopPlanS = loopCycleS * loopTotalRounds
+  const mobileLoopPackageMatchesPlan = useCallback((pkg: MicMobileLoopPackageResponse | null) => {
+    if (!pkg || !referenceVideoId) return false
+    const sameNumber = (a: number, b: number, tolerance = 0.01) => Math.abs(a - b) <= tolerance
+    return (
+      pkg.video_id === referenceVideoId
+      && sameNumber(pkg.clip_from_s, clipFromS)
+      && sameNumber(pkg.clip_to_s, clipToS)
+      && sameNumber(pkg.pause_s, loopPauseS)
+      && pkg.measured_rounds === loopRepeatCount
+      && pkg.sync_rounds === loopSyncRounds
+    )
+  }, [referenceVideoId, clipFromS, clipToS, loopPauseS, loopRepeatCount, loopSyncRounds])
+  const mobileLoopPackageMatchesCurrentPlan = useMemo(
+    () => mobileLoopPackageMatchesPlan(mobileLoopPackage),
+    [mobileLoopPackageMatchesPlan, mobileLoopPackage],
+  )
   const autoModelLeadStartSeconds = 2.5
   const autoModelPreparationSeconds = 10
   const autoModelHardTrialBaseSeconds = Math.min(65, loopCaptureSpeechS + 5)
@@ -1053,7 +1846,52 @@ export function MicSession({ availableModels, library }: Props) {
   )
   const autoModelSlotSeconds = loopCycleS
   const effectiveTrialPlanS = autoModelSequenceActive ? loopCycleS : loopPlanS + loopAudioStartDelayS
-  const uiLocked = status === 'recording' || status === 'connecting' || status === 'stopping' || autoModelSequenceActive
+  const uiLocked = status === 'recording' || status === 'connecting' || status === 'stopping' || autoModelSequenceActive || tuningSweepActive
+
+  const resetMicInputProof = useCallback((deviceLabel: string) => {
+    const empty: MicInputProof = {
+      device_label: deviceLabel,
+      sample_rate: SAMPLE_RATE,
+      chunk_count: 0,
+      audio_payload_bytes: 0,
+      ws_payload_bytes: 0,
+      rms_dbfs: null,
+      peak_dbfs: null,
+      clipping_pct: 0,
+      vad_speech: false,
+      silence_ms: 0,
+      last_chunk_age_ms: null,
+    }
+    micInputProofRef.current = empty
+    micInputProofUiUpdatedAtRef.current = 0
+    setMicInputProof(empty)
+  }, [])
+
+  const recordMicAudioChunk = useCallback((int16: Int16Array, wsPayloadBytes: number, captureTsMs: number) => {
+    const prev = micInputProofRef.current
+    if (!prev) return
+    const stats = computePcmStats(int16)
+    const chunkDurationMs = (int16.length / SAMPLE_RATE) * 1000
+    const next: MicInputProof = {
+      ...prev,
+      chunk_count: prev.chunk_count + 1,
+      audio_payload_bytes: prev.audio_payload_bytes + int16.byteLength,
+      ws_payload_bytes: prev.ws_payload_bytes + wsPayloadBytes,
+      rms_dbfs: stats.rmsDbfs,
+      peak_dbfs: stats.peakDbfs,
+      clipping_pct: stats.clippingPct,
+      vad_speech: stats.vadSpeech,
+      silence_ms: stats.vadSpeech ? 0 : prev.silence_ms + chunkDurationMs,
+      last_chunk_age_ms: Math.max(0, performance.timeOrigin + performance.now() - captureTsMs),
+    }
+    micInputProofRef.current = next
+    const now = performance.now()
+    if (now - micInputProofUiUpdatedAtRef.current >= 200) {
+      micInputProofUiUpdatedAtRef.current = now
+      setMicInputProof(next)
+    }
+  }, [])
+
   const autoModelSelectedOrdered = useMemo(
     () => autoModelSelectedIds.filter((id) => availableModels.some((m) => m.model_id === id)),
     [autoModelSelectedIds, availableModels],
@@ -1112,6 +1950,72 @@ export function MicSession({ availableModels, library }: Props) {
     }
     return map
   }, [sequenceMatrixModels, persistedParamsByModel, sequenceCommonParamsEnabled, sequenceCommonParams])
+  const tuningSweepRangeParamSpecs = useMemo(
+    () => sequenceCommonParamSpecs.filter(tuningParamSupportsRange),
+    [sequenceCommonParamSpecs],
+  )
+  const tuningSweepRangeRows = useMemo(() => (
+    tuningSweepRangeParamSpecs.map((param) => {
+      const config = normalizeTuningRangeConfig(param, tuningSweepRangeConfigs[param.name])
+      const supportedModels = sequenceMatrixModels.filter((m) => modelSupportsParam(m, param.name))
+      return {
+        param,
+        config,
+        values: tuningRangeValues(param, config),
+        supportedModels,
+        tooltip: buildTuningRangeParamTooltip(param, supportedModels, recommendedMatrixParamsByModel),
+      }
+    })
+  ), [tuningSweepRangeParamSpecs, tuningSweepRangeConfigs, sequenceMatrixModels, recommendedMatrixParamsByModel])
+  const tuningSweepEnabledRangeCount = tuningSweepRangeRows.filter((row) => row.config.enabled && row.supportedModels.length > 0).length
+  const tuningSweepCustomRangeConfigForPlan = useMemo(() => {
+    if (!tuningSweepCustomRangesEnabled) return null
+    const configs: TuningSweepRangeConfigMap = {}
+    for (const row of tuningSweepRangeRows) {
+      configs[row.param.name] = row.config
+    }
+    return configs
+  }, [tuningSweepCustomRangesEnabled, tuningSweepRangeRows])
+  const tuningSweepPreviewPlan = useMemo(
+    () => buildTuningSweepPlan(
+      sequenceMatrixModels,
+      effectiveMatrixParamsByModel,
+      tuningSweepRepeatCount,
+      tuningSweepMode,
+      tuningSweepStepSize,
+      tuningSweepCustomRangeConfigForPlan,
+    ),
+    [
+      sequenceMatrixModels,
+      effectiveMatrixParamsByModel,
+      tuningSweepRepeatCount,
+      tuningSweepMode,
+      tuningSweepStepSize,
+      tuningSweepCustomRangeConfigForPlan,
+    ],
+  )
+  const tuningSweepVariantPreview = useMemo(() => {
+    const seen = new Set<string>()
+    const rows: TuningSweepSlot[] = []
+    for (const slot of tuningSweepPreviewPlan) {
+      const key = `${slot.modelId}:${slot.variantId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push(slot)
+      if (rows.length >= 12) break
+    }
+    return rows
+  }, [tuningSweepPreviewPlan])
+  const tuningSweepEstimatedSeconds = tuningSweepPreviewPlan.length * autoModelSlotSeconds
+  const plannedAudioPackageTrialCount = useMemo(() => {
+    if (!autoModelCycleEnabled) return 1
+    if (tuningSweepEnabled) return Math.max(1, tuningSweepPreviewPlan.length)
+    return Math.max(1, autoModelSelectedOrdered.length)
+  }, [autoModelCycleEnabled, tuningSweepEnabled, tuningSweepPreviewPlan.length, autoModelSelectedOrdered.length])
+  const tuningSweepReportRows = useMemo(
+    () => buildTuningSweepSummaryRows(seqReport?.trials ?? []),
+    [seqReport],
+  )
   const seqReportProfileLabel = useMemo(() => {
     const profiles = Array.from(new Set(
       (seqReport?.trials ?? [])
@@ -1149,6 +2053,37 @@ export function MicSession({ availableModels, library }: Props) {
     const newTo = Math.max(clipFromS + 1, clipFromS + duration)
     setReferenceClipToS(newTo)
   }, [durationAnchor, clipFromS, clipToS])
+
+  const updateTuningRangeConfig = useCallback((paramName: string, patch: Partial<TuningSweepRangeConfig>) => {
+    const param = tuningSweepRangeParamSpecs.find((item) => item.name === paramName)
+    if (!param) return
+    setTuningSweepRangeConfigs((prev) => {
+      const current = normalizeTuningRangeConfig(param, prev[paramName])
+      return {
+        ...prev,
+        [paramName]: normalizeTuningRangeConfig(param, { ...current, ...patch }),
+      }
+    })
+  }, [tuningSweepRangeParamSpecs])
+
+  const applyRecommendedTuningRanges = useCallback(() => {
+    const next: TuningSweepRangeConfigMap = {}
+    for (const param of tuningSweepRangeParamSpecs) {
+      next[param.name] = defaultTuningRangeConfig(param)
+    }
+    setTuningSweepRangeConfigs(next)
+    setTuningSweepCustomRangesEnabled(true)
+  }, [tuningSweepRangeParamSpecs])
+
+  const disableAllTuningRanges = useCallback(() => {
+    setTuningSweepRangeConfigs((prev) => {
+      const next: TuningSweepRangeConfigMap = {}
+      for (const param of tuningSweepRangeParamSpecs) {
+        next[param.name] = normalizeTuningRangeConfig(param, { ...(prev[param.name] ?? {}), enabled: false })
+      }
+      return next
+    })
+  }, [tuningSweepRangeParamSpecs])
 
   const loopRuntime = useMemo(() => {
     const elapsed = Math.max(0, recordingElapsedS)
@@ -1200,6 +2135,7 @@ export function MicSession({ availableModels, library }: Props) {
     const anchorPerf = clientSequenceAnchorAtPerfMsRef.current
     const clientGlobalTimelineMs = anchorPerf == null ? 0 : Math.max(0, performance.now() - anchorPerf)
     const clientRunId = clientSequenceRunIdRef.current ?? (token ? `run_client_${token}` : null)
+    const tuningSlot = typeof sequenceIndex === 'number' ? tuningSweepPlanRef.current[sequenceIndex] : null
     return {
       run_id: clientRunId,
       sequence_id: token,
@@ -1229,11 +2165,21 @@ export function MicSession({ availableModels, library }: Props) {
       mobile_loop_measured_rounds: loopRepeatCount,
       mobile_loop_total_rounds: loopTotalRounds,
       mobile_loop_auto_stop: mobileLoopAutoStop,
-      mobile_loop_package_id: mobileLoopEnabled ? (mobileLoopPackage?.package_id ?? null) : null,
-      mobile_loop_audio_start_source: mobileLoopEnabled ? 'external_mobile_loop' : 'none',
-      mobile_loop_audio_start_known: mobileLoopEnabled ? loopAudioStartDelayS > 0 : false,
+      mobile_loop_auto_play_on_sequence_start: mobileLoopAutoPlayOnSequenceStart,
+      mobile_loop_package_id: mobileLoopEnabled ? (mobileLoopPackageRef.current?.package_id ?? null) : null,
+      mobile_loop_pairing_code: mobileLoopEnabled ? (mobileLoopPackageRef.current?.pairing_code ?? null) : null,
+      mobile_loop_audio_start_source: mobileLoopEnabled
+        ? (mobileLoopAutoPlayOnSequenceStart ? 'browser_audio_plan' : 'external_mobile_loop')
+        : 'none',
+      mobile_loop_audio_start_known: mobileLoopEnabled
+        ? (mobileLoopAutoPlayOnSequenceStart || loopAudioStartDelayS > 0)
+        : false,
       mobile_loop_audio_start_expected: mobileLoopEnabled
-        ? (loopAudioStartDelayS > 0 ? 'manual_offset_after_start_sequence' : 'manual_start_together_with_start_sequence')
+        ? (
+          mobileLoopAutoPlayOnSequenceStart
+            ? 'browser_audio_plan_on_start_sequence'
+            : (loopAudioStartDelayS > 0 ? 'manual_offset_after_start_sequence' : 'manual_start_together_with_start_sequence')
+        )
         : 'not_applicable',
       auto_model_sequence_lead_start_s: autoModelLeadStartSeconds,
       auto_model_sequence_preparation_s: autoModelPreparationSeconds,
@@ -1249,6 +2195,20 @@ export function MicSession({ availableModels, library }: Props) {
       auto_model_sequence_adaptive_max_cut_s: autoModelAdaptiveMaxCutSeconds,
       sequence_common_params_enabled: sequenceCommonParamsEnabled,
       sequence_param_profile: effectiveSequenceParamProfileLabel || null,
+      tuning_custom_ranges_enabled: tuningSweepCustomRangesEnabled,
+      tuning_custom_range_params: tuningSweepCustomRangesEnabled
+        ? tuningSweepRangeRows
+          .filter((row) => row.config.enabled && row.supportedModels.length > 0)
+          .map((row) => ({
+            param: row.param.name,
+            from: row.config.from,
+            to: row.config.to,
+            step: row.config.step,
+            values: row.values,
+            supported_models: row.supportedModels.map((m) => m.model_id),
+          }))
+        : [],
+      ...buildTuningSlotPayload(tuningSlot, tuningSweepSeriesIdRef.current, tuningSweepMaxLagSeconds),
     }
   }, [
     testMode,
@@ -1270,7 +2230,7 @@ export function MicSession({ availableModels, library }: Props) {
     loopRepeatCount,
     loopTotalRounds,
     mobileLoopAutoStop,
-    mobileLoopPackage,
+    mobileLoopAutoPlayOnSequenceStart,
     autoModelLeadStartSeconds,
     autoModelPreparationSeconds,
     autoModelHardTrialBaseSeconds,
@@ -1284,6 +2244,9 @@ export function MicSession({ availableModels, library }: Props) {
     autoModelAdaptiveMaxCutSeconds,
     sequenceCommonParamsEnabled,
     effectiveSequenceParamProfileLabel,
+    tuningSweepCustomRangesEnabled,
+    tuningSweepRangeRows,
+    tuningSweepMaxLagSeconds,
   ])
   const applyMobileLoopAudioStartDelay = useCallback((
     rawDelayS: number,
@@ -1503,6 +2466,7 @@ export function MicSession({ availableModels, library }: Props) {
           const sequenceParamProfile = typeof metrics.sequence_param_profile === 'string'
             ? metrics.sequence_param_profile
             : null
+          const tuningChangedParams = asObjectRecord(metrics.tuning_changed_params)
           return [{
             record_id: r.record_id,
             saved_at: r.saved_at,
@@ -1512,6 +2476,7 @@ export function MicSession({ availableModels, library }: Props) {
               : '—',
             mic_test_mode: mode,
             transcript: r.transcript || '',
+            transcript_source: typeof metrics.transcript_source === 'string' ? metrics.transcript_source : null,
             note: r.note || '',
             quality_assessment: r.quality_assessment || '',
             source: r.source || '',
@@ -1544,6 +2509,13 @@ export function MicSession({ availableModels, library }: Props) {
               : null,
             sequence_common_params_used: commonParamsUsed ? { ...commonParamsUsed } : null,
             sequence_param_profile: sequenceParamProfile,
+            tuning_series_id: typeof metrics.tuning_series_id === 'string' ? metrics.tuning_series_id : null,
+            tuning_variant_id: typeof metrics.tuning_variant_id === 'string' ? metrics.tuning_variant_id : null,
+            tuning_variant_label: typeof metrics.tuning_variant_label === 'string' ? metrics.tuning_variant_label : null,
+            tuning_step_size: asFiniteNumber(metrics.tuning_step_size) ?? null,
+            tuning_repeat_index: asFiniteNumber(metrics.tuning_repeat_index) ?? null,
+            tuning_repeat_total: asFiniteNumber(metrics.tuning_repeat_total) ?? null,
+            tuning_changed_params: tuningChangedParams ? { ...tuningChangedParams } : null,
           }]
         } catch (e) {
           console.error('[loadSavedHistory] chyba při mapování záznamu', r.record_id, e)
@@ -1586,12 +2558,40 @@ export function MicSession({ availableModels, library }: Props) {
   }, [availableModels, selectedModel, paramsByModel])
 
   useEffect(() => {
+    const visible = (library ?? []).filter(v => !!v.video_id && v.visible_in_menus !== false)
+    const { sortOrder } = loadLibrarySortSettings()
+    if (!sortOrder.includes('wer') || visible.length === 0) {
+      setLibraryWerByVideoId({})
+      return
+    }
+    let cancelled = false
+    Promise.all(
+      visible.map(async (item) => {
+        try {
+          const results = await api.library.latestResults(item.video_id)
+          return [item.video_id, typeof results?.[0]?.wer === 'number' ? results[0].wer : null] as const
+        } catch {
+          return [item.video_id, null] as const
+        }
+      }),
+    ).then((rows) => {
+      if (cancelled) return
+      setLibraryWerByVideoId(Object.fromEntries(rows))
+    })
+    return () => { cancelled = true }
+  }, [library])
+
+  useEffect(() => {
     setAutoModelSelectedIds((prev) => {
       const valid = prev.filter((id) => availableModels.some((m) => m.model_id === id))
       if (valid.length > 0) return valid
       return modelId ? [modelId] : []
     })
   }, [availableModels, modelId])
+
+  useEffect(() => {
+    mobileLoopPackageRef.current = mobileLoopPackage
+  }, [mobileLoopPackage])
 
   useEffect(() => {
     if (!modelId) return
@@ -1618,6 +2618,7 @@ export function MicSession({ availableModels, library }: Props) {
       mobileLoopSyncFirstRound,
       mobileLoopRepeatCount,
       mobileLoopAutoStop,
+      mobileLoopAutoPlayOnSequenceStart,
       autoModelCycleEnabled,
       autoModelSelectedIds,
       autoModelGraceSeconds,
@@ -1627,6 +2628,13 @@ export function MicSession({ availableModels, library }: Props) {
       sequenceCommonParams,
       sequenceParamProfileLabel,
       sequenceParamProfileDirty,
+      tuningSweepEnabled,
+      tuningSweepMode,
+      tuningSweepStepSize,
+      tuningSweepRepeatCount,
+      tuningSweepMaxLagSeconds,
+      tuningSweepCustomRangesEnabled,
+      tuningSweepRangeConfigs,
     }
     writeMicUiState(payload)
   }, [
@@ -1651,6 +2659,7 @@ export function MicSession({ availableModels, library }: Props) {
     mobileLoopSyncFirstRound,
     mobileLoopRepeatCount,
     mobileLoopAutoStop,
+    mobileLoopAutoPlayOnSequenceStart,
     autoModelCycleEnabled,
     autoModelSelectedIds,
     autoModelGraceSeconds,
@@ -1660,6 +2669,13 @@ export function MicSession({ availableModels, library }: Props) {
     sequenceCommonParams,
     sequenceParamProfileLabel,
     sequenceParamProfileDirty,
+    tuningSweepEnabled,
+    tuningSweepMode,
+    tuningSweepStepSize,
+    tuningSweepRepeatCount,
+    tuningSweepMaxLagSeconds,
+    tuningSweepCustomRangesEnabled,
+    tuningSweepRangeConfigs,
   ])
 
   // Načti dostupná audio zařízení
@@ -1707,9 +2723,13 @@ export function MicSession({ availableModels, library }: Props) {
   }, [seqReportToken, autoModelSequenceActive, status])
 
   useEffect(() => {
-    setMobileLoopPackage(null)
+    setMobileLoopPackage((current) => {
+      if (!current || mobileLoopPackageMatchesPlan(current)) return current
+      mobileLoopPackageRef.current = null
+      return null
+    })
     setMobileLoopPackageError(null)
-  }, [referenceVideoId, clipFromS, clipToS, loopPauseS, loopRepeatCount, mobileLoopSyncFirstRound])
+  }, [mobileLoopPackageMatchesPlan])
 
   const visibleHistory = useMemo(() => {
     const filtered = savedResults.filter((row) => {
@@ -1799,16 +2819,21 @@ export function MicSession({ availableModels, library }: Props) {
     { key: 'drop_rate', label: 'Drop' },
   ]
 
-  const createMobileLoopPackage = useCallback(async () => {
+  const createMobileLoopPackage = useCallback(async (options: { repeatCount?: number } = {}) => {
     setMobileLoopPackageError(null)
+    mobileLoopPackageRef.current = null
     setMobileLoopPackage(null)
+    const requestedRepeatCount = Math.max(
+      1,
+      Math.min(200, Math.floor(options.repeatCount ?? loopRepeatCount) || 1),
+    )
     if (!referenceVideoId) {
       setMobileLoopPackageError('Nejprve vyber video z knihovny.')
-      return
+      return null
     }
     if (clipToS <= clipFromS) {
       setMobileLoopPackageError("Neplatná pasáž: 'do' musí být větší než 'od'.")
-      return
+      return null
     }
     setMobileLoopPackageLoading(true)
     try {
@@ -1817,12 +2842,14 @@ export function MicSession({ availableModels, library }: Props) {
         clip_from_s: clipFromS,
         clip_to_s: clipToS,
         pause_s: loopPauseS,
-        repeat_count: loopRepeatCount,
+        repeat_count: requestedRepeatCount,
         include_sync_round: mobileLoopSyncFirstRound,
       })
+      mobileLoopPackageRef.current = result
       setMobileLoopPackage(result)
       setShowAllMobileLoopHistory(false)
       await loadMobileLoopHistory()
+      return result
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       if (message.includes('/mic/mobile-loop-packages') && message.includes('405')) {
@@ -1836,6 +2863,7 @@ export function MicSession({ availableModels, library }: Props) {
       } else {
         setMobileLoopPackageError(message)
       }
+      return null
     } finally {
       setMobileLoopPackageLoading(false)
     }
@@ -1848,6 +2876,18 @@ export function MicSession({ availableModels, library }: Props) {
     mobileLoopSyncFirstRound,
     loadMobileLoopHistory,
   ])
+
+  const createMobileLoopPackageForCurrentTest = useCallback(async () => {
+    if (plannedAudioPackageTrialCount > 200) {
+      setMobileLoopPackageError(
+        `Plán testu má ${plannedAudioPackageTrialCount} trialů, ale mobilní balíček podporuje nejvýše 200 měřených kol.`,
+      )
+      return null
+    }
+    setMobileLoopEnabled(true)
+    setMobileLoopRepeatCount(plannedAudioPackageTrialCount)
+    return createMobileLoopPackage({ repeatCount: plannedAudioPackageTrialCount })
+  }, [createMobileLoopPackage, plannedAudioPackageTrialCount])
 
   function toggleMobileLoopPackageDetails(packageId: string) {
     setExpandedMobileLoopPackageIds((prev) => (
@@ -1866,8 +2906,10 @@ export function MicSession({ availableModels, library }: Props) {
     setMobileLoopPauseSeconds(Math.max(0, pkg.pause_s))
     setMobileLoopRepeatCount(Math.max(1, pkg.measured_rounds))
     setMobileLoopSyncFirstRound(pkg.sync_rounds > 0)
+    setMobileLoopPairingCodeInput(pkg.pairing_code || '')
     setMobileLoopPackage({
       package_id: pkg.package_id,
+      pairing_code: pkg.pairing_code,
       created_at: pkg.created_at,
       video_id: pkg.video_id,
       video_title: pkg.video_title,
@@ -1884,8 +2926,172 @@ export function MicSession({ availableModels, library }: Props) {
       instructions: pkg.instructions,
       reference_excerpt: pkg.reference_excerpt,
     })
+    mobileLoopPackageRef.current = {
+      package_id: pkg.package_id,
+      pairing_code: pkg.pairing_code,
+      created_at: pkg.created_at,
+      video_id: pkg.video_id,
+      video_title: pkg.video_title,
+      clip_from_s: pkg.clip_from_s,
+      clip_to_s: pkg.clip_to_s,
+      clip_duration_s: pkg.clip_duration_s,
+      pause_s: pkg.pause_s,
+      measured_rounds: pkg.measured_rounds,
+      sync_rounds: pkg.sync_rounds,
+      total_rounds: pkg.total_rounds,
+      total_duration_s: pkg.total_duration_s,
+      wav_url: pkg.wav_url,
+      download_url: pkg.download_url,
+      instructions: pkg.instructions,
+      reference_excerpt: pkg.reference_excerpt,
+    }
     setMobileLoopPackageError(null)
   }
+
+  function normalizeMobileLoopPairingCode(value: string) {
+    const trimmed = value.trim()
+    const packageIdMatch = trimmed.match(/loop_([A-Za-z0-9]{6})-/)
+    if (packageIdMatch) return packageIdMatch[1]
+    const directMatch = trimmed.match(/^([A-Za-z0-9]{6})(?:-\d+x)?$/)
+    if (directMatch) return directMatch[1]
+    return trimmed.replace(/[^A-Za-z0-9]/g, '').slice(0, 6)
+  }
+
+  async function applyMobileLoopPackageByPairingCode() {
+    const code = normalizeMobileLoopPairingCode(mobileLoopPairingCodeInput)
+    if (code.length !== 6) {
+      setMobileLoopHistoryError('Zadej 6místný párovací kód balíčku, např. aB3dE9.')
+      return
+    }
+
+    setMobileLoopHistoryError(null)
+    let packages = mobileLoopHistory
+    let match = packages.find((pkg) => pkg.pairing_code === code)
+
+    if (!match) {
+      setMobileLoopHistoryLoading(true)
+      try {
+        const response = await api.mic.listMobileLoopPackages({ limit: 500 })
+        packages = response.packages
+        setMobileLoopHistory(packages)
+        match = packages.find((pkg) => pkg.pairing_code === code)
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        setMobileLoopHistoryError(`Načtení balíčků selhalo: ${message}`)
+        return
+      } finally {
+        setMobileLoopHistoryLoading(false)
+      }
+    }
+
+    if (!match) {
+      setMobileLoopHistoryError(`Balíček s kódem ${code} není v historii.`)
+      return
+    }
+
+    setMobileLoopPairingCodeInput(code)
+    applyMobileLoopPackageToForm(match)
+  }
+
+  const stopMobileLoopAudioPlayback = useCallback((message = 'Audio zastaveno.') => {
+    const audio = mobileLoopAudioRef.current
+    if (audio) {
+      try { audio.pause() } catch {}
+      try { audio.currentTime = 0 } catch {}
+      audio.onended = null
+      audio.onerror = null
+    }
+    mobileLoopAudioRef.current = null
+    setMobileLoopAudioPlaying(false)
+    setMobileLoopAudioStatus(message)
+  }, [])
+
+  const ensureCurrentMobileLoopPackage = useCallback(async () => {
+    const currentPackage = mobileLoopPackageRef.current
+    if (currentPackage && mobileLoopPackageMatchesPlan(currentPackage)) return currentPackage
+    return createMobileLoopPackage()
+  }, [createMobileLoopPackage, mobileLoopPackageMatchesPlan])
+
+  const playMobileLoopAudioPlan = useCallback(async (source: 'manual' | 'sequence_start' = 'manual') => {
+    if (!mobileLoopEnabled) {
+      setMobileLoopAudioStatus('Audio loop není zapnutý.')
+      return null
+    }
+    if (!referenceVideoId) {
+      setMobileLoopAudioStatus('Nejprve vyber referenční video.')
+      return null
+    }
+    setMobileLoopAudioStatus('Připravuji audio plán...')
+    const pkg = await ensureCurrentMobileLoopPackage()
+    if (!pkg) {
+      setMobileLoopAudioStatus('Audio plán se nepodařilo připravit.')
+      return null
+    }
+
+    const previousAudio = mobileLoopAudioRef.current
+    if (previousAudio) {
+      try { previousAudio.pause() } catch {}
+      previousAudio.onended = null
+      previousAudio.onerror = null
+    }
+
+    const audio = new Audio(pkg.wav_url)
+    audio.preload = 'auto'
+    mobileLoopAudioRef.current = audio
+    audio.onended = () => {
+      if (mobileLoopAudioRef.current === audio) {
+        mobileLoopAudioRef.current = null
+        setMobileLoopAudioPlaying(false)
+        setMobileLoopAudioStatus('Audio plán dohrál.')
+      }
+    }
+    audio.onerror = () => {
+      if (mobileLoopAudioRef.current === audio) {
+        mobileLoopAudioRef.current = null
+        setMobileLoopAudioPlaying(false)
+      }
+      setMobileLoopAudioStatus('Přehrání audio plánu selhalo.')
+    }
+
+    try {
+      await audio.play()
+      setMobileLoopAudioPlaying(true)
+      setMobileLoopAudioStatus(source === 'sequence_start'
+        ? 'Audio plán spuštěn při Start sekvenci.'
+        : 'Audio plán se přehrává.')
+      logSequenceEvent('client_mobile_loop_audio_play_started', {
+        source,
+        package_id: pkg.package_id,
+        pairing_code: pkg.pairing_code ?? null,
+        wav_url: pkg.wav_url,
+        reference_video_id: referenceVideoId,
+        clip_from_s: clipFromS,
+        clip_to_s: clipToS,
+        pause_s: loopPauseS,
+        measured_rounds: loopRepeatCount,
+        sync_rounds: loopSyncRounds,
+      })
+      return pkg
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      if (mobileLoopAudioRef.current === audio) {
+        mobileLoopAudioRef.current = null
+      }
+      setMobileLoopAudioPlaying(false)
+      setMobileLoopAudioStatus(`Přehrání zablokováno nebo selhalo: ${message}`)
+      return null
+    }
+  }, [
+    mobileLoopEnabled,
+    referenceVideoId,
+    ensureCurrentMobileLoopPackage,
+    logSequenceEvent,
+    clipFromS,
+    clipToS,
+    loopPauseS,
+    loopRepeatCount,
+    loopSyncRounds,
+  ])
 
   async function deleteMobileLoopPackage(packageId: string) {
     const ok = window.confirm(`Opravdu smazat balíček ${packageId}?`)
@@ -1898,6 +3104,7 @@ export function MicSession({ availableModels, library }: Props) {
       setMobileLoopHistory((prev) => prev.filter((row) => row.package_id !== packageId))
       setExpandedMobileLoopPackageIds((prev) => prev.filter((id) => id !== packageId))
       if (mobileLoopPackage?.package_id === packageId) {
+        mobileLoopPackageRef.current = null
         setMobileLoopPackage(null)
       }
     } catch (e) {
@@ -1938,11 +3145,24 @@ export function MicSession({ availableModels, library }: Props) {
     saveGuardRef.current.add(sessionId)
 
     const loopCfg = activeSessionLoopConfigRef.current
+    const finalTranscriptText = typeof finalMsg.text === 'string' ? finalMsg.text : ''
+    const proof = micInputProofRef.current
     const metrics: Record<string, unknown> = {
       mic_session_id: sessionId,
       mic_test_mode: testMode,
+      transcript_source: finalTranscriptText.trim() ? 'mic_ws_final' : 'none',
       reference_label: referenceLabel,
       reference_text: referenceText,
+      mic_input_device_label: proof?.device_label ?? selectedMicDeviceLabel,
+      mic_input_sample_rate: proof?.sample_rate ?? SAMPLE_RATE,
+      mic_input_chunk_count: proof?.chunk_count ?? 0,
+      mic_input_audio_payload_bytes: proof?.audio_payload_bytes ?? 0,
+      mic_input_ws_payload_bytes: proof?.ws_payload_bytes ?? 0,
+      mic_input_rms_dbfs: proof?.rms_dbfs ?? null,
+      mic_input_peak_dbfs: proof?.peak_dbfs ?? null,
+      mic_input_clipping_pct: proof?.clipping_pct ?? null,
+      mic_input_vad_speech: proof?.vad_speech ?? false,
+      mic_input_silence_ms: proof?.silence_ms ?? null,
       model_params_used: activeSessionModelParamsRef.current,
       sequence_common_params_enabled: sequenceCommonParamsEnabled,
       sequence_common_params_used: activeSessionCommonParamsRef.current,
@@ -1956,10 +3176,16 @@ export function MicSession({ availableModels, library }: Props) {
       mobile_loop_sync_first_round: loopCfg.syncFirstRound,
       mobile_loop_measured_rounds: loopCfg.measuredRounds,
       mobile_loop_autostop: loopCfg.autoStop,
+      mobile_loop_auto_play_on_sequence_start: mobileLoopAutoPlayOnSequenceStart,
       mobile_loop_package_id: loopCfg.packageId,
       auto_model_sequence_token: autoSequenceMeta?.sequence_token ?? null,
       auto_model_sequence_index: autoSequenceMeta ? autoSequenceMeta.sequence_index + 1 : null,
       auto_model_sequence_total: autoSequenceMeta?.sequence_total ?? null,
+      ...buildTuningSlotPayload(
+        autoSequenceMeta?.tuning_slot,
+        autoSequenceMeta?.tuning_series_id ?? tuningSweepSeriesIdRef.current,
+        tuningSweepMaxLagSeconds,
+      ),
       mic_orchestrator_mode: orchestratorMode,
       run_id: finalMsg.run_id,
       sequence_id: finalMsg.sequence_id,
@@ -1993,6 +3219,9 @@ export function MicSession({ availableModels, library }: Props) {
     const noteWithSequence = autoSequenceMeta
       ? `${noteWithOrchestrator} | seq=${autoSequenceMeta.sequence_index + 1}/${autoSequenceMeta.sequence_total}`
       : noteWithOrchestrator
+    const noteWithTuning = autoSequenceMeta?.tuning_slot
+      ? `${noteWithSequence} | tune=${autoSequenceMeta.tuning_slot.variantLabel} ${autoSequenceMeta.tuning_slot.repeatIndex}/${autoSequenceMeta.tuning_slot.repeatTotal}`
+      : noteWithSequence
     const rtfVal = typeof finalMsg.rtf === 'number' ? finalMsg.rtf : null
     const dropVal = typeof finalMsg.drop_rate === 'number' ? finalMsg.drop_rate : null
     const hasError = typeof finalMsg.error === 'string' && finalMsg.error.trim().length > 0
@@ -2005,9 +3234,9 @@ export function MicSession({ availableModels, library }: Props) {
       const saved = await api.mic.saveManualRecord({
         model_id: modelIdForSession,
         metrics,
-        note: noteWithSequence,
+        note: noteWithTuning,
         quality_assessment: quality,
-        transcript: String(finalMsg.text ?? transcript ?? ''),
+        transcript: finalTranscriptText,
         source: source ?? 'web_mic_auto',
       })
       if (autoSequenceMeta) {
@@ -2029,6 +3258,11 @@ export function MicSession({ availableModels, library }: Props) {
             rtf: finalMsg.rtf,
             drop_rate: finalMsg.drop_rate,
             elapsed_s: finalMsg.elapsed_s,
+            ...buildTuningSlotPayload(
+              autoSequenceMeta.tuning_slot,
+              autoSequenceMeta.tuning_series_id ?? tuningSweepSeriesIdRef.current,
+              tuningSweepMaxLagSeconds,
+            ),
             ui_message: `Uloženo ${savedCount}/${autoSequenceMeta.sequence_total} (${saved.record_id}).`,
           })
           // Fetch sequence report po každém uloženém trialu
@@ -2049,17 +3283,22 @@ export function MicSession({ availableModels, library }: Props) {
   const startSession = useCallback(async (modelOverrideId?: string, autoSequenceMeta?: AutoModelSequenceMeta | null) => {
     const activeModelId = modelOverrideId ?? modelId
     const activeModel = availableModels.find((m) => m.model_id === activeModelId)
-    const activeSavedParams = modelOverrideId ? paramsByModel[activeModelId] : params
-    const activeParams = buildMicParamsWithCommon(
-      activeModel,
-      activeSavedParams,
-      sequenceCommonParamsEnabled,
-      sequenceCommonParams,
-    )
+    const tuningSlot = autoSequenceMeta?.tuning_slot ?? null
+    const activeSavedParams = tuningSlot?.params ?? (modelOverrideId ? paramsByModel[activeModelId] : params)
+    const activeParams = tuningSlot
+      ? buildMicParamsWithSaved(activeModel, activeSavedParams)
+      : buildMicParamsWithCommon(
+        activeModel,
+        activeSavedParams,
+        sequenceCommonParamsEnabled,
+        sequenceCommonParams,
+      )
 
     setError(null)
     setTranscript('')
     setMetrics(null)
+    setMicInputProof(null)
+    micInputProofRef.current = null
     setSaveMsg(null)
     setRecordingElapsedS(0)
     setRecordingStartedAtPerfMs(null)
@@ -2096,7 +3335,9 @@ export function MicSession({ availableModels, library }: Props) {
       const activeCommonParamsUsed = sequenceCommonParamsEnabled
         ? pickModelSupportedParams(activeModel, sequenceCommonParams)
         : {}
-      const activeParamProfile = effectiveSequenceParamProfileLabel || null
+      const activeParamProfile = tuningSlot
+        ? `${effectiveSequenceParamProfileLabel || 'Ruční nastavení'} | ladění: ${tuningSlot.variantLabel}`
+        : effectiveSequenceParamProfileLabel || null
       activeSessionModelParamsRef.current = activeModelParamsUsed
       activeSessionCommonParamsRef.current = activeCommonParamsUsed
       activeSessionParamProfileRef.current = activeParamProfile
@@ -2104,9 +3345,19 @@ export function MicSession({ availableModels, library }: Props) {
       sessionParams.sequence_common_params_enabled = sequenceCommonParamsEnabled
       sessionParams.sequence_common_params_used = activeCommonParamsUsed
       sessionParams.sequence_param_profile = activeParamProfile
+      if (tuningSlot) {
+        Object.assign(
+          sessionParams,
+          buildTuningSlotPayload(
+            tuningSlot,
+            autoSequenceMeta?.tuning_series_id ?? tuningSweepSeriesIdRef.current,
+            tuningSweepMaxLagSeconds,
+          ),
+        )
+      }
       const activeLoopSyncFirstRound = mobileLoopEnabled ? (autoSequenceMeta ? false : mobileLoopSyncFirstRound) : null
       const activeLoopMeasuredRounds = mobileLoopEnabled ? (autoSequenceMeta ? 1 : loopRepeatCount) : null
-      const activeLoopPackageId = mobileLoopEnabled ? (mobileLoopPackage?.package_id ?? null) : null
+      const activeLoopPackageId = mobileLoopEnabled ? (mobileLoopPackageRef.current?.package_id ?? null) : null
       if (mobileLoopEnabled) {
         sessionParams.mobile_loop_enabled = true
         sessionParams.mobile_loop_speech_s = loopSpeechS
@@ -2117,9 +3368,12 @@ export function MicSession({ availableModels, library }: Props) {
         sessionParams.mobile_loop_sync_first_round = activeLoopSyncFirstRound
         sessionParams.mobile_loop_measured_rounds = activeLoopMeasuredRounds
         sessionParams.mobile_loop_auto_stop = mobileLoopAutoStop
+        sessionParams.mobile_loop_auto_play_on_sequence_start = mobileLoopAutoPlayOnSequenceStart
         sessionParams.mobile_loop_package_id = activeLoopPackageId
-        sessionParams.mobile_loop_audio_start_source = 'external_mobile_loop'
-        sessionParams.mobile_loop_audio_start_known = loopAudioStartDelayS > 0
+        sessionParams.mobile_loop_audio_start_source = mobileLoopAutoPlayOnSequenceStart
+          ? 'browser_audio_plan'
+          : 'external_mobile_loop'
+        sessionParams.mobile_loop_audio_start_known = mobileLoopAutoPlayOnSequenceStart || loopAudioStartDelayS > 0
       }
       if (autoSequenceMeta) {
         const sequenceQueue = autoSequenceMeta.queue_model_ids ?? autoModelSequenceIds
@@ -2237,7 +3491,7 @@ export function MicSession({ availableModels, library }: Props) {
         void persistWebMicResult({
           sessionId: session_id,
           finalMsg: {
-            text: currentTranscriptTextRef.current || '',
+            text: '',
             elapsed_s: estimateTrialElapsedS(),
             reason_code: failureReason,
             error: failureError,
@@ -2266,7 +3520,7 @@ export function MicSession({ availableModels, library }: Props) {
             && !Array.isArray(session.sequence_timing)
           ) ? session.sequence_timing : undefined
           const sessionFinal = asObjectRecord(session.final)
-          const sessionTranscript = String(sessionFinal?.text ?? session.transcript ?? currentTranscriptTextRef.current ?? '')
+          const sessionTranscript = typeof sessionFinal?.text === 'string' ? sessionFinal.text : ''
           if (sequenceTiming) parts.push('sequence_timing=logged')
           const reasonCode = session.reason_code || 'ws_transport_error'
           const reasonError = session.error || prefix
@@ -2478,12 +3732,14 @@ export function MicSession({ availableModels, library }: Props) {
 
       // 3. Otevři mikrofon
       const constraints: MediaStreamConstraints = {
-        audio: deviceIndex !== null
-          ? { deviceId: { exact: devices[deviceIndex]?.name } }
+        audio: selectedAudioDevice
+          ? { deviceId: { exact: selectedAudioDevice.name } }
           : true,
       }
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
       streamRef.current = stream
+      const streamTrackLabel = stream.getAudioTracks()[0]?.label || selectedMicDeviceLabel
+      resetMicInputProof(streamTrackLabel)
       stream.getTracks().forEach((track) => {
         track.onended = () => {
           setError('Mikrofon byl odpojen nebo zakázán.')
@@ -2535,7 +3791,9 @@ export function MicSession({ availableModels, library }: Props) {
             if (ws.readyState !== WebSocket.OPEN || !(ev.data instanceof ArrayBuffer)) return
             const int16 = new Int16Array(ev.data)
             const captureTsMs = performance.timeOrigin + performance.now()
-            ws.send(_buildFramedPcmPayload(int16, captureTsMs))
+            const payload = _buildFramedPcmPayload(int16, captureTsMs)
+            ws.send(payload)
+            recordMicAudioChunk(int16, payload.byteLength, captureTsMs)
           }
           workletNodeRef.current = worklet
           source.connect(worklet)
@@ -2557,7 +3815,9 @@ export function MicSession({ availableModels, library }: Props) {
           int16[i] = v < 0 ? Math.round(v * 32768) : Math.round(v * 32767)
         }
         const captureTsMs = performance.timeOrigin + performance.now()
-        ws.send(_buildFramedPcmPayload(int16, captureTsMs))
+        const payload = _buildFramedPcmPayload(int16, captureTsMs)
+        ws.send(payload)
+        recordMicAudioChunk(int16, payload.byteLength, captureTsMs)
       }
       source.connect(processor)
       processor.connect(audioCtx.destination)
@@ -2593,6 +3853,7 @@ export function MicSession({ availableModels, library }: Props) {
     mobileLoopSyncFirstRound,
     loopRepeatCount,
     mobileLoopAutoStop,
+    mobileLoopAutoPlayOnSequenceStart,
     loopCycleS,
     effectiveTrialPlanS,
     autoModelSequenceIds,
@@ -2608,10 +3869,15 @@ export function MicSession({ availableModels, library }: Props) {
     autoModelSlotSeconds,
     autoModelLatencyGuardSeconds,
     autoModelAdaptiveMaxCutSeconds,
+    tuningSweepMaxLagSeconds,
     orchestratorMode,
     selectedReferenceTextId,
     selectedReferenceText,
     referenceTexts,
+    selectedAudioDevice,
+    selectedMicDeviceLabel,
+    resetMicInputProof,
+    recordMicAudioChunk,
     logSequenceEvent,
     buildSequencePlanPayload,
     persistWebMicResult,
@@ -2626,6 +3892,11 @@ export function MicSession({ availableModels, library }: Props) {
   }
 
   const start = useCallback(async () => {
+    if (tuningSweepEnabled && !autoModelCycleEnabled) {
+      setError('Pro automatické ladění zapni Auto střídání STT modelů.')
+      setStatus('error')
+      return
+    }
     if (autoModelCycleEnabled) {
       const selectedModelIds = autoModelSelectedOrdered
       if (selectedModelIds.length === 0) {
@@ -2633,9 +3904,36 @@ export function MicSession({ availableModels, library }: Props) {
         setStatus('error')
         return
       }
-      const queue = [...selectedModelIds]
+      const sweepPlan = tuningSweepEnabled ? tuningSweepPreviewPlan : []
+      if (tuningSweepEnabled && sweepPlan.length === 0) {
+        setError('Pro automatické ladění není sestaven žádný slot. Vyber alespoň jeden podporovaný model.')
+        setStatus('error')
+        return
+      }
+      if (tuningSweepEnabled && tuningSweepCustomRangesEnabled && tuningSweepEnabledRangeCount === 0) {
+        setError(TUNING_CUSTOM_RANGE_NO_PARAM_HINT)
+        setStatus('error')
+        return
+      }
+      const shouldAutoPlayLoop = (
+        mobileLoopAutoPlayOnSequenceStart
+        && mobileLoopEnabled
+        && testMode === 'reference_video'
+      )
+      if (shouldAutoPlayLoop) {
+        const preparedPackage = await ensureCurrentMobileLoopPackage()
+        if (!preparedPackage) {
+          setError('Audio plán se nepodařilo připravit. Zkontroluj referenční video a zkus Přehrát audio plán.')
+          setStatus('error')
+          return
+        }
+      }
+      const queue = tuningSweepEnabled ? sweepPlan.map((slot) => slot.modelId) : [...selectedModelIds]
       const token = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`
+      const tuningSeriesId = tuningSweepEnabled ? `tune_${token}` : null
       autoModelSequenceTokenRef.current = token
+      tuningSweepSeriesIdRef.current = tuningSeriesId
+      tuningSweepPlanRef.current = tuningSweepEnabled ? sweepPlan : []
       clientSequenceRunIdRef.current = `run_client_${token}`
       clientSequenceAnchorAtPerfMsRef.current = performance.now()
       sequenceAnchorAtPerfMsRef.current = null
@@ -2648,17 +3946,32 @@ export function MicSession({ availableModels, library }: Props) {
       setSeqReport(null)
       setSeqReportToken(token)
       setAutoModelSequenceActive(true)
+      setTuningSweepActive(tuningSweepEnabled)
+      setTuningSweepSeriesId(tuningSeriesId)
+      setTuningSweepPlan(tuningSweepEnabled ? sweepPlan : [])
 
       const firstModelId = queue[0]
       const firstModel = availableModels.find((m) => m.model_id === firstModelId)
+      const firstTuningSlot = tuningSweepEnabled ? sweepPlan[0] : null
       setModelId(firstModelId)
-      setParams(buildMicParamsWithSaved(firstModel, paramsByModel[firstModelId]))
-      const firstMsg = `Auto sekvence: model 1/${queue.length} (${firstModelId}).`
+      setParams(firstTuningSlot?.params ?? buildMicParamsWithSaved(firstModel, paramsByModel[firstModelId]))
+      const audioRoundWarning = tuningSweepEnabled && mobileLoopEnabled && loopRepeatCount < queue.length
+        ? ` Pozor: audio loop má v UI ${loopRepeatCount} měřených kol, plán má ${queue.length} trialů.`
+        : ''
+      const firstMsg = tuningSweepEnabled
+        ? `Ladění parametrů: trial 1/${queue.length} (${firstModelId}, ${firstTuningSlot?.variantLabel ?? 'baseline'}).${audioRoundWarning}`
+        : `Auto sekvence: model 1/${queue.length} (${firstModelId}).`
       setSaveMsg(firstMsg)
       logSequenceEvent('client_sequence_started', {
         ...buildSequencePlanPayload(token, queue, selectedModelIds, 0, firstModelId),
         ui_message: firstMsg,
       })
+      if (tuningSweepEnabled) {
+        logSequenceEvent('client_tuning_sweep_started', {
+          ...buildSequencePlanPayload(token, queue, selectedModelIds, 0, firstModelId),
+          ui_message: firstMsg,
+        })
+      }
       logSequenceEvent('client_sequence_trial_start_requested', {
         ...buildSequencePlanPayload(token, queue, selectedModelIds, 0, firstModelId),
         ui_message: firstMsg,
@@ -2669,16 +3982,36 @@ export function MicSession({ availableModels, library }: Props) {
         sequence_total: queue.length,
         queue_model_ids: queue,
         selected_model_ids: selectedModelIds,
+        tuning_series_id: tuningSeriesId,
+        tuning_slot: firstTuningSlot,
       })
+      if (shouldAutoPlayLoop) {
+        void playMobileLoopAudioPlan('sequence_start')
+      }
       return
     }
 
+    tuningSweepPlanRef.current = []
+    tuningSweepSeriesIdRef.current = null
+    setTuningSweepActive(false)
+    setTuningSweepSeriesId(null)
+    setTuningSweepPlan([])
     await startSession()
   }, [
     autoModelCycleEnabled,
     availableModels,
     autoModelSelectedOrdered,
     paramsByModel,
+    tuningSweepEnabled,
+    tuningSweepPreviewPlan,
+    tuningSweepCustomRangesEnabled,
+    tuningSweepEnabledRangeCount,
+    mobileLoopEnabled,
+    mobileLoopAutoPlayOnSequenceStart,
+    loopRepeatCount,
+    testMode,
+    ensureCurrentMobileLoopPackage,
+    playMobileLoopAudioPlan,
     logSequenceEvent,
     buildSequencePlanPayload,
     startSession,
@@ -2687,6 +4020,7 @@ export function MicSession({ availableModels, library }: Props) {
   const stopAutoModelSequence = useCallback((note = 'Auto sekvence zastavena.', clientReason = 'stopped') => {
     const token = autoModelSequenceTokenRef.current
     if (token) {
+      const tuningActive = tuningSweepPlanRef.current.length > 0 || Boolean(tuningSweepSeriesIdRef.current)
       logSequenceEvent(clientReason === 'completed' ? 'client_sequence_completed' : 'client_sequence_stopped', {
         sequence_token: token,
         sequence_index: autoModelSequenceIndex + 1,
@@ -2694,9 +4028,23 @@ export function MicSession({ availableModels, library }: Props) {
         saved_count: autoModelSavedSlotsRef.current.size,
         ui_message: note,
         client_reason: clientReason,
+        tuning_series_id: tuningSweepSeriesIdRef.current,
+        tuning_active: tuningActive,
       })
+      if (tuningActive) {
+        logSequenceEvent(clientReason === 'completed' ? 'client_tuning_sweep_completed' : 'client_tuning_sweep_stopped', {
+          sequence_token: token,
+          sequence_total: autoModelSequenceIds.length || null,
+          saved_count: autoModelSavedSlotsRef.current.size,
+          tuning_series_id: tuningSweepSeriesIdRef.current,
+          ui_message: note,
+          client_reason: clientReason,
+        })
+      }
     }
     autoModelSequenceTokenRef.current = null
+    tuningSweepPlanRef.current = []
+    tuningSweepSeriesIdRef.current = null
     clientSequenceRunIdRef.current = null
     clientSequenceAnchorAtPerfMsRef.current = null
     autoModelAdvanceLockRef.current = false
@@ -2733,9 +4081,20 @@ export function MicSession({ availableModels, library }: Props) {
     setAutoModelSequenceIds([])
     setAutoModelSequenceIndex(0)
     setAutoModelSavedCount(0)
+    setTuningSweepActive(false)
+    setTuningSweepSeriesId(null)
+    setTuningSweepPlan([])
     autoModelSavedSlotsRef.current.clear()
     setSaveMsg(note)
-  }, [autoModelSequenceIds.length, autoModelSequenceIndex, logSequenceEvent])
+    if (clientReason === 'completed' || clientReason === 'user_stop' || clientReason === 'stopped') {
+      stopMobileLoopAudioPlayback(clientReason === 'completed' ? 'Audio zastaveno po dokončení sekvence.' : 'Audio zastaveno se sekvencí.')
+    }
+  }, [
+    autoModelSequenceIds.length,
+    autoModelSequenceIndex,
+    logSequenceEvent,
+    stopMobileLoopAudioPlayback,
+  ])
 
   const requestTrialStop = useCallback((note?: string, stopContext: Record<string, unknown> = {}) => {
     if (note) setSaveMsg(note)
@@ -2758,6 +4117,12 @@ export function MicSession({ availableModels, library }: Props) {
         autoModelSilenceStopSeconds,
         activeAudioStartDelayS + loopSpeechS * autoModelSilenceMinAudioFraction,
       )
+    const activeTuningSlot = tuningSweepPlanRef.current[autoModelSequenceIndex] ?? null
+    const activeTuningPayload = buildTuningSlotPayload(
+      activeTuningSlot,
+      tuningSweepSeriesIdRef.current,
+      tuningSweepMaxLagSeconds,
+    )
     const runtimeStopContext = {
       mobile_loop_audio_start_delay_s: activeAudioStartDelayS,
       mobile_loop_audio_start_known: activeAudioStartDelayS != null && activeAudioStartDelayS > 0,
@@ -2780,6 +4145,7 @@ export function MicSession({ availableModels, library }: Props) {
         ui_message: note ?? null,
         client_stop_elapsed_s: trialElapsedS,
         ...runtimeStopContext,
+        ...activeTuningPayload,
         ...stopContext,
       })
     }
@@ -2790,6 +4156,7 @@ export function MicSession({ availableModels, library }: Props) {
         client_stop_note: note ?? null,
         client_stop_elapsed_s: trialElapsedS,
         ...runtimeStopContext,
+        ...activeTuningPayload,
         ...stopContext,
       }))
     }
@@ -2806,16 +4173,18 @@ export function MicSession({ availableModels, library }: Props) {
     logSequenceEvent,
     loopSpeechS,
     modelId,
+    tuningSweepMaxLagSeconds,
   ])
 
   const stop = useCallback(() => {
     if (autoModelSequenceActive) {
       requestTrialStop('Auto sekvence zastavena uživatelem.', { client_stop_reason: 'user_stop' })
       stopAutoModelSequence('Auto sekvence zastavena uživatelem.', 'user_stop')
+      stopMobileLoopAudioPlayback('Audio zastaveno uživatelem.')
       return
     }
     requestTrialStop()
-  }, [autoModelSequenceActive, stopAutoModelSequence, requestTrialStop])
+  }, [autoModelSequenceActive, stopAutoModelSequence, requestTrialStop, stopMobileLoopAudioPlayback])
 
   function _stopAudio() {
     try { workletNodeRef.current?.disconnect() } catch {}
@@ -3005,6 +4374,11 @@ export function MicSession({ availableModels, library }: Props) {
           capped_grace_s: cappedGraceS,
           time_to_next_start_s: timeToNextStartS,
           remaining_hard_s: remainingHardS,
+          ...buildTuningSlotPayload(
+            tuningSweepPlanRef.current[autoModelSequenceIndex] ?? null,
+            tuningSweepSeriesIdRef.current,
+            tuningSweepMaxLagSeconds,
+          ),
           ui_message: `Auto sekvence: přeskočen model po timeoutu doběhu (${cappedGraceS.toFixed(1)}s).`,
         })
       }
@@ -3029,7 +4403,7 @@ export function MicSession({ availableModels, library }: Props) {
     }, 300)
 
     return () => window.clearInterval(timer)
-  }, [autoModelSequenceActive, status, autoModelGraceSeconds, autoModelSequenceIndex, autoModelSequenceIds.length, loopCycleS, autoModelLeadStartSeconds, autoModelHardTrialSeconds, logSequenceEvent, modelId])
+  }, [autoModelSequenceActive, status, autoModelGraceSeconds, autoModelSequenceIndex, autoModelSequenceIds.length, loopCycleS, autoModelLeadStartSeconds, autoModelHardTrialSeconds, logSequenceEvent, modelId, tuningSweepMaxLagSeconds])
 
   useEffect(() => {
     if (!autoModelSequenceActive) return
@@ -3045,6 +4419,7 @@ export function MicSession({ availableModels, library }: Props) {
       autoModelRetryCountRef.current += 1
       const retryModelId = autoModelSequenceIds[autoModelSequenceIndex]
       const retryModel = availableModels.find((m) => m.model_id === retryModelId)
+      const retryTuningSlot = tuningSweepPlanRef.current[autoModelSequenceIndex] ?? null
       setSaveMsg(`Retry (${autoModelRetryCountRef.current}/1): ${retryModelId}`)
       logSequenceEvent('client_sequence_trial_retry', {
         ...buildSequencePlanPayload(token, autoModelSequenceIds, autoModelSelectedOrdered, autoModelSequenceIndex, retryModelId),
@@ -3056,13 +4431,15 @@ export function MicSession({ availableModels, library }: Props) {
         autoModelAdvanceTimerRef.current = null
         if (autoModelSequenceTokenRef.current !== token) { autoModelAdvanceLockRef.current = false; return }
         setModelId(retryModelId)
-        setParams(buildMicParamsWithSaved(retryModel, paramsByModel[retryModelId]))
+        setParams(retryTuningSlot?.params ?? buildMicParamsWithSaved(retryModel, paramsByModel[retryModelId]))
         void startSession(retryModelId, {
           sequence_token: token,
           sequence_index: autoModelSequenceIndex,
           sequence_total: autoModelSequenceIds.length,
           queue_model_ids: autoModelSequenceIds,
           selected_model_ids: autoModelSelectedOrdered,
+          tuning_series_id: tuningSweepSeriesIdRef.current,
+          tuning_slot: retryTuningSlot,
         }).finally(() => { autoModelAdvanceLockRef.current = false })
       }, 3000)
       return
@@ -3082,6 +4459,7 @@ export function MicSession({ availableModels, library }: Props) {
     const targetStartPerf = anchorPerf + nextIndex * loopCycleS * 1000 - leadMs
     const waitMs = Math.max(0, targetStartPerf - nowPerf)
     const nextModelId = autoModelSequenceIds[nextIndex]
+    const nextTuningSlot = tuningSweepPlanRef.current[nextIndex] ?? null
     logSequenceEvent('client_sequence_next_scheduled', {
       ...buildSequencePlanPayload(token, autoModelSequenceIds, autoModelSelectedOrdered, nextIndex, nextModelId),
       client_wait_ms: waitMs,
@@ -3101,8 +4479,10 @@ export function MicSession({ availableModels, library }: Props) {
       const nextModel = availableModels.find((m) => m.model_id === nextModelId)
       setAutoModelSequenceIndex(nextIndex)
       setModelId(nextModelId)
-      setParams(buildMicParamsWithSaved(nextModel, paramsByModel[nextModelId]))
-      const nextMsg = `Auto sekvence: model ${nextIndex + 1}/${autoModelSequenceIds.length} (${nextModelId}).`
+      setParams(nextTuningSlot?.params ?? buildMicParamsWithSaved(nextModel, paramsByModel[nextModelId]))
+      const nextMsg = nextTuningSlot
+        ? `Ladění parametrů: trial ${nextIndex + 1}/${autoModelSequenceIds.length} (${nextModelId}, ${nextTuningSlot.variantLabel}, opak. ${nextTuningSlot.repeatIndex}/${nextTuningSlot.repeatTotal}).`
+        : `Auto sekvence: model ${nextIndex + 1}/${autoModelSequenceIds.length} (${nextModelId}).`
       setSaveMsg(nextMsg)
       logSequenceEvent('client_sequence_trial_start_requested', {
         ...buildSequencePlanPayload(token, autoModelSequenceIds, autoModelSelectedOrdered, nextIndex, nextModelId),
@@ -3115,6 +4495,8 @@ export function MicSession({ availableModels, library }: Props) {
         sequence_total: autoModelSequenceIds.length,
         queue_model_ids: autoModelSequenceIds,
         selected_model_ids: autoModelSelectedOrdered,
+        tuning_series_id: tuningSweepSeriesIdRef.current,
+        tuning_slot: nextTuningSlot,
       }).finally(() => {
         autoModelAdvanceLockRef.current = false
       })
@@ -3142,6 +4524,13 @@ export function MicSession({ availableModels, library }: Props) {
       window.clearTimeout(autoModelAdvanceTimerRef.current)
       autoModelAdvanceTimerRef.current = null
     }
+    const loopAudio = mobileLoopAudioRef.current
+    if (loopAudio) {
+      try { loopAudio.pause() } catch {}
+      loopAudio.onended = null
+      loopAudio.onerror = null
+      mobileLoopAudioRef.current = null
+    }
     _stopAudio()
     wsRef.current?.close()
   }, [])
@@ -3150,12 +4539,12 @@ export function MicSession({ availableModels, library }: Props) {
     <div className="bg-gray-800 rounded-lg p-4 space-y-4">
       <h3 className="text-white font-semibold text-lg">Mic — live přepis</h3>
 
-      <div className="rounded-lg border border-red-900/60 border-l-4 border-l-red-600 bg-red-950/10 p-3 space-y-4">
+      <div className="rounded-lg border border-red-900/60 border-l-4 border-l-red-600 bg-red-950/10 p-3 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="text-sm font-semibold text-red-100">Test přepisu sekvencí</div>
             <div className="text-[11px] text-gray-400">
-              Vše v tomto bloku ovlivní spuštění a vyhodnocení tlačítkem `Start sekvenci`.
+              Postupuj shora dolů: zdroj zvuku → audio plán → mikrofon a modely → auto sekvence/ladění → start.
             </div>
           </div>
           <span className="rounded-full border border-red-700 bg-red-950/50 px-2 py-1 text-[11px] text-red-200">
@@ -3164,6 +4553,13 @@ export function MicSession({ availableModels, library }: Props) {
         </div>
 
       {/* Výběr modelu a parametrů */}
+      <div className="order-3 rounded border border-gray-700 bg-gray-900/50 p-3 space-y-3">
+        <div>
+          <div className="text-sm font-semibold text-gray-100">3. Mikrofon a modely</div>
+          <div className="text-[11px] text-gray-500">
+            Vyber skutečný mikrofon, aktuální model a parametry, které se použijí pro ruční i sekvenční test.
+          </div>
+        </div>
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,1fr)_minmax(240px,0.9fr)_minmax(380px,1.6fr)] gap-3 items-start">
         <div className="min-w-0">
           <label className="block text-xs text-gray-400 mb-1">Model</label>
@@ -3443,8 +4839,15 @@ export function MicSession({ availableModels, library }: Props) {
           )}
         </div>
       </div>
+      </div>
 
-      <div className="bg-gray-900/50 border border-gray-700 rounded p-3 space-y-2">
+      <div className="order-4 bg-gray-900/50 border border-gray-700 rounded p-3 space-y-3">
+        <div>
+          <div className="text-sm font-semibold text-gray-100">4. Auto sekvence a ladění</div>
+          <div className="text-[11px] text-gray-500">
+            Tady se určí, které modely poběží za sebou a zda se kolem jejich nastavení spustí automatické ladění.
+          </div>
+        </div>
         <div className="flex items-center justify-between gap-2">
           <label className="text-xs text-gray-300 inline-flex items-center gap-2">
             <input
@@ -3458,7 +4861,7 @@ export function MicSession({ availableModels, library }: Props) {
           </label>
           {autoModelSequenceActive && (
             <span className="text-[11px] text-blue-300">
-              Sekvence {Math.min(autoModelSequenceIndex + 1, autoModelSequenceIds.length)}/{autoModelSequenceIds.length}
+              {tuningSweepActive ? 'Ladění' : 'Sekvence'} {Math.min(autoModelSequenceIndex + 1, autoModelSequenceIds.length)}/{autoModelSequenceIds.length}
               {' '}| uloženo {Math.min(autoModelSavedCount, autoModelSequenceIds.length)}/{autoModelSequenceIds.length}
             </span>
           )}
@@ -3493,6 +4896,22 @@ export function MicSession({ availableModels, library }: Props) {
             Legacy je výchozí; V7 přidá `run_id/sequence_id/global_timeline_ms`.
           </span>
         </div>
+        {!autoModelCycleEnabled && (
+          <div className="rounded border border-blue-900/70 bg-blue-950/20 px-3 py-2 text-[11px] text-blue-100">
+            <div className="font-semibold">Výběr testovaných modelů a automatické ladění jsou schované, dokud není zapnutá auto sekvence.</div>
+            <div className="mt-1 text-blue-200/80">
+              Pro sérii testů zapni auto střídání. Potom se zobrazí seznam modelů, pořadí běhu a rozbalovací `Automatické ladění parametrů`.
+            </div>
+            <button
+              type="button"
+              onClick={() => setAutoModelCycleEnabled(true)}
+              disabled={uiLocked}
+              className="mt-2 rounded border border-blue-600 bg-blue-900/30 px-2 py-1 text-blue-100 hover:border-blue-400 hover:text-white disabled:opacity-60"
+            >
+              Zapnout výběr testovaných modelů
+            </button>
+          </div>
+        )}
         {autoModelCycleEnabled && (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -3582,8 +5001,278 @@ export function MicSession({ availableModels, library }: Props) {
                 )
               })}
             </div>
+            <details
+              open={tuningSweepEnabled}
+              className="rounded border border-emerald-900/70 bg-emerald-950/10 px-3 py-2 text-[11px]"
+            >
+              <summary className="cursor-pointer select-none text-emerald-200 hover:text-emerald-100">
+                Automatické ladění parametrů
+              </summary>
+              <div className="mt-2 space-y-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="inline-flex items-center gap-2 text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={tuningSweepEnabled}
+                      onChange={(e) => setTuningSweepEnabled(e.target.checked)}
+                      disabled={uiLocked}
+                      className="accent-emerald-500"
+                    />
+                    Zapnout sweep kolem aktuálního nastavení
+                  </label>
+                  <label
+                    className="inline-flex items-center gap-1 text-gray-400"
+                    title="Kolikrát se zopakuje každá varianta nastavení (1 až 10). Více opakování lépe ověří stabilitu výsledku."
+                  >
+                    <span className="cursor-help underline decoration-dotted underline-offset-2">Opakování varianty</span>
+                    <select
+                      value={tuningSweepRepeatCount}
+                      onChange={(e) => setTuningSweepRepeatCount(normalizeTuningSweepRepeatCount(Number(e.target.value)))}
+                      disabled={uiLocked}
+                      className="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-gray-100"
+                    >
+                      {TUNING_SWEEP_REPEAT_OPTIONS.map((count) => (
+                        <option key={count} value={count}>{count}×</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-gray-400">
+                    Režim
+                    <select
+                      value={tuningSweepMode}
+                      onChange={(e) => setTuningSweepMode(normalizeTuningSweepMode(e.target.value))}
+                      disabled={uiLocked}
+                      className="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-gray-100"
+                    >
+                      {TUNING_SWEEP_MODES.map((mode) => (
+                        <option key={mode.id} value={mode.id}>{mode.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-gray-400">
+                    Velikost kroku
+                    <input
+                      type="number"
+                      min={0.25}
+                      max={4}
+                      step={0.25}
+                      value={tuningSweepStepSize}
+                      onChange={(e) => setTuningSweepStepSize(normalizeTuningSweepStepSize(Number(e.target.value)))}
+                      disabled={uiLocked}
+                      className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-gray-100"
+                    />
+                    <span className="text-gray-500">×</span>
+                  </label>
+                  <div className="inline-flex overflow-hidden rounded border border-gray-700">
+                    {[0.5, 1, 2].map((step) => (
+                      <button
+                        key={step}
+                        type="button"
+                        onClick={() => setTuningSweepStepSize(step)}
+                        disabled={uiLocked}
+                        className={`px-2 py-1 text-[11px] ${
+                          sameParamValue(tuningSweepStepSize, step)
+                            ? 'bg-emerald-900/50 text-emerald-100'
+                            : 'bg-gray-900 text-gray-400 hover:text-white'
+                        } disabled:opacity-60`}
+                      >
+                        {step}×
+                      </button>
+                    ))}
+                  </div>
+                  <label
+                    className="inline-flex items-center gap-1 text-gray-400"
+                    title="Limit pro vyhodnocení zpoždění: když průměr prvního slova překročí tuto hodnotu, varianta se označí jako zpožděná. Trial tím sám nezastavuje."
+                  >
+                    <span className="cursor-help underline decoration-dotted underline-offset-2">Max lag (s)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      step={1}
+                      value={tuningSweepMaxLagSeconds}
+                      onChange={(e) => setTuningSweepMaxLagSeconds(Math.max(1, Math.min(60, Number(e.target.value) || 15)))}
+                      disabled={uiLocked}
+                      className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-gray-100"
+                    />
+                  </label>
+                </div>
+                <div className="rounded border border-gray-800 bg-gray-950/40 p-2 space-y-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label
+                      className="inline-flex items-center gap-2 text-gray-300"
+                      title="Místo pevných předvoleb vybereš přesné parametry a rozsahy hodnot. Každý model použije jen parametry, které podporuje."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={tuningSweepCustomRangesEnabled}
+                        onChange={(e) => setTuningSweepCustomRangesEnabled(e.target.checked)}
+                        disabled={uiLocked}
+                        className="accent-emerald-500"
+                      />
+                      Vlastní rozsahy parametrů
+                    </label>
+                    <button
+                      type="button"
+                      onClick={applyRecommendedTuningRanges}
+                      disabled={uiLocked || tuningSweepRangeParamSpecs.length === 0}
+                      className="rounded border border-emerald-800 px-2 py-1 text-[11px] text-emerald-200 hover:text-white disabled:opacity-50"
+                    >
+                      Doporučené rozsahy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={disableAllTuningRanges}
+                      disabled={uiLocked || tuningSweepRangeParamSpecs.length === 0}
+                      className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:text-white disabled:opacity-50"
+                    >
+                      Vypnout parametry
+                    </button>
+                    <span className="text-gray-500">
+                      {tuningSweepCustomRangesEnabled
+                        ? `aktivní parametry: ${tuningSweepEnabledRangeCount}`
+                        : 'používají se pevné předvolby režimu'}
+                    </span>
+                  </div>
+                  {tuningSweepCustomRangesEnabled && (
+                    tuningSweepEnabledRangeCount === 0 && (
+                      <div className="rounded border border-amber-800 bg-amber-950/30 px-2 py-1 text-[11px] text-amber-200">
+                        {TUNING_CUSTOM_RANGE_NO_PARAM_HINT}
+                      </div>
+                    )
+                  )}
+                  {tuningSweepCustomRangesEnabled && (
+                    tuningSweepRangeRows.length === 0 ? (
+                      <div className="text-gray-500">Vybrané modely nemají žádné číselné parametry pro rozsahové ladění.</div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full border-collapse text-[11px] text-gray-300">
+                          <thead>
+                            <tr className="border-b border-gray-800 text-gray-500">
+                              <th className="py-1 pr-3 text-left">Parametr</th>
+                              <th className="py-1 pr-3 text-left">Zapnout</th>
+                              <th className="py-1 pr-3 text-left">Od</th>
+                              <th className="py-1 pr-3 text-left">Do</th>
+                              <th className="py-1 pr-3 text-left">Krok</th>
+                              <th className="py-1 pr-3 text-left">Hodnoty</th>
+                              <th className="py-1 text-left">Modely</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {tuningSweepRangeRows.map(({ param, config, values, supportedModels, tooltip }) => {
+                              const inputStep = param.type === 'int' ? 1 : 0.01
+                              return (
+                                <tr key={param.name} className="border-b border-gray-900/80">
+                                  <td className="py-1 pr-3 text-gray-200 whitespace-nowrap" title={tooltip}>
+                                    {param.label}
+                                    <div className="text-[10px] text-gray-500">{param.name}</div>
+                                  </td>
+                                  <td className="py-1 pr-3">
+                                    <input
+                                      type="checkbox"
+                                      checked={config.enabled}
+                                      onChange={(e) => updateTuningRangeConfig(param.name, { enabled: e.target.checked })}
+                                      disabled={uiLocked || supportedModels.length === 0}
+                                      className="accent-emerald-500"
+                                    />
+                                  </td>
+                                  <td className="py-1 pr-3">
+                                    <input
+                                      type="number"
+                                      step={inputStep}
+                                      value={config.from}
+                                      onChange={(e) => updateTuningRangeConfig(param.name, { from: Number(e.target.value) })}
+                                      disabled={uiLocked || !config.enabled || supportedModels.length === 0}
+                                      className="w-20 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-gray-100 disabled:opacity-50"
+                                    />
+                                  </td>
+                                  <td className="py-1 pr-3">
+                                    <input
+                                      type="number"
+                                      step={inputStep}
+                                      value={config.to}
+                                      onChange={(e) => updateTuningRangeConfig(param.name, { to: Number(e.target.value) })}
+                                      disabled={uiLocked || !config.enabled || supportedModels.length === 0}
+                                      className="w-20 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-gray-100 disabled:opacity-50"
+                                    />
+                                  </td>
+                                  <td className="py-1 pr-3">
+                                    <input
+                                      type="number"
+                                      min={param.type === 'int' ? 1 : 0.001}
+                                      step={inputStep}
+                                      value={config.step}
+                                      onChange={(e) => updateTuningRangeConfig(param.name, { step: Number(e.target.value) })}
+                                      disabled={uiLocked || !config.enabled || supportedModels.length === 0}
+                                      className="w-20 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-gray-100 disabled:opacity-50"
+                                    />
+                                  </td>
+                                  <td className="py-1 pr-3 text-gray-400">
+                                    {config.enabled ? values.map((value) => formatParamValue(value)).join(', ') || '—' : '—'}
+                                  </td>
+                                  <td className="py-1 text-gray-400 max-w-[260px] truncate" title={supportedModels.map((m) => m.label).join(', ')}>
+                                    {supportedModels.length > 0
+                                      ? `${supportedModels.length}/${sequenceMatrixModels.length}: ${supportedModels.map((m) => m.label).join(', ')}`
+                                      : 'žádný vybraný model nepodporuje'}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  )}
+                  {tuningSweepCustomRangesEnabled && (
+                    <div className="text-[10px] text-gray-500">
+                      Plán dělá jednoparametrové varianty proti baseline. Kombinace více změn najednou se záměrně negenerují, aby počet trialů zůstal kontrolovatelný.
+                    </div>
+                  )}
+                </div>
+                <div className="text-gray-400">
+                  Plán: <strong className="text-gray-200">{tuningSweepPreviewPlan.length}</strong> trialů,
+                  modelů {sequenceMatrixModels.length},
+                  {tuningSweepCustomRangesEnabled
+                    ? ` vlastní rozsahy (${tuningSweepEnabledRangeCount} parametrů)`
+                    : ` krok ${tuningSweepStepSize}×`},
+                  odhad {formatDurationHms(tuningSweepEstimatedSeconds)}.
+                  {tuningSweepSeriesId ? ` Série: ${tuningSweepSeriesId}.` : ''}
+                </div>
+                {mobileLoopEnabled && loopRepeatCount < tuningSweepPreviewPlan.length && tuningSweepEnabled && (
+                  <div className="rounded border border-amber-800 bg-amber-950/30 px-2 py-1 text-amber-200">
+                    Audio loop má v UI {loopRepeatCount} měřených kol, plán ladění má {tuningSweepPreviewPlan.length} trialů.
+                    Pro fyzický test vytvoř nebo pusť audio s alespoň {tuningSweepPreviewPlan.length} koly.
+                  </div>
+                )}
+                {tuningSweepVariantPreview.length > 0 && (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full border-collapse text-[11px] text-gray-300">
+                      <thead>
+                        <tr className="border-b border-gray-800 text-gray-500">
+                          <th className="py-1 pr-3 text-left">Model</th>
+                          <th className="py-1 pr-3 text-left">Varianta</th>
+                          <th className="py-1 pr-3 text-left">Změna proti baseline</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tuningSweepVariantPreview.map((slot) => (
+                          <tr key={`${slot.modelId}:${slot.variantId}`} className="border-b border-gray-900/80">
+                            <td className="py-1 pr-3 text-gray-200">{slot.modelId}</td>
+                            <td className="py-1 pr-3 text-emerald-300">{slot.variantLabel}</td>
+                            <td className="py-1 pr-3 text-gray-400">
+                              {formatParamsSummary(slot.changedParams, 6) || 'beze změny'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </details>
             <div className="text-[11px] text-gray-400">
               Pořadí běhu: podle pořadí naklikání modelů. Vybráno: {autoModelSelectedOrdered.length}.
+              {tuningSweepEnabled ? ` Ladění rozšíří frontu na ${tuningSweepPreviewPlan.length} trialů.` : ''}
               Audio kola: {loopRepeatCount}. Slot: {formatDurationHms(autoModelSlotSeconds)} (řeč {Math.round(loopSpeechS)}s + pauza {loopPauseS}s),
               sběr řeči: ~{Math.round(loopCaptureSpeechS)}s (konec dříve o {loopEarlyStopS.toFixed(1)}s),
               další start ~{autoModelLeadStartSeconds.toFixed(1)}s před slotem, max doběh {autoModelGraceSeconds}s.
@@ -3591,9 +5280,9 @@ export function MicSession({ availableModels, library }: Props) {
               Stop má pevnou přípravu {autoModelPreparationSeconds}s + hard cap {autoModelHardTrialSeconds.toFixed(0)}s/trial.
               {loopAudioStartDelayS > 0 ? ` Základ hard capu po startu audia: ${autoModelHardTrialBaseSeconds.toFixed(0)}s.` : ''}
               Při latenci prvního slova nad {autoModelLatencyGuardSeconds}s se trial zkrátí ještě víc (adaptivně).
-              {autoModelSelectedOrdered.length !== loopRepeatCount && (
+              {(tuningSweepEnabled ? tuningSweepPreviewPlan.length : autoModelSelectedOrdered.length) !== loopRepeatCount && (
                 <span className="block text-amber-300">
-                  Pozor: počet vybraných modelů ({autoModelSelectedOrdered.length}) se liší od počtu audio kol ({loopRepeatCount}).
+                  Pozor: počet plánovaných trialů ({tuningSweepEnabled ? tuningSweepPreviewPlan.length : autoModelSelectedOrdered.length}) se liší od počtu audio kol ({loopRepeatCount}).
                 </span>
               )}
             </div>
@@ -3601,8 +5290,18 @@ export function MicSession({ availableModels, library }: Props) {
         )}
       </div>
 
-      <div className="bg-gray-900/60 border border-gray-700 rounded p-3 space-y-2">
-        <div className="text-xs text-gray-400">Režim mic testu</div>
+      <div className="order-1 bg-gray-900/60 border border-gray-700 rounded p-3 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div className="text-sm font-semibold text-gray-100">1. Zdroj zvuku a reference</div>
+            <div className="text-[11px] text-gray-500">
+              Volný mic test používá přímou řeč do mikrofonu; referenční video slouží jako řízený externí zdroj zvuku.
+            </div>
+          </div>
+          <span className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300">
+            {testMode === 'reference_video' ? 'externí audio → mikrofon' : 'interní řeč → mikrofon'}
+          </span>
+        </div>
         <div className="inline-flex rounded border border-gray-600 overflow-hidden text-xs">
           <button
             type="button"
@@ -3744,9 +5443,9 @@ export function MicSession({ availableModels, library }: Props) {
             <div className="rounded border border-gray-700 border-l-4 border-l-amber-500 bg-gray-900/70 p-2 space-y-2">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs text-amber-200 font-semibold">Tvorba audio loop balíčku</div>
+                  <div className="text-xs text-amber-200 font-semibold">2. Tvorba audio loop balíčku</div>
                   <div className="text-[11px] text-gray-500">
-                    Soubor pro mobil je příprava; jeho délky a pauzy se potom použijí při testu sekvence.
+                    Audio plán určuje, co se má z externího zdroje přehrát a jak se podle toho nastaví sekvenční test.
                   </div>
                 </div>
                 <label className="text-xs text-gray-300 inline-flex items-center gap-1">
@@ -3854,6 +5553,44 @@ export function MicSession({ availableModels, library }: Props) {
                 >
                   {mobileLoopPackageLoading ? 'Generuji...' : '⬇ Vytvořit soubor pro mobil'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void createMobileLoopPackageForCurrentTest()}
+                  disabled={uiLocked || mobileLoopPackageLoading || !referenceVideoId || plannedAudioPackageTrialCount > 200}
+                  className="px-2 py-1 border border-amber-700 rounded text-xs text-amber-200 hover:text-white hover:border-amber-500 disabled:opacity-50"
+                  title={`Nastaví opakování na ${plannedAudioPackageTrialCount}x podle aktuální sekvence/ladění a vytvoří balíček bez názvů modelů.`}
+                >
+                  Balíček podle testu ({plannedAudioPackageTrialCount}x)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void playMobileLoopAudioPlan('manual')}
+                  disabled={!mobileLoopEnabled || mobileLoopPackageLoading || !referenceVideoId || status === 'connecting' || status === 'stopping'}
+                  className="px-2 py-1 border border-emerald-700 rounded text-xs text-emerald-200 hover:text-white hover:border-emerald-500 disabled:opacity-50"
+                >
+                  ▶ Přehrát audio plán
+                </button>
+                <button
+                  type="button"
+                  onClick={() => stopMobileLoopAudioPlayback()}
+                  disabled={!mobileLoopAudioPlaying}
+                  className="px-2 py-1 border border-gray-600 rounded text-xs text-gray-200 hover:text-white hover:border-gray-400 disabled:opacity-50"
+                >
+                  ■ Zastavit audio
+                </button>
+                <label
+                  className="inline-flex items-center gap-2 text-xs text-gray-300"
+                  title="Při kliknutí na Start sekvenci se přehraje aktuální audio plán z prohlížeče."
+                >
+                  <input
+                    type="checkbox"
+                    checked={mobileLoopAutoPlayOnSequenceStart}
+                    onChange={e => setMobileLoopAutoPlayOnSequenceStart(e.target.checked)}
+                    disabled={!mobileLoopEnabled || uiLocked}
+                    className="accent-emerald-500"
+                  />
+                  Spustit audio automaticky při Start sekvenci
+                </label>
                 {mobileLoopPackage && (
                   <>
                     <a
@@ -3871,6 +5608,12 @@ export function MicSession({ availableModels, library }: Props) {
                   </>
                 )}
               </div>
+              {mobileLoopAudioStatus && (
+                <div className={`text-[11px] ${mobileLoopAudioPlaying ? 'text-emerald-300' : 'text-gray-400'}`}>
+                  {mobileLoopAudioStatus}
+                  {mobileLoopPackage && !mobileLoopPackageMatchesCurrentPlan ? ' Aktuální formulář se liší od posledního balíčku; přehrání vytvoří nový.' : ''}
+                </div>
+              )}
               {mobileLoopEnabled && (
                 <div className="text-[11px] text-gray-400">
                   Plán: {mobileLoopSyncFirstRound ? '1 sync kolo + ' : ''}{loopRepeatCount} měřené kolo(a),
@@ -3886,6 +5629,12 @@ export function MicSession({ availableModels, library }: Props) {
               {mobileLoopPackage && (
                 <div className="rounded border border-gray-700 bg-gray-950/60 p-2 text-[11px] text-gray-300 space-y-1">
                   <div>
+                    {mobileLoopPackage.pairing_code && (
+                      <>
+                        Kód <span className="text-emerald-300 font-mono">{mobileLoopPackage.pairing_code}-{mobileLoopPackage.measured_rounds}x</span>,
+                        {' '}
+                      </>
+                    )}
                     Balíček <span className="text-gray-100 font-mono">{mobileLoopPackage.package_id}</span>,
                     délka {mobileLoopPackage.total_duration_s.toFixed(1)}s,
                     kola {mobileLoopPackage.total_rounds} (sync {mobileLoopPackage.sync_rounds} + měřená {mobileLoopPackage.measured_rounds}).
@@ -3903,14 +5652,37 @@ export function MicSession({ availableModels, library }: Props) {
                     <div className="text-[11px] text-gray-300 font-semibold">
                       Historie loop balíčků (specifikace + reference)
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void loadMobileLoopHistory()}
-                      disabled={mobileLoopHistoryLoading || uiLocked}
-                      className="px-2 py-1 border border-gray-700 rounded text-[11px] text-gray-300 hover:text-white disabled:opacity-60"
-                    >
-                      {mobileLoopHistoryLoading ? 'Načítám...' : '↻ Obnovit'}
-                    </button>
+                    <div className="flex flex-wrap items-center justify-end gap-1">
+                      <input
+                        type="text"
+                        value={mobileLoopPairingCodeInput}
+                        onChange={(e) => setMobileLoopPairingCodeInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void applyMobileLoopPackageByPairingCode()
+                        }}
+                        disabled={uiLocked}
+                        placeholder="kód balíčku"
+                        maxLength={32}
+                        className="w-28 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-[11px] text-gray-100 placeholder:text-gray-600 disabled:opacity-60"
+                        title="Zadej 6místný kód z názvu balíčku, např. aB3dE9 nebo aB3dE9-30x."
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void applyMobileLoopPackageByPairingCode()}
+                        disabled={mobileLoopHistoryLoading || uiLocked}
+                        className="px-2 py-1 border border-emerald-800 rounded text-[11px] text-emerald-200 hover:text-white disabled:opacity-60"
+                      >
+                        Použít kód
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void loadMobileLoopHistory()}
+                        disabled={mobileLoopHistoryLoading || uiLocked}
+                        className="px-2 py-1 border border-gray-700 rounded text-[11px] text-gray-300 hover:text-white disabled:opacity-60"
+                      >
+                        {mobileLoopHistoryLoading ? 'Načítám...' : '↻ Obnovit'}
+                      </button>
+                    </div>
                   </div>
                   {mobileLoopHistoryError && (
                     <div className="text-[11px] text-red-300">
@@ -3942,7 +5714,12 @@ export function MicSession({ availableModels, library }: Props) {
                                     {formatDateTimeMedium(pkg.created_at)}
                                   </td>
                                   <td className="py-1 pr-2 font-mono text-gray-200">
-                                    {pkg.package_id}
+                                    {pkg.pairing_code && (
+                                      <div className="text-emerald-300">
+                                        {pkg.pairing_code}-{pkg.measured_rounds}x
+                                      </div>
+                                    )}
+                                    <div>{pkg.package_id}</div>
                                   </td>
                                   <td className="py-1 pr-2">
                                     <div>{videoLabel(pkg.video_title || pkg.video_id, pkg.video_id)}</div>
@@ -4047,6 +5824,13 @@ export function MicSession({ availableModels, library }: Props) {
       </div>
 
       {/* Ovládání */}
+      <div className="order-5 rounded border border-red-900/50 bg-red-950/10 p-3 space-y-3">
+        <div>
+          <div className="text-sm font-semibold text-red-100">5. Spuštění</div>
+          <div className="text-[11px] text-gray-500">
+            Start použije všechny výše nastavené části: zdroj/reference, audio plán, mikrofon, modely i případné ladění.
+          </div>
+        </div>
       <div className="flex gap-2 items-center">
         {status === 'idle' || status === 'done' || status === 'error' ? (
           <button
@@ -4054,7 +5838,9 @@ export function MicSession({ availableModels, library }: Props) {
             disabled={autoModelSequenceActive}
             className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 disabled:hover:bg-red-600 text-white rounded font-medium text-sm"
           >
-            {autoModelCycleEnabled
+            {tuningSweepEnabled && autoModelCycleEnabled
+              ? (status === 'done' || status === 'error' ? '● Znovu ladění' : '● Start ladění')
+              : autoModelCycleEnabled
               ? (status === 'done' || status === 'error' ? '● Znovu sekvenci' : '● Start sekvenci')
               : (status === 'done' || status === 'error' ? '● Znovu' : '● Start')}
           </button>
@@ -4079,13 +5865,14 @@ export function MicSession({ availableModels, library }: Props) {
         </span>
         {autoModelSequenceActive && (
           <span className="text-xs text-blue-300">
-            Sekvence modelů: {Math.min(autoModelSequenceIndex + 1, autoModelSequenceIds.length)}/{autoModelSequenceIds.length}
+            {tuningSweepActive ? 'Ladění' : 'Sekvence modelů'}: {Math.min(autoModelSequenceIndex + 1, autoModelSequenceIds.length)}/{autoModelSequenceIds.length}
             {' '}| uloženo {Math.min(autoModelSavedCount, autoModelSequenceIds.length)}/{autoModelSequenceIds.length}
           </span>
         )}
       </div>
+      </div>
       {status === 'recording' && testMode === 'reference_video' && mobileLoopEnabled && (
-        <div className="bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200 space-y-1">
+        <div className="order-6 bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-200 space-y-1">
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             <span>Kolo: <strong>{loopRuntime.roundNumber}/{loopTotalRounds}</strong></span>
             <span>
@@ -4127,6 +5914,29 @@ export function MicSession({ availableModels, library }: Props) {
           <p className="text-white text-sm leading-relaxed min-h-6">
             {transcript || <span className="text-gray-600 italic">čekám na řeč...</span>}
           </p>
+        </div>
+      )}
+
+      {/* Důkaz mic vstupu */}
+      {micInputProof && (
+        <div className="bg-gray-900/70 border border-gray-700 rounded p-3">
+          <div className="text-xs text-gray-400 mb-2">
+            Mic důkaz: <span className="text-gray-200">{micInputProof.device_label}</span>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-300">
+            <span>RMS: <strong>{micInputProof.rms_dbfs != null ? `${micInputProof.rms_dbfs.toFixed(1)} dBFS` : '—'}</strong></span>
+            <span>Peak: <strong>{micInputProof.peak_dbfs != null ? `${micInputProof.peak_dbfs.toFixed(1)} dBFS` : '—'}</strong></span>
+            <span className={micInputProof.vad_speech ? 'text-green-300' : 'text-gray-400'}>
+              VAD: <strong>{micInputProof.vad_speech ? 'řeč/signál' : 'ticho'}</strong>
+            </span>
+            <span>Clipping: <strong className={micInputProof.clipping_pct > 0.1 ? 'text-red-300' : ''}>{micInputProof.clipping_pct.toFixed(3)}%</strong></span>
+            <span>Ticho: <strong>{Math.round(micInputProof.silence_ms)} ms</strong></span>
+            <span>Chunky: <strong>{micInputProof.chunk_count}</strong></span>
+            <span>Audio: <strong>{(micInputProof.audio_payload_bytes / 1024).toFixed(1)} kB</strong></span>
+            <span>WS: <strong>{(micInputProof.ws_payload_bytes / 1024).toFixed(1)} kB</strong></span>
+            <span>SR: <strong>{micInputProof.sample_rate} Hz</strong></span>
+            <span>Posl. chunk: <strong>{micInputProof.last_chunk_age_ms != null ? `${Math.round(micInputProof.last_chunk_age_ms)} ms` : '—'}</strong></span>
+          </div>
         </div>
       )}
 
@@ -4267,6 +6077,51 @@ export function MicSession({ availableModels, library }: Props) {
                 : ''}
             </div>
           )}
+          {tuningSweepReportRows.length > 0 && (
+            <div className="mb-3 rounded border border-emerald-900/70 bg-emerald-950/10 p-2">
+              <div className="mb-1 text-[11px] font-semibold text-emerald-200">
+                Souhrn ladění parametrů
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-[11px] text-gray-300 border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-800 text-gray-500">
+                      <th className="py-1 pr-3 text-left">Model</th>
+                      <th className="py-1 pr-3 text-left">Varianta</th>
+                      <th className="py-1 pr-3 text-left">Změna</th>
+                      <th className="py-1 pr-3 text-right">n</th>
+                      <th className="py-1 pr-3 text-right">RTF</th>
+                      <th className="py-1 pr-3 text-right">Drop%</th>
+                      <th className="py-1 pr-3 text-right">1.slovo ms</th>
+                      <th className="py-1 pr-3 text-right">Q s</th>
+                      <th className="py-1 pr-3 text-right">Skóre</th>
+                      <th className="py-1 text-left">Verdikt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tuningSweepReportRows.map((row) => (
+                      <tr key={row.key} className="border-b border-gray-900/80">
+                        <td className="py-1 pr-3 text-gray-200">{row.modelId}</td>
+                        <td className="py-1 pr-3 text-emerald-300">{row.variantLabel}</td>
+                        <td className="py-1 pr-3 text-gray-400 max-w-[220px] truncate" title={formatParamsSummary(row.changedParams, 50)}>
+                          {formatParamsSummary(row.changedParams, 5) || 'baseline'}
+                        </td>
+                        <td className="py-1 pr-3 text-right">{row.count}{row.repeatTotal ? `/${row.repeatTotal}` : ''}</td>
+                        <td className="py-1 pr-3 text-right">{row.avgRtf != null ? row.avgRtf.toFixed(3) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{row.avgDropRate != null ? (row.avgDropRate * 100).toFixed(1) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{row.avgFirstWordMs != null ? Math.round(row.avgFirstWordMs) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{row.avgQueuePeakS != null ? row.avgQueuePeakS.toFixed(2) : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{row.score != null ? row.score.toFixed(2) : '—'}</td>
+                        <td className={`py-1 ${row.verdict === 'kandidát' ? 'text-emerald-300' : row.verdict.startsWith('neúplné') ? 'text-amber-300' : 'text-red-300'}`}>
+                          {row.verdict}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-gray-300 border-collapse">
               <thead>
@@ -4274,6 +6129,7 @@ export function MicSession({ availableModels, library }: Props) {
                   <th className="text-left pr-2 py-1">#</th>
                   <th className="text-left pr-2 py-1">Model</th>
                   <th className="text-left pr-2 py-1">Profil</th>
+                  <th className="text-left pr-2 py-1">Ladění</th>
                   <th className="text-right pr-2 py-1">Pauza s</th>
                   <th className="text-left pr-2 py-1">Parametry</th>
                   <th className="text-left pr-2 py-1">Status</th>
@@ -4305,6 +6161,14 @@ export function MicSession({ availableModels, library }: Props) {
                       <td className="pr-2 py-0.5 max-w-[140px] truncate" title={t.model_id}>{t.model_id}</td>
                       <td className="pr-2 py-0.5 max-w-[150px] truncate text-[11px] text-emerald-300" title={t.sequence_param_profile ?? undefined}>
                         {t.sequence_param_profile || '—'}
+                      </td>
+                      <td
+                        className="pr-2 py-0.5 max-w-[170px] truncate text-[11px] text-blue-300"
+                        title={formatParamsSummary(t.tuning_changed_params, 50)}
+                      >
+                        {t.tuning_variant_label
+                          ? `${t.tuning_variant_label}${t.tuning_repeat_index && t.tuning_repeat_total ? ` ${t.tuning_repeat_index}/${t.tuning_repeat_total}` : ''}`
+                          : '—'}
                       </td>
                       <td
                         className={`text-right pr-2 py-0.5 ${pauseWarn ? 'text-red-300 font-semibold' : 'text-gray-400'}`}
@@ -4474,16 +6338,26 @@ export function MicSession({ availableModels, library }: Props) {
                         <td className="py-1 pr-3 text-right">{r.rss_peak_mb != null ? Math.round(r.rss_peak_mb) : '—'}</td>
                         <td className="py-1 pr-3 text-gray-400 text-[11px]">{r.reason_code || '—'}</td>
                         <td className="py-1 pr-3 text-emerald-300 text-[11px] max-w-[180px] truncate" title={r.sequence_param_profile ?? undefined}>
-                          {r.sequence_param_profile || '—'}
+                          <div>{r.sequence_param_profile || '—'}</div>
+                          {r.tuning_variant_label && (
+                            <div className="text-blue-300">
+                              ladění: {r.tuning_variant_label}
+                              {r.tuning_step_size ? ` krok ${r.tuning_step_size}x` : ''}
+                              {r.tuning_repeat_index && r.tuning_repeat_total ? ` ${r.tuning_repeat_index}/${r.tuning_repeat_total}` : ''}
+                            </div>
+                          )}
                         </td>
                         <td
                           className="py-1 pr-3 text-gray-400 text-[11px] max-w-[260px]"
-                          title={formatParamsSummary(r.model_params_used, 50)}
+                          title={`${formatParamsSummary(r.model_params_used, 50)}${r.tuning_changed_params ? ` | změna: ${formatParamsSummary(r.tuning_changed_params, 50)}` : ''}`}
                         >
                           {r.model_params_used ? (
                             <div className="space-y-0.5">
                               {r.sequence_common_params_enabled && (
                                 <div className="text-blue-300">společné</div>
+                              )}
+                              {r.tuning_changed_params && Object.keys(r.tuning_changed_params).length > 0 && (
+                                <div className="text-emerald-300 truncate">změna: {formatParamsSummary(r.tuning_changed_params, 4)}</div>
                               )}
                               <div className="truncate">{formatParamsSummary(r.model_params_used, 6) || '—'}</div>
                             </div>
@@ -4492,6 +6366,9 @@ export function MicSession({ availableModels, library }: Props) {
                         <td className="py-1 text-gray-200 max-w-xs">
                           {hasTranscript ? (
                             <div className="space-y-1">
+                              {r.transcript_source === 'mic_ws_final' && (
+                                <div className="text-[10px] text-green-300">zdroj: mic_ws_final</div>
+                              )}
                               <div>{isExpanded ? r.transcript.trim() : clipWords(r.transcript, 8)}</div>
                               {canExpand && (
                                 <button
@@ -4503,7 +6380,11 @@ export function MicSession({ availableModels, library }: Props) {
                                 </button>
                               )}
                             </div>
-                          ) : '—'}
+                          ) : (
+                            <span className="text-gray-500" title="Mic řádek bez ověřeného final.text z WebSocket session nemůže zobrazit přepis.">
+                              bez ověřeného mic textu
+                            </span>
+                          )}
                         </td>
                         <td className="py-1 pl-2 whitespace-nowrap">
                           <button

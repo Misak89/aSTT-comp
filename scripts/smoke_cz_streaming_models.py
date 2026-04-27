@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.app.config import MODEL_STORE_ROOT, SUBTITLES_ROOT
+from backend.app.services import library_service
 from packages.adapters.faster_whisper_runner import (
     FasterWhisperRunConfig,
     resolve_faster_whisper_model_path,
@@ -99,9 +100,9 @@ def main() -> int:
     start_s = max(0, int(args.start_s))
     threads = max(1, int(args.threads))
 
-    audio_path = ROOT / "runtime" / "audio_cache" / f"{video_id}.wav"
-    if not audio_path.exists():
-        raise FileNotFoundError(f"Missing audio cache file: {audio_path}")
+    audio_path = library_service.resolve_audio_cache_file_for_library_item(video_id, extensions=(".wav",))
+    if audio_path is None or not audio_path.exists():
+        raise FileNotFoundError(f"Missing audio cache file for video_id={video_id}")
 
     source = SourceEntry(
         source_id=f"smoke-{video_id}",

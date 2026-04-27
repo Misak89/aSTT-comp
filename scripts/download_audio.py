@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
 from packages.common.network_access import ensure_online_allowed
+from backend.app.services import library_service
 
 LIBRARY_ITEMS = ROOT / "runtime" / "library" / "items.json"
 AUDIO_CACHE   = ROOT / "runtime" / "audio_cache"
@@ -33,12 +34,13 @@ def _duration_of_wav(path: Path) -> float:
         return wf.getnframes() / wf.getframerate()
 
 
-def _download_video(video_id: str, duration_s: float) -> None:
-    out_path = AUDIO_CACHE / f"{video_id}.wav"
-    if out_path.exists():
-        dur = _duration_of_wav(out_path)
-        print(f"  [OK] {video_id} - jiz v cache ({dur:.0f}s, {out_path.stat().st_size // 1024} kB)")
+def _download_video(video_id: str, duration_s: float, title: str = "") -> None:
+    cached = library_service.resolve_audio_cache_file_for_library_item(video_id, extensions=(".wav",))
+    if cached is not None and cached.exists():
+        dur = _duration_of_wav(cached)
+        print(f"  [OK] {video_id} - jiz v cache ({dur:.0f}s, {cached.stat().st_size // 1024} kB)")
         return
+    out_path = AUDIO_CACHE / library_service.audio_cache_filename_for_library_item(video_id, title, ".wav")
 
     yt_url = f"https://www.youtube.com/watch?v={video_id}"
     ensure_online_allowed(
@@ -118,7 +120,7 @@ def main() -> int:
     print(f"Cache: {AUDIO_CACHE}\n")
 
     for item in targets:
-        _download_video(item["video_id"], item.get("duration_seconds") or 0)
+        _download_video(item["video_id"], item.get("duration_seconds") or 0, item.get("title") or "")
 
     print("\nHotovo.")
     return 0

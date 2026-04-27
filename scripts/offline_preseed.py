@@ -78,7 +78,13 @@ def main() -> int:
         video_id = str(item.get("video_id") or "")
         url = str(item.get("url") or "")
         duration_s = float(item.get("duration_seconds") or 0.0)
-        audio_path = AUDIO_CACHE_ROOT / f"{video_id}.wav"
+        audio_path = library_service.resolve_audio_cache_file_for_library_item(video_id, extensions=(".wav",))
+        if audio_path is None:
+            audio_path = AUDIO_CACHE_ROOT / library_service.audio_cache_filename_for_library_item(
+                video_id,
+                str(item.get("title") or ""),
+                ".wav",
+            )
 
         subtitle_paths = _subtitle_files(video_id)
         subtitles_ok = bool(subtitle_paths)
@@ -89,7 +95,7 @@ def main() -> int:
 
         audio_ok = audio_path.exists()
         if not audio_ok and args.download_audio:
-            _download_video(video_id, duration_s)
+            _download_video(video_id, duration_s, str(item.get("title") or ""))
             audio_ok = audio_path.exists()
 
         if not audio_ok:

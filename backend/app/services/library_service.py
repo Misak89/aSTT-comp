@@ -33,6 +33,7 @@ from ..models.library import (
 _ITEMS_FILE = LIBRARY_ROOT / "items.json"
 _ITEMS_LOCK = threading.Lock()
 _SEGMENTS_ROOT = LIBRARY_ROOT / "segments"
+_AUDIO_CACHE_EXTENSIONS = (".wav", ".mp3", ".mp4", ".m4a", ".ogg", ".webm")
 _SEGMENTS_ROOT.mkdir(parents=True, exist_ok=True)
 _SEGMENT_PRESET_MINUTES = {5, 10, 15, 30, 45, 60}
 _MAX_MANUAL_POINTS = 21
@@ -83,6 +84,7 @@ def list_items() -> list[LibraryItem]:
                 subtitle_files,
                 fallback_language=r.get("language"),
             )
+        audio_path = _resolve_audio_cache_path(video_id, str(r.get("title") or ""), extensions=(".wav",))
         result.append(LibraryItem(
             video_id=video_id,
             title=r.get("title", ""),
@@ -100,8 +102,8 @@ def list_items() -> list[LibraryItem]:
             upload_date=r.get("upload_date"),
             view_count=r.get("view_count"),
             metadata_fetched_at=r.get("metadata_fetched_at"),
-            audio_cached=(_wav := AUDIO_CACHE_ROOT / f"{video_id}.wav").exists(),
-            audio_size_bytes=_wav.stat().st_size if _wav.exists() else None,
+            audio_cached=audio_path is not None,
+            audio_size_bytes=audio_path.stat().st_size if audio_path is not None else None,
             audio_duration_seconds=r.get("audio_duration_seconds"),
         ))
     return result
@@ -128,11 +130,73 @@ def _library_item_exists(source_id: str) -> bool:
     return any(str(row.get("video_id", "")) == source_id for row in _load_raw())
 
 
+def audio_cache_title_prefix(title: str, fallback: str = "audio") -> str:
+    """Return the readable 8-char filename prefix derived from a library title."""
+    raw = str(title or "").strip() or str(fallback or "audio").strip() or "audio"
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", raw)
+    safe = re.sub(r"\s+", "_", safe).strip("._ ")
+    if not safe:
+        safe = str(fallback or "audio").strip() or "audio"
+    return safe[:8].ljust(8, "_")
+
+
+def audio_cache_filename_for_library_item(video_id: str, title: str, ext: str = ".wav") -> str:
+    clean_ext = ext if ext.startswith(".") else f".{ext}"
+    return f"{audio_cache_title_prefix(title, video_id)}_{video_id}{clean_ext}"
+
+
+def _find_prefixed_audio_cache_file(video_id: str, ext: str) -> Optional[Path]:
+    suffix = f"_{video_id}{ext}"
+    try:
+        for path in sorted(AUDIO_CACHE_ROOT.iterdir(), key=lambda p: p.name.lower()):
+            if path.is_file() and path.name.endswith(suffix):
+                return path
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def _resolve_audio_cache_path(
+    video_id: str,
+    title: str | None = None,
+    *,
+    extensions: tuple[str, ...] = _AUDIO_CACHE_EXTENSIONS,
+) -> Optional[Path]:
+    clean_video_id = str(video_id or "").strip()
+    if not clean_video_id:
+        return None
+    for ext in extensions:
+        clean_ext = ext if ext.startswith(".") else f".{ext}"
+        if title:
+            preferred = AUDIO_CACHE_ROOT / audio_cache_filename_for_library_item(clean_video_id, title, clean_ext)
+            if preferred.exists():
+                return preferred
+        legacy = AUDIO_CACHE_ROOT / f"{clean_video_id}{clean_ext}"
+        if legacy.exists():
+            return legacy
+        prefixed = _find_prefixed_audio_cache_file(clean_video_id, clean_ext)
+        if prefixed is not None:
+            return prefixed
+    return None
+
+
+def resolve_audio_cache_file_for_library_item(
+    video_id: str,
+    *,
+    extensions: tuple[str, ...] = _AUDIO_CACHE_EXTENSIONS,
+) -> Optional[Path]:
+    title = None
+    for item in _load_raw():
+        if str(item.get("video_id", "")) == video_id:
+            title = str(item.get("title") or "")
+            break
+    return _resolve_audio_cache_path(video_id, title, extensions=extensions)
+
+
 def resolve_audio_file_for_library_item(video_id: str) -> Optional[Path]:
-    for ext in (".wav", ".mp3", ".mp4", ".m4a", ".ogg", ".webm"):
-        cached = AUDIO_CACHE_ROOT / f"{video_id}{ext}"
-        if cached.exists():
-            return cached
+    cache_path = resolve_audio_cache_file_for_library_item(video_id)
+    if cache_path is not None:
+        return cache_path
     for item in _load_raw():
         if str(item.get("video_id", "")) != video_id:
             continue
@@ -660,12 +724,17 @@ def _detect_and_save_language(video_id: str, url: str) -> None:
 
 
 def _download_and_cache_audio(video_id: str, url: str) -> None:
-    """Background: stáhne plné audio videa do runtime/audio_cache/{video_id}.wav.
+    """Background: stáhne plné audio videa do runtime/audio_cache/{prefix8}_{video_id}.wav.
     Po úspěšném stažení aktualizuje duration_seconds v items.json ze skutečné délky WAV.
     """
-    out_path = AUDIO_CACHE_ROOT / f"{video_id}.wav"
-    if out_path.exists():
+    title = ""
+    for item in _load_raw():
+        if str(item.get("video_id", "")) == video_id:
+            title = str(item.get("title") or "")
+            break
+    if _resolve_audio_cache_path(video_id, title, extensions=(".wav",)) is not None:
         return
+    out_path = AUDIO_CACHE_ROOT / audio_cache_filename_for_library_item(video_id, title, ".wav")
     try:
         ensure_online_allowed(
             component="backend.app.services.library_service",
@@ -762,7 +831,7 @@ def upsert_item(req: UpsertLibraryItemRequest) -> LibraryItem:
         _save_raw(list(existing.values()))
 
     # Background: stažení audio cache (pro nová i existující videa bez audio)
-    if not (AUDIO_CACHE_ROOT / f"{req.video_id}.wav").exists():
+    if resolve_audio_cache_file_for_library_item(req.video_id, extensions=(".wav",)) is None:
         threading.Thread(
             target=_download_and_cache_audio,
             args=(req.video_id, req.url),

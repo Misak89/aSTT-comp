@@ -113,6 +113,7 @@ class MobileLoopPackageRequest(BaseModel):
 
 class MobileLoopPackageResponse(BaseModel):
     package_id: str
+    pairing_code: str | None = None
     created_at: str
     video_id: str
     video_title: str
@@ -132,6 +133,7 @@ class MobileLoopPackageResponse(BaseModel):
 
 class MobileLoopPackageListItem(BaseModel):
     package_id: str
+    pairing_code: str | None = None
     created_at: str
     video_id: str
     video_title: str
