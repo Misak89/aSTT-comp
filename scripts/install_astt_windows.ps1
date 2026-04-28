@@ -1,5 +1,7 @@
 param(
-  [string]$RepoRoot = ""
+  [string]$RepoRoot = "",
+  [switch]$DryRun,
+  [switch]$StrictPrereq
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +33,12 @@ function Ensure-Dir([string]$Path) {
   }
 }
 
+function Require-File([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) {
+    throw "Chybi pozadovany soubor/adresar: $Path"
+  }
+}
+
 function Resolve-RepoRoot([string]$InputRoot) {
   if ($InputRoot -and $InputRoot.Trim()) {
     return (Resolve-Path -LiteralPath $InputRoot).Path
@@ -45,6 +53,52 @@ function Pick-Python([string]$Repo) {
   if (Test-Cmd "py") { return "py -3.13" }
   if (Test-Cmd "python") { return "python" }
   throw "Python nebyl nalezen. Nainstaluj Python 3.13+ a spust skript znovu."
+}
+
+function Test-RepoWritable([string]$Repo) {
+  $runtime = Join-Path $Repo "runtime"
+  $probeParent = if (Test-Path -LiteralPath $runtime) { $runtime } else { $Repo }
+  $probe = Join-Path $probeParent (".astt_install_dry_run_" + [guid]::NewGuid().ToString("N") + ".tmp")
+  Set-Content -LiteralPath $probe -Value "ok" -Encoding UTF8
+  Remove-Item -LiteralPath $probe -Force
+}
+
+function Invoke-DryRunValidation([string]$Repo, [string[]]$MissingPrereq) {
+  Write-Head "Dry-run validace instalace"
+  Write-Host "Dry-run: nic se nestahuje, nic se neinstaluje." -ForegroundColor Yellow
+
+  Require-File (Join-Path $Repo "backend\requirements.txt")
+  Require-File (Join-Path $Repo "frontend\package.json")
+  Require-File (Join-Path $Repo "frontend\package-lock.json")
+  Require-File (Join-Path $Repo "scripts\webctl.py")
+  Require-File (Join-Path $Repo "scripts\check_health.py")
+  Require-File (Join-Path $Repo "scripts\portability_audit.py")
+  Test-RepoWritable $Repo
+
+  try {
+    $py = Pick-Python $Repo
+    Write-Host "OK  - python candidate: $py" -ForegroundColor Green
+  } catch {
+    Write-Host "MISS- python candidate: $($_.Exception.Message)" -ForegroundColor Yellow
+    $MissingPrereq += "python"
+  }
+
+  Write-Host ""
+  Write-Host "Planovane kroky plne instalace:" -ForegroundColor White
+  Write-Host "  1. vytvorit/aktualizovat .venv"
+  Write-Host "  2. nainstalovat backend/requirements.txt"
+  Write-Host "  3. npm --prefix frontend install"
+  Write-Host "  4. npm --prefix frontend run build"
+  Write-Host "  5. pripravit whisper.cpp runtime"
+  Write-Host "  6. stahnout vybrane modely do runtime/model_store"
+  Write-Host "  7. overit scripts/check_health.py a scripts/check_model.py"
+
+  if ($StrictPrereq -and $MissingPrereq.Count -gt 0) {
+    Write-Host "Dry-run FAIL: chybi prerekvizity: $($MissingPrereq -join ', ')" -ForegroundColor Red
+    return 1
+  }
+  Write-Host "Dry-run OK" -ForegroundColor Green
+  return 0
 }
 
 function Invoke-Python([string]$PyCmd, [string]$Args) {
@@ -200,6 +254,10 @@ if ((Test-Cmd "py") -or (Test-Cmd "python")) {
 }
 if ($missing.Count -gt 0) {
   Write-Host "Neco chybi: $($missing -join ', ')" -ForegroundColor Yellow
+}
+
+if ($DryRun) {
+  exit (Invoke-DryRunValidation $repo $missing)
 }
 
 if (Ask-YesNo "Pripravit Python virtual env (.venv)?" $true) {

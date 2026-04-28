@@ -20,10 +20,11 @@ sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
 from packages.common.network_access import ensure_online_allowed
+from packages.common.runtime_paths import runtime_subpath
 from backend.app.services import library_service
 
-LIBRARY_ITEMS = ROOT / "runtime" / "library" / "items.json"
-AUDIO_CACHE   = ROOT / "runtime" / "audio_cache"
+LIBRARY_ITEMS = runtime_subpath("library", "items.json")
+AUDIO_CACHE   = runtime_subpath("audio_cache")
 SAMPLE_RATE   = 16000
 
 configure_console_io()

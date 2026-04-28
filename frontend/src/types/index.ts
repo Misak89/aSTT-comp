@@ -307,6 +307,56 @@ export interface MicClientSequenceEventResponse {
   session_id?: string | null
 }
 
+export interface LateMicSegmentRequest {
+  model_id: string
+  model_params?: Record<string, unknown>
+  pcm16_base64: string
+  sample_rate: number
+  lag_budget_s?: number | null
+  target_segment_s?: number | null
+  queue_wait_s?: number | null
+  segment_index?: number | null
+  delete_policy?: string
+  client_meta?: Record<string, unknown>
+}
+
+export interface LateMicSegmentResponse {
+  segment_id: string
+  created_at: string
+  finished_at: string
+  status: 'ok' | 'error' | string
+  error?: string | null
+  model_id: string
+  model_params_used: Record<string, unknown>
+  transcript: string
+  transcript_source: string
+  audio_authority: string
+  reference_text_used: boolean
+  history_fallback_used: boolean
+  audio_sha256: string
+  audio_payload_bytes: number
+  audio_duration_s: number
+  sample_rate: number
+  lag_budget_s?: number | null
+  target_segment_s?: number | null
+  queue_wait_s: number
+  decode_s: number
+  tail_lag_s: number
+  max_visible_lag_s: number
+  over_budget_s?: number | null
+  rtf?: number | null
+  latency_ms?: number | null
+  wav_deleted: boolean
+  wav_retained: boolean
+}
+
+export interface LateMicDeleteWavResponse {
+  segment_id: string
+  wav_existed: boolean
+  wav_deleted: boolean
+  wav_retained: boolean
+}
+
 export type MicTrialStatus = 'ok' | 'borderline' | 'too_slow_for_slot' | 'fail'
 
 export interface MicSequencePauseValidation {
@@ -730,6 +780,8 @@ export interface MicOrchestratorV7Health {
   events_total?: number
   events_v7_total?: number
   invalid_contract_events?: number
+  legacy_invalid_contract_events_ignored?: number
+  diagnostic_events_ignored?: number
   unknown_reason_events?: number
   missing_required_field_events?: number
   last_event_ts?: string | null
@@ -737,6 +789,8 @@ export interface MicOrchestratorV7Health {
   sequence_reports_total?: number
   timeline_fail_reports?: number
   readiness_fail_reports?: number
+  incomplete_sequence_reports?: number
+  diagnostic_sequence_reports_ignored?: number
   latest_sequence_token?: string | null
   latest_sequence_updated_at?: string | null
 }

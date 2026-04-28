@@ -7,12 +7,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TUNING_ROOT = ROOT / "runtime" / "tuning"
 sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
+TUNING_ROOT = runtime_subpath("tuning")
 try:
     import psutil  # noqa: F401
     PSUTIL_AVAILABLE = True

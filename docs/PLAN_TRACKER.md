@@ -3,7 +3,7 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-27T05:40:43Z
+- last_updated_utc: 2026-04-28T05:10:34Z
 - review_due_utc: 2026-04-15T00:00:00Z
 
 Tento soubor je jedine misto, kde je videt aktualni plan a jeho stav.
@@ -80,6 +80,39 @@ Navazne dokumenty:
 - roadmapa (JSON): `docs/tuning_v7_implementacni_plan.json`
 - roadmapa (JSONL): `docs/tuning_v7_implementacni_plan.jsonl`
 
+### F) LateMic v0.08 plan
+- Plan ID: `latemic-v0.08`
+- Status: `completed`
+- Scope:
+  - `/benchmark/latemic` jako samostatny delayed mic rezim
+  - segmentace realneho mikrofonniho audia s meritelny zpozdenim 5/10-60 s
+  - plan model x zpozdeni x nastaveni pred napojenim backend runneru
+  - autoritativni vysledky pouze ze skutecnych LateMic segmentu
+- Evidence:
+  - `tests` full suite passed locally (`135 passed`)
+  - frontend build passed
+  - `/benchmark/latemic` route and LateMic API smoke verified
+  - V7 health no longer reports legacy/test events as current invalid contract failures
+
+Navazne dokumenty:
+- implementacni plan (MD): `docs/latemic_implementacni_plan_2026-04-27.md`
+- implementacni plan (JSON): `docs/latemic_implementacni_plan_2026-04-27.json`
+- implementacni plan (JSONL): `docs/latemic_implementacni_plan_2026-04-27.jsonl`
+
+### G) Install portability validation plan
+- Plan ID: `install-portability-v0.09`
+- Status: `in_progress`
+- Scope:
+  - neinteraktivni dry-run instalatoru pro Windows a macOS
+  - CI matrix `windows-latest` + `macos-latest`
+  - jednotny local/CI smoke pro runtime cesty, build, testy a web health
+  - volitelny post-install model smoke pro fyzicky nainstalovane modely
+
+Navazne dokumenty:
+- test plan/report (MD): `docs/reports/install_portability_test_plan_2026-04-28.md`
+- test plan/report (JSON): `docs/reports/install_portability_test_plan_2026-04-28.json`
+- test plan/report (JSONL): `docs/reports/install_portability_test_plan_2026-04-28.jsonl`
+
 ## 2. Stav milniku
 
 | Milnik | Stav | Zdroj |
@@ -125,6 +158,13 @@ Stavy V7 jsou zavazne vedeny dvojici `implementation` + `validation`.
 | V7-S3 | implemented | in_progress | amber | `backend/app/routers/mic.py` (session payload + ws final envelope), `frontend/src/components/MicSession.tsx` |
 | V7-S4 | implemented | in_progress | amber | `compute_kpi_summary`, `GET /api/mic/sequences/{token}/readiness`, `GET /api/health/mic-orchestrator-v7` |
 | V7-S5 | in_progress | failed | red | `docs/reports/v7_readiness_checklist_2026-04-20.md`, `scripts/v7_readiness_checklist.py`, `tests/unit/test_v7_readiness_checklist.py` |
+| LM-S0 page scaffold + route | implemented | in_progress | amber | `frontend/src/pages/LateMicPage.tsx`, `/benchmark/latemic` |
+| LM-S1 authoritative segment API | implemented | in_progress | amber | `POST /api/latemic/segments`, `backend/app/services/latemic_service.py`, `transcribe_latemic_segment`, `tests/unit/test_latemic_service.py` |
+| LM-S2 full planned run UI | implemented | in_progress | amber | `/benchmark/latemic` run loop, progress, stop, cleanup, summary table |
+| IP-S0 installer dry-run | implemented | passed_local_windows | amber | `scripts/install_astt_windows.ps1 -DryRun`, `scripts/install_astt_macos.sh --dry-run` |
+| IP-S1 CI install matrix | implemented | pending_remote_ci | amber | `.github/workflows/install-portability.yml` |
+| IP-S2 local portability smoke | implemented | passed_local_windows | amber | `scripts/install_portability_smoke.py --level ci`, `--level post-install` |
+| IP-S3 clean physical install | planned | not_started | red | Windows/macOS VM or real host outside this machine |
 
 Aktualni stav V7-S5 (2026-04-20):
 - Readiness checklist probe byl spusten nad `shared_seq` a skoncil `FAIL`.
@@ -149,6 +189,13 @@ Aktualni UI/sequence stav (2026-04-27):
 - MIC UI zobrazuje dukazni panel vstupu z realnych PCM chunku (dBFS/VAD/clipping/chunky/bytes) a historie uklada transcript pouze pri autoritativnim zdroji `mic_ws_final`.
 - MIC vyber `Video r. dle knihovny` pouziva stejne ulozene razeni jako `/library` vcetne priority, smeru a WER pri dostupnych vysledcich.
 - Nemeni to V7-S5 readiness: fyzicky validacni run 3-5 modelu stale chybi a musi byt proveden na realnem mikrofon/audio loop vstupu.
+
+Aktualni LateMic stav (2026-04-27):
+- `/benchmark/latemic` umi nahravat realne browser mic PCM segmenty podle planu `lag x opakovani` a kazdy segment prepsat vybranymi modely.
+- Backend uklada segment do `runtime/late_mic/segments/<segment_id>/segment.wav`, zapisuje `manifest.json` a uklada `result.json` pouze s `transcript_source=latemic_segment`.
+- Verejny helper `transcribe_latemic_segment` pouziva pouze ulozeny WAV segment; nepouziva referenci, historii, snapshot ani simulovany text.
+- UI meri `queue_wait_s`, zahrnuje ho do `max_visible_lag_s`, zobrazuje souhrn podle modelu a umi politiku mazani WAV po celem runu.
+- Validace zustava amber: fyzicky run s prehravanym zdrojem a porovnani kvality proti referenci stale musi provest operator.
 
 Poznamka k readiness:
 - `green`: implementation=`implemented` a validation=`passed`

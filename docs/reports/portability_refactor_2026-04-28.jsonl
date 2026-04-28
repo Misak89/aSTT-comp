@@ -1,0 +1,7 @@
+{"type":"fact","message":"Backend config now honors ASTT_RUNTIME_ROOT and the touched scripts use shared runtime path helpers."}
+{"type":"verification","command":"python scripts/portability_audit.py --fail-on-warn","result":"errors=0 warnings=0","status":"pass"}
+{"type":"verification","command":"python -m compileall backend packages scripts tests","result":"completed","status":"pass"}
+{"type":"verification","command":"pytest tests -q --basetemp=runtime\\pytest_basetemp_full","result":"127 passed","status":"pass"}
+{"type":"verification","command":"npm --prefix frontend run build","result":"completed with existing large chunk warning","status":"pass"}
+{"type":"limit","message":"Physical Windows/macOS reinstall was not executed from this host; macOS bash syntax validation was blocked because bash is not installed."}
+{"type":"risk","message":"Model download and platform binary availability remain the biggest cross-machine installation risks."}

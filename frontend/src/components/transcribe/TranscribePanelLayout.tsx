@@ -9,7 +9,15 @@
  * Důležité: všechny tři módy jsou vždy přítomny v DOM (jen skryté),
  * aby nedocházelo k odmontování komponent a ztrátě stavu při přepnutí.
  */
-import { useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
+import {
+  useRef,
+  useState,
+  useCallback,
+  useEffect,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react'
 
 type LayoutMode = 'horizontal' | 'vertical' | 'tabs'
 
@@ -39,49 +47,78 @@ export function TranscribePanelLayout({
   const vContainerRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
   const dragMode = useRef<LayoutMode>('horizontal')
+  const splitRef = useRef(split)
 
-  const onMouseDown = useCallback((m: LayoutMode) => {
+  useEffect(() => {
+    splitRef.current = split
+  }, [split])
+
+  const updateSplitFromPoint = useCallback((clientX: number, clientY: number, m: LayoutMode) => {
+    const container = m === 'horizontal' ? hContainerRef.current : vContainerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return
+    const pct = m === 'horizontal'
+      ? ((clientX - rect.left) / rect.width) * 100
+      : ((clientY - rect.top) / rect.height) * 100
+    const next = Math.max(15, Math.min(85, pct))
+    splitRef.current = next
+    setSplit(next)
+  }, [])
+
+  const startDrag = useCallback((m: LayoutMode, clientX: number, clientY: number) => {
     dragging.current = true
     dragMode.current = m
     document.body.style.cursor = m === 'horizontal' ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
-  }, [])
+    updateSplitFromPoint(clientX, clientY, m)
+  }, [updateSplitFromPoint])
 
-  const onMouseMove = useCallback((e: React.MouseEvent, m: LayoutMode) => {
-    if (!dragging.current || dragMode.current !== m) return
-    const container = m === 'horizontal' ? hContainerRef.current : vContainerRef.current
-    if (!container) return
-    const rect = container.getBoundingClientRect()
-    let pct: number
-    if (m === 'horizontal') {
-      pct = ((e.clientX - rect.left) / rect.width) * 100
-    } else {
-      pct = ((e.clientY - rect.top) / rect.height) * 100
-    }
-    setSplit(Math.max(15, Math.min(85, pct)))
-  }, [])
+  const onPointerDragStart = useCallback((m: LayoutMode, e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    startDrag(m, e.clientX, e.clientY)
+  }, [startDrag])
 
-  const onMouseUp = useCallback(() => {
-    if (dragging.current) {
-      dragging.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      onLayoutChange?.(mode, split)
-    }
-  }, [mode, split, onLayoutChange])
+  const onMouseDragStart = useCallback((m: LayoutMode, e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    startDrag(m, e.clientX, e.clientY)
+  }, [startDrag])
+
+  const onDragEnd = useCallback(() => {
+    if (!dragging.current) return
+    dragging.current = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    onLayoutChange?.(mode, splitRef.current)
+  }, [mode, onLayoutChange])
 
   useEffect(() => {
-    const stopDrag = () => onMouseUp()
-    window.addEventListener('mouseup', stopDrag)
-    window.addEventListener('blur', stopDrag)
+    const move = (e: PointerEvent | MouseEvent) => {
+      if (!dragging.current) return
+      e.preventDefault()
+      updateSplitFromPoint(e.clientX, e.clientY, dragMode.current)
+    }
+    const end = () => onDragEnd()
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', end)
+    window.addEventListener('blur', end)
     return () => {
-      window.removeEventListener('mouseup', stopDrag)
-      window.removeEventListener('blur', stopDrag)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', end)
+      window.removeEventListener('blur', end)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       dragging.current = false
     }
-  }, [onMouseUp])
+  }, [onDragEnd, updateSplitFromPoint])
 
   const modeBtn = (m: LayoutMode, icon: string, label: string) => (
     <button
@@ -127,19 +164,17 @@ export function TranscribePanelLayout({
         <div
           ref={hContainerRef}
           className={`absolute inset-0 flex ${mode === 'horizontal' ? '' : 'invisible pointer-events-none'}`}
-          onMouseMove={e => onMouseMove(e, 'horizontal')}
-          onMouseUp={onMouseUp}
-          onMouseLeave={onMouseUp}
         >
-          <div style={{ width: `${split}%` }} className="overflow-hidden flex flex-col min-w-0">
+          <div style={{ flexBasis: `${split}%` }} className="overflow-hidden flex flex-col min-w-0 flex-none">
             {leftContent}
           </div>
           <div
-            onMouseDown={() => onMouseDown('horizontal')}
-            className="w-1.5 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors active:bg-blue-500"
+            onPointerDown={(e) => onPointerDragStart('horizontal', e)}
+            onMouseDown={(e) => onMouseDragStart('horizontal', e)}
+            className="w-3 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors active:bg-blue-500"
             title="Táhni pro změnu šířky"
           />
-          <div style={{ width: `${100 - split}%` }} className="overflow-hidden flex flex-col min-w-0">
+          <div className="overflow-hidden flex flex-col min-w-0 flex-1">
             {rightContent}
           </div>
         </div>
@@ -148,19 +183,17 @@ export function TranscribePanelLayout({
         <div
           ref={vContainerRef}
           className={`absolute inset-0 flex flex-col ${mode === 'vertical' ? '' : 'invisible pointer-events-none'}`}
-          onMouseMove={e => onMouseMove(e, 'vertical')}
-          onMouseUp={onMouseUp}
-          onMouseLeave={onMouseUp}
         >
-          <div style={{ height: `${split}%` }} className="overflow-hidden flex flex-col">
+          <div style={{ flexBasis: `${split}%` }} className="overflow-hidden flex flex-col flex-none min-h-0">
             {leftContent}
           </div>
           <div
-            onMouseDown={() => onMouseDown('vertical')}
-            className="h-1.5 bg-gray-200 hover:bg-blue-400 cursor-row-resize flex-shrink-0 transition-colors active:bg-blue-500"
+            onPointerDown={(e) => onPointerDragStart('vertical', e)}
+            onMouseDown={(e) => onMouseDragStart('vertical', e)}
+            className="h-3 bg-gray-200 hover:bg-blue-400 cursor-row-resize flex-shrink-0 transition-colors active:bg-blue-500"
             title="Táhni pro změnu výšky"
           />
-          <div style={{ height: `${100 - split}%` }} className="overflow-hidden flex flex-col">
+          <div className="overflow-hidden flex flex-col flex-1 min-h-0">
             {rightContent}
           </div>
         </div>

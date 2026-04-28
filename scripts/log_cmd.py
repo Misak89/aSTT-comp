@@ -40,6 +40,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
 
@@ -538,7 +539,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--interval', type=float, default=2.0)
-    parser.add_argument('--out', default=str(PROJECT_ROOT / 'logs' / 'cmd.jsonl'))
+    parser.add_argument('--out', default=str(runtime_subpath('logs', 'cmd.jsonl')))
     parser.add_argument('--no-periodic-help', action='store_true',
                         help='Vypni periodickou HELP pauzu (jinak každých 3:33 min)')
     parser.add_argument('--help-interval-sec', type=float, default=DEFAULT_HELP_INTERVAL_SEC,

@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 from packages.common.tuning_event_store import get_event_stats, read_events
 
 configure_console_io()
@@ -27,7 +28,7 @@ def _safe_console_text(text: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Replay tuning events from SQLite event-store.")
     parser.add_argument("--job-id", required=True, help="Tuning job id.")
-    parser.add_argument("--tuning-root", default=str(ROOT / "runtime" / "tuning"), help="Path to runtime/tuning.")
+    parser.add_argument("--tuning-root", default=str(runtime_subpath("tuning")), help="Path to runtime/tuning.")
     parser.add_argument("--after-seq", type=int, default=0, help="Read events with seq > after-seq.")
     parser.add_argument("--limit", type=int, default=200, help="Max events to print.")
     parser.add_argument("--event-type", default="", help="Optional event_type filter.")

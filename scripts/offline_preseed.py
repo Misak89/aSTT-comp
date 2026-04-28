@@ -15,6 +15,7 @@ from backend.app.services import library_service
 from packages.adapters.model_readiness import collect_model_readiness, summarize_readiness
 from packages.common.console_io import configure_console_io
 from packages.common.network_access import strict_offline_enabled
+from packages.common.runtime_paths import runtime_subpath
 from scripts.download_audio import _download_video
 
 configure_console_io()
@@ -50,7 +51,7 @@ def main() -> int:
     parser.add_argument("--download-subtitles", action="store_true", help="Download missing subtitles via yt-dlp.")
     parser.add_argument(
         "--report-path",
-        default=str(ROOT / "runtime" / "offline" / "preseed_report.json"),
+        default=str(runtime_subpath("offline", "preseed_report.json")),
         help="Path to JSON report.",
     )
     parser.add_argument("--fail-on-missing", action="store_true", help="Exit 1 when any required offline asset is missing.")

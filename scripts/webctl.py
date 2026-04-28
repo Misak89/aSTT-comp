@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
 
@@ -426,7 +427,7 @@ def _cmd_up_bg(*, build_mode: str, reload: bool, wait_s: float) -> int:
     if build_rc != 0:
         return build_rc
 
-    logs_dir = ROOT / "runtime" / "logs"
+    logs_dir = runtime_subpath("logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
     out_path = logs_dir / "web-up-bg.out.log"
     err_path = logs_dir / "web-up-bg.err.log"

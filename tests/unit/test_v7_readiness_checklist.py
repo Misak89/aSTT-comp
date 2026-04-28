@@ -7,6 +7,7 @@ import shutil
 import sys
 import uuid
 
+from packages.common.runtime_paths import runtime_subpath
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "v7_readiness_checklist.py"
@@ -23,7 +24,7 @@ def _load_module():
 
 
 def _workspace_tmp_dir(prefix: str) -> Path:
-    root = ROOT / "runtime" / "_test_v7_readiness_checklist"
+    root = runtime_subpath("_test_v7_readiness_checklist")
     root.mkdir(parents=True, exist_ok=True)
     path = root / f"{prefix}_{uuid.uuid4().hex[:8]}"
     path.mkdir(parents=True, exist_ok=True)

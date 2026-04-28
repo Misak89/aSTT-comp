@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 import re
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 _MARKDOWN_LINK = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>https?://[^)]+)\)")
 _URL = re.compile(r"https?://[^\s)\]]+")
@@ -46,6 +46,24 @@ def canonicalize_online_source_url(url: str) -> tuple[str, str | None]:
     if video_id:
         return f"https://www.youtube.com/watch?v={video_id}", video_id
     return value, None
+
+
+def local_path_from_file_url(value: str) -> Path | None:
+    """Convert a file:// URL to a local Path without dropping the Windows drive slash."""
+    parsed = urlparse(str(value or "").strip())
+    if parsed.scheme.lower() != "file":
+        return None
+
+    path_value = unquote(parsed.path or "")
+    if parsed.netloc and parsed.netloc.lower() not in ("", "localhost"):
+        path_value = f"//{parsed.netloc}{path_value}"
+
+    # urlparse("file:///C:/x") gives "/C:/x". Path("/C:/x") is invalid
+    # for Windows file access, so keep the drive marker as "C:/x".
+    if re.match(r"^/[A-Za-z]:", path_value):
+        path_value = path_value[1:]
+
+    return Path(path_value)
 
 
 def extract_youtube_video_id(value: str) -> str | None:
@@ -192,6 +210,19 @@ def _line_to_entry(line: str, *, source_index: int, base_path: Path | None) -> S
             exists=True,
             canonical_url=canonical_url,
             video_id=video_id,
+        )
+
+    file_url_path = local_path_from_file_url(line)
+    if file_url_path is not None:
+        resolved = file_url_path.resolve() if file_url_path.exists() else file_url_path
+        exists = resolved.exists()
+        return SourceEntry(
+            source_id=f"src-{source_index:03d}",
+            label=resolved.name,
+            origin_type="local_file",
+            value=str(resolved),
+            exists=exists,
+            error=None if exists else "File does not exist",
         )
 
     raw_path = Path(line.strip('"'))

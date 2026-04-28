@@ -1,0 +1,87 @@
+{
+  "doc_meta": {
+    "owner": "engineering",
+    "status": "active",
+    "doc_file": "docs/reports/portability_refactor_2026-04-28.json",
+    "source_of_truth": false,
+    "last_updated_utc": "2026-04-28T02:38:47Z"
+  },
+  "scope": "Scoped portability refactor for installing and running aSTT-comp from different checkout locations on Windows and macOS.",
+  "implemented": [
+    "Backend config honors ASTT_RUNTIME_ROOT.",
+    "Touched backend and scripts use packages.common.runtime_paths helpers for runtime locations.",
+    "Unix web wrappers delegate to scripts/webctl.py instead of killing arbitrary port listeners.",
+    "Library audio-folder placeholder no longer contains a machine-specific local path.",
+    "Added scripts/portability_audit.py."
+  ],
+  "verification": [
+    {
+      "area": "source_path_audit",
+      "command": "python scripts/portability_audit.py --fail-on-warn",
+      "result": "errors=0 warnings=0",
+      "status": "pass"
+    },
+    {
+      "area": "python_syntax",
+      "command": "python -m compileall backend packages scripts tests",
+      "result": "completed",
+      "status": "pass"
+    },
+    {
+      "area": "targeted_tests",
+      "command": "pytest tests/unit/test_runtime_paths.py tests/unit/test_v7_readiness_checklist.py tests/smoke/test_scripts.py -q",
+      "result": "13 passed",
+      "status": "pass"
+    },
+    {
+      "area": "full_tests",
+      "command": "pytest tests -q --basetemp=runtime\\pytest_basetemp_full",
+      "result": "127 passed",
+      "status": "pass"
+    },
+    {
+      "area": "frontend_build",
+      "command": "npm --prefix frontend run build",
+      "result": "completed with existing large chunk warning",
+      "status": "pass"
+    },
+    {
+      "area": "windows_installer_syntax",
+      "command": "PowerShell parser for scripts/install_astt_windows.ps1",
+      "result": "PowerShell parse OK",
+      "status": "pass"
+    },
+    {
+      "area": "runtime_override_smoke",
+      "command": "ASTT_RUNTIME_ROOT=runtime\\_portability_runtime_override backend config import",
+      "result": "override root used and directories created",
+      "status": "pass"
+    },
+    {
+      "area": "local_server_smoke",
+      "command": "scripts/webctl.py status, scripts/check_health.py, GET /benchmark/mic",
+      "result": "backend up, health 200, page 200",
+      "status": "pass"
+    }
+  ],
+  "not_verified": [
+    "Physical clean install on a second Windows PC.",
+    "Physical macOS install.",
+    "bash -n shell syntax check, because bash is not installed on this Windows host.",
+    "Large model download/install flows."
+  ],
+  "risks": [
+    "Large pre-existing dirty worktree increases integration risk.",
+    "Default pytest temp root had ACL problems on this machine.",
+    "macOS portability still needs real validation of toolchain and executable bits.",
+    "Generated documentation and historical logs may intentionally contain absolute historical paths.",
+    "Model installation is the largest cross-machine risk."
+  ],
+  "recommendations": [
+    "Add Windows and macOS CI smoke jobs.",
+    "Add installer dry-run mode.",
+    "Use ASTT_RUNTIME_ROOT for portable installs and tests.",
+    "Run full pytest on Windows with an explicit clean --basetemp.",
+    "Defer broad component decomposition until portability base is stable."
+  ]
+}

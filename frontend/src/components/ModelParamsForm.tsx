@@ -5,6 +5,7 @@
  * Podporuje typy: int, float, str, bool, select.
  */
 import type { ParamSpec } from '../types'
+import { FieldHintLabel } from './UiPrimitives'
 
 interface Props {
   modelId: string
@@ -41,8 +42,17 @@ export function ModelParamsForm({
 
   function hintFor(p: ParamSpec): string {
     const custom = hints?.[p.name]
-    if (custom && custom.trim()) return custom.trim()
-    return (p.description || '').trim()
+    const parts = [
+      custom && custom.trim() ? custom.trim() : (p.description || '').trim(),
+      `Výchozí hodnota: ${formatInlineValue(p.default)}.`,
+    ]
+    if (typeof p.min === 'number' || typeof p.max === 'number') {
+      parts.push(`Povolený rozsah: ${p.min ?? 'bez minima'} až ${p.max ?? 'bez maxima'}.`)
+    }
+    if (p.type === 'select' && p.options.length > 0) {
+      parts.push(`Možnosti: ${p.options.join(', ')}.`)
+    }
+    return parts.filter(Boolean).join(' ')
   }
 
   return (
@@ -50,17 +60,12 @@ export function ModelParamsForm({
       {params.map(p => (
         <div key={p.name} className={compact ? 'space-y-0.5' : 'flex flex-col gap-1'}>
           <div className={compact ? 'flex items-center gap-2 text-sm flex-wrap' : 'flex items-center gap-2'}>
-            <div className="relative group/label shrink-0 min-w-28">
-              <span className="text-gray-300 whitespace-nowrap text-sm cursor-help underline decoration-dotted decoration-gray-500">
+            <div className="shrink-0 min-w-28">
+              <FieldHintLabel hint={hintFor(p)} tone="dark" className="text-sm whitespace-nowrap">
                 {p.label}
-              </span>
-              {(hintFor(p) || p.description) && (
-                <div className="pointer-events-none absolute left-0 top-5 z-30 hidden group-hover/label:block w-72 bg-gray-900 text-white text-xs rounded px-2.5 py-2 shadow-xl leading-relaxed">
-                  {hintFor(p) || p.description}
-                </div>
-              )}
+              </FieldHintLabel>
             </div>
-            <ParamInput param={p} value={current(p)} onChange={v => set(p.name, v)} compact={compact} disabled={disabled} />
+            <ParamInput param={p} value={current(p)} onChange={v => set(p.name, v)} compact={compact} disabled={disabled} hint={hintFor(p)} />
             {recommendations && Object.prototype.hasOwnProperty.call(recommendations, p.name) && (
               <div className="flex items-center gap-1 text-[10px] text-emerald-300">
                 <span title={`Doporučeno: ${formatInlineValue(recommendations[p.name])}`}>
@@ -71,6 +76,7 @@ export function ModelParamsForm({
                     type="button"
                     onClick={() => onApplyRecommended(p.name, recommendations[p.name])}
                     disabled={disabled}
+                    title={`Nastavit doporučenou hodnotu ${formatInlineValue(recommendations[p.name])} pro ${p.label}.`}
                     className="rounded border border-emerald-800 px-1 py-0 text-[10px] text-emerald-200 hover:text-white disabled:opacity-50"
                   >
                     Použít
@@ -92,12 +98,13 @@ function formatInlineValue(value: unknown): string {
   return String(value)
 }
 
-export function ParamInput({ param, value, onChange, compact, disabled = false }: {
+export function ParamInput({ param, value, onChange, compact, disabled = false, hint }: {
   param: ParamSpec
   value: unknown
   onChange: (v: unknown) => void
   compact: boolean
   disabled?: boolean
+  hint?: string
 }) {
   const cls = compact
     ? 'bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-sm text-white w-24 disabled:opacity-60'
@@ -110,6 +117,7 @@ export function ParamInput({ param, value, onChange, compact, disabled = false }
         checked={Boolean(value ?? param.default)}
         onChange={e => onChange(e.target.checked)}
         disabled={disabled}
+        title={hint}
         className="w-4 h-4 accent-blue-500 disabled:opacity-60"
       />
     )
@@ -121,6 +129,7 @@ export function ParamInput({ param, value, onChange, compact, disabled = false }
         value={String(value ?? param.default)}
         onChange={e => onChange(e.target.value)}
         disabled={disabled}
+        title={hint}
         className={cls}
       >
         {param.options.map(opt => (
@@ -140,6 +149,7 @@ export function ParamInput({ param, value, onChange, compact, disabled = false }
         value={String(value ?? param.default)}
         onChange={e => onChange(parseInt(e.target.value, 10) || param.default)}
         disabled={disabled}
+        title={hint}
         className={cls}
       />
     )
@@ -155,6 +165,7 @@ export function ParamInput({ param, value, onChange, compact, disabled = false }
         value={String(value ?? param.default)}
         onChange={e => onChange(parseFloat(e.target.value) || param.default)}
         disabled={disabled}
+        title={hint}
         className={cls}
       />
     )
@@ -167,6 +178,7 @@ export function ParamInput({ param, value, onChange, compact, disabled = false }
     value={String(value ?? param.default)}
     onChange={e => onChange(e.target.value)}
     disabled={disabled}
+    title={hint}
     className={cls}
   />
   )

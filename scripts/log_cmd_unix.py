@@ -40,6 +40,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
 
@@ -551,7 +552,7 @@ def live_monitor(out_file, interval: float, out_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--interval', type=float, default=2.0)
-    parser.add_argument('--out', default=str(PROJECT_ROOT / 'logs' / 'cmd_unix.jsonl'))
+    parser.add_argument('--out', default=str(runtime_subpath('logs', 'cmd_unix.jsonl')))
     parser.add_argument('--no-history', action='store_true')
     parser.add_argument('--history-only', action='store_true')
     parser.add_argument('--pause', action='store_true')

@@ -1,0 +1,9 @@
+{"type":"plan","id":"install-portability-v0.09","message":"Add dry-run installers, Windows/macOS CI matrix, shared smoke runner, unit guards, and manual physical clean-install gate."}
+{"type":"implementation","file":"scripts/install_astt_windows.ps1","message":"Added -DryRun and -StrictPrereq."}
+{"type":"implementation","file":"scripts/install_astt_macos.sh","message":"Added --dry-run and --strict-prereq."}
+{"type":"implementation","file":".github/workflows/install-portability.yml","message":"Added Windows/macOS install portability workflow."}
+{"type":"implementation","file":"scripts/install_portability_smoke.py","message":"Added static, ci, and post-install smoke levels with optional model smoke."}
+{"type":"verification","command":"scripts/install_astt_windows.ps1 -DryRun","result":"passed locally","status":"pass"}
+{"type":"verification","command":"python scripts/install_portability_smoke.py --level ci --pytest-basetemp runtime\\pytest_basetemp_install_smoke_full","result":"131 passed","status":"pass"}
+{"type":"verification","command":"python scripts/install_portability_smoke.py --level post-install --skip-frontend-build --skip-pytest","result":"web health passed and server restored","status":"pass"}
+{"type":"limit","message":"macOS runner and clean physical install remain pending until CI/VM execution outside this Windows host."}

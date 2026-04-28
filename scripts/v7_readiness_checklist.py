@@ -22,10 +22,11 @@ from backend.app.services.mic_v7_contract import (
     evaluate_v7_readiness,
     validate_timeline_monotonic,
 )
+from packages.common.runtime_paths import runtime_subpath
 
 
-MIC_SEQUENCES_ROOT = ROOT / "runtime" / "mic_sequences"
-MIC_EVENTS_LOG_PATH = ROOT / "runtime" / "logs" / "mic_sequence_events.jsonl"
+MIC_SEQUENCES_ROOT = runtime_subpath("mic_sequences")
+MIC_EVENTS_LOG_PATH = runtime_subpath("logs", "mic_sequence_events.jsonl")
 
 
 def _utc_now() -> str:

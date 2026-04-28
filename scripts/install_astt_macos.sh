@@ -1,7 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="${1:-}"
+REPO_ROOT=""
+DRY_RUN=0
+STRICT_PREREQ=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      ;;
+    --strict-prereq)
+      STRICT_PREREQ=1
+      ;;
+    --repo-root)
+      shift
+      REPO_ROOT="${1:-}"
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      exit 2
+      ;;
+    *)
+      if [[ -z "${REPO_ROOT}" ]]; then
+        REPO_ROOT="$1"
+      else
+        echo "Unexpected positional argument: $1" >&2
+        exit 2
+      fi
+      ;;
+  esac
+  shift
+done
+
 if [[ -z "${REPO_ROOT}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -35,6 +66,13 @@ has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+require_file() {
+  if [[ ! -e "$1" ]]; then
+    echo "Missing required file/dir: $1" >&2
+    return 1
+  fi
+}
+
 pick_python() {
   if [[ -x ".venv/bin/python" ]]; then
     echo ".venv/bin/python"
@@ -49,6 +87,53 @@ pick_python() {
     return 0
   fi
   echo "python3"
+}
+
+test_repo_writable() {
+  local runtime_dir="${REPO_ROOT}/runtime"
+  local probe_parent="${REPO_ROOT}"
+  if [[ -d "${runtime_dir}" ]]; then
+    probe_parent="${runtime_dir}"
+  fi
+  local probe="${probe_parent}/.astt_install_dry_run_$$_${RANDOM}.tmp"
+  printf "ok\n" > "${probe}"
+  rm -f "${probe}"
+}
+
+run_dry_run_validation() {
+  say_head "Dry-run install validation"
+  echo "Dry-run: no packages are installed and no models are downloaded."
+
+  require_file "${REPO_ROOT}/backend/requirements.txt"
+  require_file "${REPO_ROOT}/frontend/package.json"
+  require_file "${REPO_ROOT}/frontend/package-lock.json"
+  require_file "${REPO_ROOT}/scripts/webctl.py"
+  require_file "${REPO_ROOT}/scripts/check_health.py"
+  require_file "${REPO_ROOT}/scripts/portability_audit.py"
+  test_repo_writable
+
+  if [[ -x ".venv/bin/python" ]] || has_cmd python3.13 || has_cmd python3; then
+    echo "OK   - python candidate: $(pick_python)"
+  else
+    echo "MISS - python candidate"
+    missing+=("python3")
+  fi
+
+  echo
+  echo "Planned full-install steps:"
+  echo "  1. create/update .venv"
+  echo "  2. install backend/requirements.txt"
+  echo "  3. npm --prefix frontend install"
+  echo "  4. npm --prefix frontend run build"
+  echo "  5. prepare whisper.cpp runtime"
+  echo "  6. download selected models into runtime/model_store"
+  echo "  7. verify scripts/check_health.py and scripts/check_model.py"
+
+  if [[ "${STRICT_PREREQ}" == "1" && ${#missing[@]} -gt 0 ]]; then
+    echo "Dry-run FAIL: missing prerequisites: ${missing[*]}" >&2
+    return 1
+  fi
+  echo "Dry-run OK"
 }
 
 download_with_prompt() {
@@ -66,7 +151,9 @@ download_with_prompt() {
   mkdir -p "$(dirname "${target}")"
   curl -L --fail "${url}" -o "${target}"
   local mb
-  mb=$(python3 - <<PY
+  local py
+  py="$(pick_python)"
+  mb=$("${py}" - <<PY
 from pathlib import Path
 p = Path(r"${target}")
 print(round(p.stat().st_size / (1024*1024), 1))
@@ -194,6 +281,11 @@ else
 fi
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "Missing prerequisites: ${missing[*]}"
+fi
+
+if [[ "${DRY_RUN}" == "1" ]]; then
+  run_dry_run_validation
+  exit $?
 fi
 
 if ask_yn "Create/update Python virtual env (.venv)?" "Y"; then

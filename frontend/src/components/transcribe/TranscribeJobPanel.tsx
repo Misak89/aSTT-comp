@@ -12,46 +12,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../../api/client'
 import { ModelParamsForm } from '../ModelParamsForm'
+import { ActionButton, FieldHintLabel } from '../UiPrimitives'
 import { loadSettings, saveSettings } from './useTranscribeStorage'
 import type { LibraryItem, ModelDescriptor, BenchmarkJobStatus, LiveJobProgress, SegmentBundle } from '../../types'
 import { formatClockHms, formatDateTimeDayMonthHm, formatDateTimeShort } from '../../lib/time'
-
-/** Seřadí položky knihovny stejně jako LibraryPage (přečte uložené nastavení z localStorage). */
-function sortLibraryItems(items: LibraryItem[]): LibraryItem[] {
-  let sortOrder: string[]
-  let sortDirMap: Record<string, 'asc' | 'desc'>
-  try {
-    const s = JSON.parse(localStorage.getItem('astt_library_settings_v1') ?? '{}')
-    sortOrder = s.sortOrder ?? ['added_at']
-    sortDirMap = s.sortDirMap ?? {}
-  } catch {
-    sortOrder = ['added_at']
-    sortDirMap = {}
-  }
-  const defaultDir: Record<string, 'asc' | 'desc'> = {
-    title: 'asc', language: 'asc', duration: 'asc', genre: 'asc',
-    view_count: 'desc', added_at: 'desc', wer: 'asc',
-    subtitles: 'desc', audio: 'desc', visible_in_menus: 'desc',
-  }
-  const dir = (k: string): 'asc' | 'desc' => sortDirMap[k] ?? defaultDir[k] ?? 'asc'
-  return [...items].sort((a, b) => {
-    for (const key of (sortOrder.length ? sortOrder : ['added_at'])) {
-      let va: string | number = ''
-      let vb: string | number = ''
-      if (key === 'title') { va = (a.title || '').toLowerCase(); vb = (b.title || '').toLowerCase() }
-      else if (key === 'language') { va = a.language || ''; vb = b.language || '' }
-      else if (key === 'duration') { va = a.duration_seconds ?? -1; vb = b.duration_seconds ?? -1 }
-      else if (key === 'genre') { va = (a.genre || '').toLowerCase(); vb = (b.genre || '').toLowerCase() }
-      else if (key === 'view_count') { va = a.view_count ?? -1; vb = b.view_count ?? -1 }
-      else if (key === 'added_at') { va = a.upload_date ?? a.added_at ?? ''; vb = b.upload_date ?? b.added_at ?? '' }
-      else if (key === 'subtitles') { va = a.subtitles_local ? 1 : 0; vb = b.subtitles_local ? 1 : 0 }
-      else if (key === 'audio') { va = a.audio_cached ? 1 : 0; vb = b.audio_cached ? 1 : 0 }
-      const cmp = va < vb ? -1 : va > vb ? 1 : 0
-      if (cmp !== 0) return dir(key) === 'asc' ? cmp : -cmp
-    }
-    return 0
-  })
-}
+import { sortLibraryItemsLikeLibraryPage, useLibrarySortRevision } from '../../lib/librarySort'
 
 interface UploadedSource {
   source_id: string
@@ -130,9 +95,17 @@ function formatElapsedMmSs(totalSeconds: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+function formatLatencyMsWithSeconds(ms: number | null | undefined, approximate = false): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return '–'
+  const seconds = ms / 1000
+  const secondsText = seconds >= 10 ? seconds.toFixed(1) : seconds.toFixed(2)
+  return `${approximate ? '~' : ''}${ms.toFixed(0)} (${approximate ? '~' : ''}${secondsText} s)`
+}
+
 export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop, audioDuration, onModelChange, onSourceLabelChange, onVideoIdChange }: Props) {
   // Načti uložená nastavení
   const _saved = loadSettings()
+  const librarySortRevision = useLibrarySortRevision()
 
   // --- Zdroj ---
   const [sourceTab, setSourceTab] = useState<'library' | 'upload'>((_saved.source_tab as 'library' | 'upload') ?? 'library')
@@ -173,8 +146,9 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
   const [finalMetrics, setFinalMetrics] = useState<{
     rtf: number | null; latency_ms: number | null; ram_mb: number | null
     cpu_percent: number | null; wer: number | null
-    chunk_p50_ms: number | null; chunk_p95_ms: number | null
+    chunk_p50_rtf: number | null; chunk_p95_rtf: number | null
   } | null>(null)
+  const [liveLatencyEstimateMs, setLiveLatencyEstimateMs] = useState<number | null>(null)
 
   // --- Live segmenty ---
   const [segments, setSegments] = useState<TranscriptSegment[]>([])
@@ -187,6 +161,7 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
   const runEndLineRef = useRef('')
   const runRangeRef = useRef<{ startS: number; endS: number | null }>({ startS: 0, endS: null })
   const runWallStartedAtMsRef = useRef<number | null>(null)
+  const firstTranscriptAtMsRef = useRef<number | null>(null)
   const syntheticTsLinesRef = useRef<string[]>([])
   const lastSyntheticBoundaryRef = useRef<number>(-1)
 
@@ -221,15 +196,18 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
 
   useEffect(() => {
     api.library.list().then(items => {
-      const visible = sortLibraryItems(items.filter(i => i.visible_in_menus !== false))
+      const visible = sortLibraryItemsLikeLibraryPage(items.filter(i => i.visible_in_menus !== false))
       setLibrary(visible)
       const savedVid = loadSettings().selected_video_id
-      if (savedVid && visible.find(v => v.video_id === savedVid)) {
-        setSelectedVideoId(savedVid)
-      } else if (visible.length > 0) {
-        setSelectedVideoId(visible[0].video_id)
-      }
+      setSelectedVideoId(prev => {
+        const preferred = prev || savedVid
+        if (preferred && visible.find(v => v.video_id === preferred)) return preferred
+        return visible[0]?.video_id ?? ''
+      })
     }).catch(() => {})
+  }, [librarySortRevision])
+
+  useEffect(() => {
     api.models.registry().then(reg => {
       setRegistry(reg)
       // Přednostně použij uloženou volbu; fallback na první model
@@ -454,6 +432,19 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     publishTranscript(newText, audioSecs)
   }, [live?.transcript, live?.transcript_ts, live?.message, live?.percent, lastCoreTranscript, audioDuration, segmentedRunActive, publishTranscript])
 
+  useEffect(() => {
+    if (!running || !job?.started_at || firstTranscriptAtMsRef.current != null) return
+    const streamedText = ((live?.transcript_ts && live.transcript_ts.trim())
+      ? live.transcript_ts
+      : live?.transcript || '').trim()
+    if (!streamedText) return
+    const startedAtMs = new Date(job.started_at).getTime()
+    if (!Number.isFinite(startedAtMs)) return
+    const firstAtMs = Date.now()
+    firstTranscriptAtMsRef.current = firstAtMs
+    setLiveLatencyEstimateMs(Math.max(0, firstAtMs - startedAtMs))
+  }, [running, job?.started_at, live?.transcript, live?.transcript_ts])
+
   const handleUpload = useCallback(async (file: File) => {
     setUploading(true)
     setUploadError('')
@@ -487,8 +478,8 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         ram_mb: agg.ram_mb,
         cpu_percent: agg.cpu_percent,
         wer: agg.wer,
-        chunk_p50_ms: rtfs.length > 0 ? (rtfs[p50idx] ?? null) : null,
-        chunk_p95_ms: rtfs.length > 0 ? (rtfs[p95idx] ?? null) : null,
+        chunk_p50_rtf: rtfs.length > 0 ? (rtfs[p50idx] ?? null) : null,
+        chunk_p95_rtf: rtfs.length > 0 ? (rtfs[p95idx] ?? null) : null,
       })
     }).catch(() => {})
   }, [])
@@ -509,6 +500,10 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
           if (jobStatus.status === 'completed') {
             appendOmegaLine()
             publishTranscript(lastCoreTranscript, runRangeRef.current.endS ?? undefined)
+          } else if (jobStatus.status === 'failed') {
+            setMsg(jobStatus.error || 'Přepis selhal.')
+          } else if (jobStatus.status === 'cancelled') {
+            setMsg('Přepis zrušen.')
           }
           setRunning(false)
           localStorage.removeItem(ACTIVE_JOB_KEY)
@@ -569,6 +564,8 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         })
         setJob(jobStatus)
         setLive(null)
+        setLiveLatencyEstimateMs(null)
+        firstTranscriptAtMsRef.current = null
         localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(jobStatus))
 
         let finalSegmentText = ''
@@ -642,11 +639,13 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     setLastTranscript('')
     setLastCoreTranscript('')
     setFinalMetrics(null)
+    setLiveLatencyEstimateMs(null)
     cancelRequestedRef.current = false
     runStartLineRef.current = ''
     runEndLineRef.current = ''
     runRangeRef.current = { startS: 0, endS: null }
     runWallStartedAtMsRef.current = null
+    firstTranscriptAtMsRef.current = null
     syntheticTsLinesRef.current = []
     lastSyntheticBoundaryRef.current = -1
 
@@ -829,6 +828,12 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
     const rtf = elapsedS / audioProcessedS
     return rtf.toFixed(2)
   })()
+  const displayedLatencyMs = finalMetrics?.latency_ms ?? liveLatencyEstimateMs
+  const displayedLatencyIsEstimate = finalMetrics?.latency_ms == null && liveLatencyEstimateMs != null
+  const pendingMetricLabel = running ? 'po doběhu' : '–'
+  const werLabel = finalMetrics?.wer != null
+    ? `${(finalMetrics.wer * 100).toFixed(1)}%`
+    : finalMetrics ? 'bez reference' : pendingMetricLabel
 
   return (
     <div className="flex flex-col gap-3 p-3 bg-gray-800 text-gray-100 h-full overflow-y-auto text-sm">
@@ -918,16 +923,22 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
         {rangeMode === 'segment' && !segmentBundleActive && (
           <div className="flex items-center gap-2">
             <div className="flex flex-col gap-0.5">
-              <label className="text-xs text-gray-400">Od</label>
+              <FieldHintLabel tone="dark" className="text-xs" hint="Začátek vlastního úseku. Formát může být MM:SS nebo H:MM:SS.">
+                Od
+              </FieldHintLabel>
               <input value={rangeFrom} onChange={e => { setRangeFrom(e.target.value); saveSettings({ range_from: e.target.value }) }}
                 placeholder="00:00"
+                title="Začátek přepisovaného úseku."
                 className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 w-24 font-mono" />
             </div>
             <span className="text-gray-500 mt-4">–</span>
             <div className="flex flex-col gap-0.5">
-              <label className="text-xs text-gray-400">Do</label>
+              <FieldHintLabel tone="dark" className="text-xs" hint="Konec vlastního úseku. Musí být později než Od.">
+                Do
+              </FieldHintLabel>
               <input value={rangeTo} onChange={e => { setRangeTo(e.target.value); saveSettings({ range_to: e.target.value }) }}
                 placeholder={audioDuration ? fmtTime(audioDuration) : 'MM:SS'}
+                title="Konec přepisovaného úseku."
                 className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 w-24 font-mono" />
             </div>
             {rangeFrom && rangeTo && (() => {
@@ -1082,22 +1093,24 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
 
       {/* ── 4. Spustit / Zastavit ── */}
       <div className="flex gap-2">
-        <button onClick={handleStart} disabled={running}
-          className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded text-sm font-medium">
-          {running ? '⏳ Přepisuji...' : '▶ Spustit přepis'}
-        </button>
-        <button
+        <ActionButton
+          onClick={handleStart}
+          disabled={running}
+          variant="start"
+          title="Spustí přepis z vybraného zdroje, rozsahu a modelu."
+          className="flex-1 py-2"
+        >
+          {running ? 'Přepisuji...' : 'Spustit přepis'}
+        </ActionButton>
+        <ActionButton
           onClick={handleCancel}
           disabled={!running || !job}
           title="Zastavit / zrušit přepis"
-          className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
-            running && job
-              ? 'bg-red-700 hover:bg-red-600 text-white'
-              : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-          }`}
+          variant="stop"
+          className="px-3 py-2"
         >
-          ⏹ Zastavit
-        </button>
+          Zastavit
+        </ActionButton>
       </div>
       {copyMsg && <div className="text-emerald-300 text-xs">{copyMsg}</div>}
       {msg && <div className="text-red-400 text-xs">{msg}</div>}
@@ -1148,6 +1161,11 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
               <div className="text-gray-500 text-xs mb-0.5">
                 STT metriky {finalMetrics ? '(finální)' : estimatedRtf ? '(odhad za běhu)' : '(dostupné po dokončení)'}
               </div>
+              {!finalMetrics && running && (
+                <div className="text-[11px] text-gray-500">
+                  Za běhu jsou dostupné jen odhad RTF, první zobrazený text a HW. WER a P50/P95 RTF se načtou z výsledku po doběhu.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
                 <DiagRow
                   label="RTF"
@@ -1156,22 +1174,22 @@ export function TranscribeJobPanel({ onAudioReady, onTranscriptUpdate, onJobStop
                 />
                 <DiagRow label="Status" value={live.status} />
                 <DiagRow
-                  label="Latence ms"
-                  value={finalMetrics?.latency_ms != null ? finalMetrics.latency_ms.toFixed(0) : '–'}
-                  warn={finalMetrics?.latency_ms != null && finalMetrics.latency_ms > 1500}
+                  label="Latence ms (s)"
+                  value={displayedLatencyMs != null ? formatLatencyMsWithSeconds(displayedLatencyMs, displayedLatencyIsEstimate) : pendingMetricLabel}
+                  warn={displayedLatencyMs != null && displayedLatencyMs > 1500}
                 />
                 <DiagRow
                   label="P50 RTF"
-                  value={finalMetrics?.chunk_p50_ms != null ? finalMetrics.chunk_p50_ms.toFixed(3) : '–'}
+                  value={finalMetrics?.chunk_p50_rtf != null ? finalMetrics.chunk_p50_rtf.toFixed(3) : pendingMetricLabel}
                 />
                 <DiagRow
                   label="P95 RTF"
-                  value={finalMetrics?.chunk_p95_ms != null ? finalMetrics.chunk_p95_ms.toFixed(3) : '–'}
-                  warn={finalMetrics?.chunk_p95_ms != null && finalMetrics.chunk_p95_ms > 1.0}
+                  value={finalMetrics?.chunk_p95_rtf != null ? finalMetrics.chunk_p95_rtf.toFixed(3) : pendingMetricLabel}
+                  warn={finalMetrics?.chunk_p95_rtf != null && finalMetrics.chunk_p95_rtf > 1.0}
                 />
                 <DiagRow
                   label="WER"
-                  value={finalMetrics?.wer != null ? `${(finalMetrics.wer * 100).toFixed(1)}%` : '–'}
+                  value={werLabel}
                 />
                 <DiagRow
                   label="RAM MB"

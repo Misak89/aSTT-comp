@@ -11,16 +11,18 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from ..config import LOGGER_LOGS_ROOT, ROOT, RUNTIME_ROOT
 from ..services import mic_service
 
 router = APIRouter()
 
 _STARTED_AT = datetime.now(timezone.utc).isoformat()
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_SPECSTORY_STATUS_PATH = _PROJECT_ROOT / "runtime" / "specstory_live_status.json"
+_PROJECT_ROOT = ROOT
+_SPECSTORY_STATUS_PATH = RUNTIME_ROOT / "specstory_live_status.json"
 _LOGGER_SCRIPT_REL = "scripts/log_cmd.py"
-_LOGGER_LOGS_DIR_REL = "logs"
-_LOGGER_LOG_FILE_REL = "logs/cmd.jsonl"
+_LOGGER_LOGS_DIR_REL = str(LOGGER_LOGS_ROOT.relative_to(_PROJECT_ROOT)).replace("\\", "/")
+_LOGGER_LOG_FILE_REL = str((LOGGER_LOGS_ROOT / "cmd.jsonl").relative_to(_PROJECT_ROOT)).replace("\\", "/")
+_LEGACY_LOGS_ROOT = _PROJECT_ROOT.joinpath("logs")
 _LOGGER_REPO_URL = "https://github.com/Misak89/process-logger"
 _APP_MARKERS = (
     str(_PROJECT_ROOT).lower(),
@@ -294,9 +296,9 @@ def _pid_file_warnings() -> list[str]:
         return warnings
 
     pid_files = (
-        _PROJECT_ROOT / "runtime" / "specstory_live_loop.pid",
-        _PROJECT_ROOT / "runtime" / "logs" / "cmd.pid",
-        _PROJECT_ROOT / "logs" / "cmd.pid",
+        RUNTIME_ROOT / "specstory_live_loop.pid",
+        RUNTIME_ROOT / "logs" / "cmd.pid",
+        _LEGACY_LOGS_ROOT / "cmd.pid",
     )
 
     for pid_file in pid_files:
@@ -322,9 +324,9 @@ def _cleanup_stale_pid_files() -> dict[str, list[str]]:
         psutil = None
 
     pid_files = (
-        _PROJECT_ROOT / "runtime" / "specstory_live_loop.pid",
-        _PROJECT_ROOT / "runtime" / "logs" / "cmd.pid",
-        _PROJECT_ROOT / "logs" / "cmd.pid",
+        RUNTIME_ROOT / "specstory_live_loop.pid",
+        RUNTIME_ROOT / "logs" / "cmd.pid",
+        _LEGACY_LOGS_ROOT / "cmd.pid",
     )
 
     for pid_file in pid_files:
@@ -379,9 +381,9 @@ def _collect_root_pids() -> set[int]:
         roots.add(backend_pid)
 
     for pid_file in (
-        _PROJECT_ROOT / "runtime" / "specstory_live_loop.pid",
-        _PROJECT_ROOT / "runtime" / "logs" / "cmd.pid",
-        _PROJECT_ROOT / "logs" / "cmd.pid",
+        RUNTIME_ROOT / "specstory_live_loop.pid",
+        RUNTIME_ROOT / "logs" / "cmd.pid",
+        _LEGACY_LOGS_ROOT / "cmd.pid",
     ):
         pid = _read_pid_file(pid_file)
         if not pid:

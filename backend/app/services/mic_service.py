@@ -1501,6 +1501,48 @@ def get_sequence_readiness(token: str, *, min_models: int = 3) -> dict[str, Any]
     }
 
 
+_DIAGNOSTIC_SEQUENCE_TOKENS = {"seq_abc", "shared_seq", "tok_tuning_unit"}
+
+
+def _sequence_token_from_event(event: dict[str, Any]) -> str:
+    for key in ("sequence_id", "auto_model_sequence_token", "sequence_token"):
+        value = str(event.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _is_diagnostic_sequence_token(token: str | None) -> bool:
+    text = str(token or "").strip().lower()
+    if not text:
+        return False
+    return text in _DIAGNOSTIC_SEQUENCE_TOKENS or text.startswith(("_test", "test_", "unit_"))
+
+
+def _is_legacy_client_contract_event(event: dict[str, Any]) -> bool:
+    return (
+        event.get("contract_valid") is False
+        and str(event.get("event") or "").strip() == "client_sequence_event"
+        and bool(event.get("client_event"))
+    )
+
+
+def _sequence_report_is_complete(report: dict[str, Any]) -> bool:
+    trials = report.get("trials")
+    trial_count = len(trials) if isinstance(trials, list) else int(report.get("trials_count") or 0)
+    sequence_total = int(report.get("sequence_total") or trial_count or 0)
+    if sequence_total > 0 and trial_count < sequence_total:
+        return False
+    if not isinstance(trials, list) or not trials:
+        return False
+    return any(
+        bool(t.get("started_at") or t.get("stopped_at"))
+        or str(t.get("status") or "").strip().lower() in {"recording", "stopped", "finalized"}
+        for t in trials
+        if isinstance(t, dict)
+    )
+
+
 def get_v7_runtime_mapping_status(*, max_reports: int = 80, max_events: int = 2500) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     if MIC_EVENTS_LOG_PATH.exists():
@@ -1521,10 +1563,15 @@ def get_v7_runtime_mapping_status(*, max_reports: int = 80, max_events: int = 25
     event_types: dict[str, int] = {}
     v7_events = 0
     invalid_contract_events = 0
+    legacy_invalid_contract_events_ignored = 0
+    diagnostic_events_ignored = 0
     unknown_reason_events = 0
     missing_field_events = 0
     last_event_ts: str | None = None
     for event in events:
+        if _is_diagnostic_sequence_token(_sequence_token_from_event(event)):
+            diagnostic_events_ignored += 1
+            continue
         event_name = str(event.get("event") or "").strip() or "unknown"
         event_types[event_name] = event_types.get(event_name, 0) + 1
         last_event_ts = str(event.get("ts") or last_event_ts or "")
@@ -1533,7 +1580,10 @@ def get_v7_runtime_mapping_status(*, max_reports: int = 80, max_events: int = 25
             v7_events += 1
         contract_valid = event.get("contract_valid")
         if contract_valid is False:
-            invalid_contract_events += 1
+            if _is_legacy_client_contract_event(event):
+                legacy_invalid_contract_events_ignored += 1
+            else:
+                invalid_contract_events += 1
         if event.get("reason_known") is False:
             unknown_reason_events += 1
         missing = event.get("contract_missing_fields")
@@ -1548,21 +1598,29 @@ def get_v7_runtime_mapping_status(*, max_reports: int = 80, max_events: int = 25
     report_tokens: list[str] = []
     timeline_fail = 0
     readiness_fail = 0
+    incomplete_reports = 0
+    diagnostic_reports_ignored = 0
     latest_sequence_updated_at: str | None = None
     latest_sequence_token: str | None = None
 
     for report_path in report_files[: max(1, int(max_reports))]:
         token = report_path.parent.name
+        if _is_diagnostic_sequence_token(token):
+            diagnostic_reports_ignored += 1
+            continue
         report_tokens.append(token)
         report = get_sequence_report(token)
         if not isinstance(report, dict):
             continue
+        is_complete = _sequence_report_is_complete(report)
+        if not is_complete:
+            incomplete_reports += 1
         timeline = report.get("timeline_validation")
-        if isinstance(timeline, dict) and not bool(timeline.get("ok")):
+        if is_complete and isinstance(timeline, dict) and not bool(timeline.get("ok")):
             timeline_fail += 1
         readiness = report.get("readiness")
         readiness_pass = bool(readiness.get("pass")) if isinstance(readiness, dict) else False
-        if not readiness_pass:
+        if is_complete and not readiness_pass:
             readiness_fail += 1
         updated_at = str(report.get("updated_at") or "").strip()
         if latest_sequence_updated_at is None and updated_at:
@@ -1585,6 +1643,8 @@ def get_v7_runtime_mapping_status(*, max_reports: int = 80, max_events: int = 25
         "events_total": len(events),
         "events_v7_total": v7_events,
         "invalid_contract_events": invalid_contract_events,
+        "legacy_invalid_contract_events_ignored": legacy_invalid_contract_events_ignored,
+        "diagnostic_events_ignored": diagnostic_events_ignored,
         "unknown_reason_events": unknown_reason_events,
         "missing_required_field_events": missing_field_events,
         "last_event_ts": last_event_ts,
@@ -1592,6 +1652,8 @@ def get_v7_runtime_mapping_status(*, max_reports: int = 80, max_events: int = 25
         "sequence_reports_total": len(report_tokens),
         "timeline_fail_reports": timeline_fail,
         "readiness_fail_reports": readiness_fail,
+        "incomplete_sequence_reports": incomplete_reports,
+        "diagnostic_sequence_reports_ignored": diagnostic_reports_ignored,
         "latest_sequence_token": latest_sequence_token,
         "latest_sequence_updated_at": latest_sequence_updated_at,
     }

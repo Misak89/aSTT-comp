@@ -18,6 +18,8 @@ import type {
   TuningTrialResult,
 } from '../types'
 import { WerBadge } from '../components/WerBadge'
+import { WorkflowGuide } from '../components/WorkflowGuide'
+import { ActionButton, FieldHintLabel } from '../components/UiPrimitives'
 import { videoLabel } from '../utils'
 import { formatClockHms, formatFileStampWithSeconds } from '../lib/time'
 
@@ -939,6 +941,17 @@ export function TuningPage() {
         Výsledky zobrazí Pareto frontier — kombinace kde nelze zlepšit jedno bez zhoršení druhého.
       </p>
 
+      <WorkflowGuide
+        title="Workflow tuningu"
+        steps={[
+          { label: 'Data', detail: 'Vyber evaluační video s referencí.' },
+          { label: 'Modely', detail: 'Vyber kandidáty pro ladění.' },
+          { label: 'Parametry', detail: 'Zvol strategii a rozsah prostoru.' },
+          { label: 'Run', detail: 'Spusť job a sleduj průběh.' },
+          { label: 'Rozhodnutí', detail: 'WER, RTF, Pareto a doporučení.' },
+        ]}
+      />
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Model */}
         <div className="bg-white rounded border border-gray-200 p-4 space-y-2">
@@ -1010,7 +1023,12 @@ export function TuningPage() {
         <div className="bg-white rounded border border-gray-200 p-4 space-y-3">
           <h2 className="font-semibold text-sm text-gray-700">Konfigurace</h2>
           <div className="space-y-1">
-            <label className="text-xs text-gray-500">Strategie</label>
+            <FieldHintLabel
+              className="text-xs text-gray-500"
+              hint="Určuje, jak se budou skládat testované varianty. Pro běžné ladění je nejčitelnější ablace: vždy mění jen jeden parametr proti baseline."
+            >
+              Strategie
+            </FieldHintLabel>
             <div className="space-y-1">
               {([
                 ['ablation', 'Ablace — jeden param najednou'],
@@ -1027,7 +1045,12 @@ export function TuningPage() {
             </div>
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-gray-500">Vstupní režim</label>
+            <FieldHintLabel
+              className="text-xs text-gray-500"
+              hint="Replay ladí z uložených referenčních videí. Real mic používá fyzický mikrofon a vyžaduje stejné podmínky pro všechny trialy."
+            >
+              Vstupní režim
+            </FieldHintLabel>
             <div className="flex rounded border border-gray-200 overflow-hidden text-xs w-fit">
               <button
                 type="button"
@@ -1058,43 +1081,55 @@ export function TuningPage() {
               <div className="text-xs font-medium text-blue-900">Real mic protokol</div>
               <div className="flex gap-2 flex-wrap text-xs">
                 <div>
-                  <label className="text-gray-600">Vzdálenost (cm)</label>
+                  <FieldHintLabel className="text-gray-600" hint="Vzdálenost reproduktoru/mobilu od mikrofonu. Musí zůstat stejná, jinak nejde výsledky férově porovnat.">
+                    Vzdálenost (cm)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={1}
                     max={300}
                     value={micDistanceCm}
+                    title="Vzdálenost reproduktoru/mobilu od mikrofonu v centimetrech."
                     onChange={e => setMicDistanceCm(Math.max(1, Math.min(300, +e.target.value || 1)))}
                     className="border rounded px-2 py-1 w-24 block mt-0.5"
                   />
                 </div>
                 <div>
-                  <label className="text-gray-600">Hlasitost mobilu (%)</label>
+                  <FieldHintLabel className="text-gray-600" hint="Hlasitost zdroje audia. Při změně hlasitosti se mění RMS i kvalita vstupu do mikrofonu.">
+                    Hlasitost mobilu (%)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={0}
                     max={100}
                     value={micPhoneVolumePct}
+                    title="Hlasitost přehrávajícího zařízení v procentech."
                     onChange={e => setMicPhoneVolumePct(Math.max(0, Math.min(100, +e.target.value || 0)))}
                     className="border rounded px-2 py-1 w-28 block mt-0.5"
                   />
                 </div>
                 <div>
-                  <label className="text-gray-600">Input gain (%)</label>
+                  <FieldHintLabel className="text-gray-600" hint="Zesílení mikrofonního vstupu. Moc nízko znamená ticho, moc vysoko clipping a horší přepis.">
+                    Input gain (%)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={0}
                     max={100}
                     value={micInputGainPct}
+                    title="Zesílení vstupu mikrofonu v procentech."
                     onChange={e => setMicInputGainPct(Math.max(0, Math.min(100, +e.target.value || 0)))}
                     className="border rounded px-2 py-1 w-24 block mt-0.5"
                   />
                 </div>
                 <div>
-                  <label className="text-gray-600">Prostředí</label>
+                  <FieldHintLabel className="text-gray-600" hint="Popis okolního hluku. Slouží k pozdějšímu vysvětlení rozdílů mezi testy.">
+                    Prostředí
+                  </FieldHintLabel>
                   <select
                     value={micEnvironment}
                     onChange={e => setMicEnvironment(e.target.value as 'quiet' | 'office_noise')}
+                    title="Zvol, zda test běží v tichu nebo v běžném kancelářském hluku."
                     className="border rounded px-2 py-1 w-32 block mt-0.5"
                   >
                     <option value="quiet">quiet</option>
@@ -1102,10 +1137,13 @@ export function TuningPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-gray-600">Mic zařízení</label>
+                  <FieldHintLabel className="text-gray-600" hint="Konkrétní mikrofonní zařízení. Default použije systémový výchozí mikrofon.">
+                    Mic zařízení
+                  </FieldHintLabel>
                   <select
                     value={micDeviceId}
                     onChange={e => setMicDeviceId(e.target.value)}
+                    title="Vyber fyzický mikrofon pro real mic tuning."
                     className="border rounded px-2 py-1 w-56 block mt-0.5"
                   >
                     <option value="">default</option>
@@ -1117,34 +1155,43 @@ export function TuningPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-gray-600">Mic chunk (s)</label>
+                  <FieldHintLabel className="text-gray-600" hint="Délka mikrofonního audio bloku. Menší chunk má nižší latenci, ale více režie a větší riziko nestability.">
+                    Mic chunk (s)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     step="0.05"
                     min={0.05}
                     max={2}
                     value={micChunkSeconds}
+                    title="Délka jednoho mikrofonního chunku v sekundách."
                     onChange={e => setMicChunkSeconds(Math.max(0.05, Math.min(2, +e.target.value || 0.2)))}
                     className="border rounded px-2 py-1 w-24 block mt-0.5"
                   />
                 </div>
                 <div>
-                  <label className="text-gray-600">Příprava (s)</label>
+                  <FieldHintLabel className="text-gray-600" hint="Čas na připravení přehrávání před začátkem trialu. Pomáhá u ručně spouštěného externího audia.">
+                    Příprava (s)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={0}
                     max={60}
                     value={micPrepareSeconds}
+                    title="Počet sekund přípravy před spuštěním nahrávání."
                     onChange={e => setMicPrepareSeconds(Math.max(0, Math.min(60, Math.floor(+e.target.value || 0))))}
                     className="border rounded px-2 py-1 w-24 block mt-0.5"
                   />
                 </div>
               </div>
               <div>
-                <label className="text-xs text-gray-600">Poznámka zařízení</label>
+                <FieldHintLabel className="text-xs text-gray-600" hint="Volitelná poznámka pro pozdější identifikaci sestavy, například notebookový mikrofon a model telefonu.">
+                  Poznámka zařízení
+                </FieldHintLabel>
                 <input
                   value={micDeviceNote}
                   onChange={e => setMicDeviceNote(e.target.value)}
+                  title="Poznámka k zařízení a fyzickému uspořádání testu."
                   placeholder="např. ntb mic + Samsung S23"
                   className="border rounded px-2 py-1 text-xs w-full mt-0.5"
                 />
@@ -1153,46 +1200,57 @@ export function TuningPage() {
                 <div className="text-xs font-medium text-blue-900">Kalibrace</div>
                 <div className="flex gap-2 flex-wrap text-xs">
                   <div>
-                    <label className="text-gray-600">RMS (dBFS)</label>
+                    <FieldHintLabel className="text-gray-600" hint="Průměrná hlasitost vstupu v dBFS. Příliš nízké RMS znamená, že mikrofon slyší hlavně ticho.">
+                      RMS (dBFS)
+                    </FieldHintLabel>
                     <input
                       type="number"
                       step="0.1"
                       value={calibrationRmsDbfs}
+                      title="Naměřená průměrná úroveň mikrofonu v dBFS."
                       onChange={e => setCalibrationRmsDbfs(+e.target.value)}
                       className="border rounded px-2 py-1 w-24 block mt-0.5"
                     />
                   </div>
                   <div>
-                    <label className="text-gray-600">Clipping (%)</label>
+                    <FieldHintLabel className="text-gray-600" hint="Podíl přebuzených vzorků. Nenulový clipping obvykle znamená moc hlasitý vstup a horší přepis.">
+                      Clipping (%)
+                    </FieldHintLabel>
                     <input
                       type="number"
                       step="0.001"
                       min={0}
                       max={100}
                       value={calibrationClippingPct}
+                      title="Procento přebuzených vzorků v mikrofonním vstupu."
                       onChange={e => setCalibrationClippingPct(Math.max(0, Math.min(100, +e.target.value || 0)))}
                       className="border rounded px-2 py-1 w-24 block mt-0.5"
                     />
                   </div>
                   <div>
-                    <label className="text-gray-600">Noise floor (dBFS)</label>
+                    <FieldHintLabel className="text-gray-600" hint="Hladina šumu bez řeči. Čím je blíž k nule, tím hlučnější je prostředí nebo vstup.">
+                      Noise floor (dBFS)
+                    </FieldHintLabel>
                     <input
                       type="number"
                       step="0.1"
                       value={calibrationNoiseFloorDbfs}
+                      title="Naměřená hladina šumu mikrofonu v dBFS."
                       onChange={e => setCalibrationNoiseFloorDbfs(+e.target.value)}
                       className="border rounded px-2 py-1 w-28 block mt-0.5"
                     />
                   </div>
                   <div className="pt-5">
-                    <button
+                    <ActionButton
                       type="button"
                       onClick={checkMicCalibration}
                       disabled={checkingCalibration}
-                      className="px-3 py-1 rounded border border-blue-300 text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+                      variant="secondary"
+                      className="px-3 py-1 text-xs"
+                      title="Ověří, jestli zadaná kalibrace odpovídá rozumné úrovni mikrofonu."
                     >
                       {checkingCalibration ? 'Ověřuji...' : 'Ověřit kalibraci'}
-                    </button>
+                    </ActionButton>
                   </div>
                 </div>
                 {calibrationResult && (
@@ -1220,62 +1278,73 @@ export function TuningPage() {
           )}
           <div className="flex gap-3 flex-wrap">
             <div>
-              <label className="text-xs text-gray-500">Délka klipu (s)</label>
+              <FieldHintLabel className="text-xs text-gray-500" hint="Kolik sekund audio ukázky se použije pro jeden trial. Delší klip je férovější, ale test trvá déle.">
+                Délka klipu (s)
+              </FieldHintLabel>
               <input type="number" value={sampleSeconds} min={20} max={300}
                 onChange={e => setSampleSeconds(+e.target.value)}
+                title="Délka testovaného klipu v sekundách."
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
             <div>
-              <label className="text-xs text-gray-500" title="Seed pro výběr pozice v klipu — stejný seed = stejný úsek. Ignorováno pokud je nastaven Pevný start.">
+              <FieldHintLabel className="text-xs text-gray-500" hint="Seed pro výběr pozice v klipu. Stejný seed znamená stejný úsek; ignoruje se, pokud je nastaven pevný start.">
                 Clip seed
-              </label>
+              </FieldHintLabel>
               <input type="number" value={clipSeed} min={0} max={9999}
                 onChange={e => setClipSeed(+e.target.value)}
                 disabled={clipStartSeconds != null}
+                title="Seed pro opakovatelný výběr místa v klipu."
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5 disabled:opacity-40" />
             </div>
             <div>
-              <label className="text-xs text-gray-500" title="Pevný start klipu v sekundách od začátku videa. Přepíše clip seed. Prázdné = automaticky ze seedu.">
+              <FieldHintLabel className="text-xs text-gray-500" hint="Pevný start v sekundách od začátku videa. Přepíše clip seed. Prázdné znamená automaticky ze seedu.">
                 Pevný start (s)
-              </label>
+              </FieldHintLabel>
               <input type="number"
                 value={clipStartSeconds ?? ''}
                 min={0}
                 placeholder="auto"
                 onChange={e => setClipStartSeconds(e.target.value === '' ? null : +e.target.value)}
+                title="Pevný start klipu v sekundách, nebo prázdné pro automatiku."
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
             {(['random', 'smart'] as Strategy[]).includes(strategy) && (
               <div>
-                <label className="text-xs text-gray-500">{strategy === 'smart' ? 'Max kandidátů/model' : 'Max triálů'}</label>
+                <FieldHintLabel className="text-xs text-gray-500" hint="Horní limit počtu variant u random/smart strategie. Nižší hodnota zrychlí test, ale může minout dobré nastavení.">
+                  {strategy === 'smart' ? 'Max kandidátů/model' : 'Max triálů'}
+                </FieldHintLabel>
                 <input type="number" value={maxTrials} min={4} max={50}
                   onChange={e => setMaxTrials(+e.target.value)}
+                  title="Maximální počet kandidátů nebo trialů pro danou strategii."
                   className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
               </div>
             )}
             <div>
-              <label className="text-xs text-gray-500" title="Po základní vlně zopakuje nejlepších K kandidátů kvůli odhadu rozptylu/CI95.">
+              <FieldHintLabel className="text-xs text-gray-500" hint="Po základní vlně zopakuje nejlepších K kandidátů kvůli odhadu rozptylu a stabilitě výsledku.">
                 Repeat top-K
-              </label>
+              </FieldHintLabel>
               <input type="number" value={repeatTopK} min={0} max={10}
                 onChange={e => setRepeatTopK(Math.max(0, +e.target.value || 0))}
+                title="Kolik nejlepších kandidátů se má zopakovat."
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
             <div>
-              <label className="text-xs text-gray-500" title="Celkový počet běhů na kandidáta (včetně prvního běhu).">
+              <FieldHintLabel className="text-xs text-gray-500" hint="Celkový počet běhů na kandidáta včetně prvního běhu. Vyšší hodnota lépe odhalí náhodné výkyvy.">
                 Repeat runs
-              </label>
+              </FieldHintLabel>
               <input type="number" value={repeatRuns} min={1} max={10}
                 onChange={e => setRepeatRuns(Math.max(1, +e.target.value || 1))}
+                title="Kolikrát se má vybraný kandidát celkem spustit."
                 className="border rounded px-2 py-1 text-sm w-20 block mt-0.5" />
             </div>
             <div>
-              <label className="text-xs text-gray-500" title="Třída cílového HW. Auto = klasifikace podle logical cores + total RAM.">
+              <FieldHintLabel className="text-xs text-gray-500" hint="Třída cílového počítače. Auto ji odvodí z počtu jader a RAM, ne z aktuálního zatížení.">
                 HW profil
-              </label>
+              </FieldHintLabel>
               <select
                 value={hardwareProfile}
                 onChange={e => setHardwareProfile(e.target.value)}
+                title="Vyber cílovou třídu hardware pro interpretaci výsledků."
                 className="border rounded px-2 py-1 text-sm w-44 block mt-0.5"
               >
                 <option value="auto">auto (cores+RAM)</option>
@@ -1289,12 +1358,13 @@ export function TuningPage() {
               </div>
             </div>
             <div>
-              <label className="text-xs text-gray-500" title="Řízená zátěž během trialu. Simuluje obsazený stroj (target CPU/RAM %).">
+              <FieldHintLabel className="text-xs text-gray-500" hint="Řízená zátěž během trialu. Simuluje obsazený stroj nastaveným cílem CPU/RAM.">
                 Zátěž simulace
-              </label>
+              </FieldHintLabel>
               <select
                 value={loadProfile}
                 onChange={e => setLoadProfile(e.target.value)}
+                title="Zapne nebo vypne simulovanou systémovou zátěž během trialu."
                 className="border rounded px-2 py-1 text-sm w-44 block mt-0.5"
               >
                 <option value="none">vypnuto</option>
@@ -1329,12 +1399,13 @@ export function TuningPage() {
               )}
             </div>
             <div>
-              <label className="text-xs text-gray-500" title="Procesní limity pro tuning worker/model (doporučeno pro simulaci slabšího HW).">
+              <FieldHintLabel className="text-xs text-gray-500" hint="Procesní limity pro tuning worker/model. Hodí se pro simulaci slabšího počítače.">
                 Omezení výkonu
-              </label>
+              </FieldHintLabel>
               <select
                 value={constraintsProfile}
                 onChange={e => setConstraintsProfile(e.target.value)}
+                title="Nastaví limity CPU/RAM pro tuning worker nebo model."
                 className="border rounded px-2 py-1 text-sm w-44 block mt-0.5"
               >
                 <option value="none">vypnuto</option>
@@ -1382,13 +1453,19 @@ export function TuningPage() {
             </div>
           </div>
           <div>
-            <label className="text-xs text-gray-500">Popis</label>
+            <FieldHintLabel className="text-xs text-gray-500" hint="Volitelný popis runu, podle kterého později poznáš účel testu.">
+              Popis
+            </FieldHintLabel>
             <input value={label} onChange={e => setLabel(e.target.value)}
+              title="Krátký popis tuning runu."
               placeholder="volitelný popis..." className="border rounded px-2 py-1 text-sm w-full mt-0.5" />
           </div>
           <div>
-            <label className="text-xs text-gray-500">HW poznámka (nepovinné)</label>
+            <FieldHintLabel className="text-xs text-gray-500" hint="Volitelná poznámka k počítači nebo testovacím podmínkám. Pomáhá při pozdějším porovnání.">
+              HW poznámka (nepovinné)
+            </FieldHintLabel>
             <input value={hardwareNote} onChange={e => setHardwareNote(e.target.value)}
+              title="Poznámka k hardware nebo podmínkám testu."
               placeholder="např. i5-8250U / 8GB / HDD" className="border rounded px-2 py-1 text-sm w-full mt-0.5" />
           </div>
         </div>
@@ -1433,13 +1510,10 @@ export function TuningPage() {
         <div className="space-y-3">
           {WHISPER_PARAM_DEFS.map(p => (
             <div key={p.name} className="flex items-start gap-4">
-              <div className="w-36 shrink-0 pt-1 relative group/label">
-                <span className="text-xs font-medium text-gray-600 cursor-help underline decoration-dotted decoration-gray-400">
+              <div className="w-36 shrink-0 pt-1">
+                <FieldHintLabel className="text-xs font-medium text-gray-600" hint={p.description}>
                   {p.label}
-                </span>
-                <div className="pointer-events-none absolute left-0 top-5 z-20 hidden group-hover/label:block w-72 bg-gray-900 text-white text-xs rounded px-2.5 py-2 shadow-xl leading-relaxed">
-                  {p.description}
-                </div>
+                </FieldHintLabel>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {(p.values as readonly unknown[]).map(v => {
@@ -1644,10 +1718,14 @@ export function TuningPage() {
           >
             Nastavit: Plny v3 grid (4x CZ)
           </button>
-          <button onClick={startTuning}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-medium">
-            ▶ Spustit tuning
-          </button>
+          <ActionButton
+            onClick={startTuning}
+            variant="start"
+            className="px-4 py-1.5 text-sm"
+            title="Spustí tuning podle vybraných videí, modelů, parametrů a režimu vstupu."
+          >
+            Spustit tuning
+          </ActionButton>
           {msg && <span className="text-sm text-red-500">{msg}</span>}
         </div>
         <p className="text-xs text-gray-400">● = výchozí hodnota (baseline). Vyber více hodnot nebo promptů pro sweep.</p>
@@ -2087,10 +2165,14 @@ function TuningJobDetail({ job, library, nowMs, onCancel }: { job: TuningJobStat
             </div>
           )}
           {(job.status === 'running' || job.status === 'pending') && (
-            <button onClick={onCancel}
-              className="text-xs text-red-600 hover:text-red-800 border border-red-200 hover:border-red-400 rounded px-2 py-0.5">
-              ⏹ Zastavit
-            </button>
+            <ActionButton
+              onClick={onCancel}
+              variant="stop"
+              className="px-2 py-0.5 text-xs"
+              title="Zastaví běžící nebo čekající tuning job."
+            >
+              Zastavit
+            </ActionButton>
           )}
           {job.status === 'running' && ram && (
             <span className={`text-xs font-mono px-2 py-0.5 rounded border ${ram.pct > 90 ? 'text-red-700 bg-red-50 border-red-200' : ram.pct > 75 ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-gray-600 bg-gray-50 border-gray-200'}`}

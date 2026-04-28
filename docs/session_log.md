@@ -3,8 +3,25 @@
 Doc-Meta:
 - owner: engineering
 - status: active
-- last_updated_utc: 2026-04-27T21:59:43Z
+- last_updated_utc: 2026-04-28T04:33:05Z
 - review_due_utc: 2026-04-15T00:00:00Z
+
+---
+
+## Session 2026-04-28T04:33:05Z (transcript-file-url-cache-smoke)
+
+### Summary
+- Fixed transcript/benchmark handling of `file:///C:/...` sources so Windows drive paths do not degrade into invalid `C:Users\...` paths.
+- Added Library audio fallback for local file URLs whose cache file was renamed to the title-prefixed `{prefix8}_{old_name}.wav` format.
+- Made benchmark workers fail early on missing local audio files instead of reporting a completed run with only per-source errors.
+- Prevented `/transcript` autosave from archiving metadata-only text without a real transcript body.
+- Corrected buffered Whisper progress/metrics so short transcript jobs report the tested clip length, not the full WAV duration.
+
+### Impact
+- `/transcript` no longer silently stores a fake-looking metadata-only result when the source file is missing or misresolved.
+- A 5s smoke run from the Library local audio item now uses `runtime/audio_cache/CZ_Psych_mW9FC8BR_l4_test.wav`, returns a real transcript, and records `chunk_duration_s=5.0`.
+- Verified with targeted unit tests, frontend build, `/api/health`, Codex in-app browser screenshot, and end-to-end transcript smoke via the running app.
+- Full `tests/unit` still has temp-directory PermissionError failures in this Windows environment (`AppData\Local\Temp\pytest-of-adamf`), unrelated to the changed file URL/cache path logic.
 
 ---
 
@@ -1733,3 +1750,165 @@ Pokračování tuningu whisper.cpp. Tuning job `tune_20260327_025443_6200bb` spu
 
 ### Impact
 - LateMic now has a concrete design contract for testing 5/10-60s delay budgets, segment sizing, pause-aware boundaries, temporary audio deletion, metrics, and phased implementation.
+
+---
+
+## Session 2026-04-27T22:24:12Z (latemic-page-scaffold)
+
+### Summary
+- Added `/benchmark/latemic` route and a `Little late Mic` benchmark tab.
+- Implemented the first LateMic page scaffold following the documented page plan: mic proof, segmentation/delay, models/parameters, test plan, and start/results.
+- Added browser-side mic proof metrics for RMS/peak dBFS, VAD, clipping, silence, chunks, bytes, and sample rate.
+- Added an honest test-plan calculator for model x lag-budget x repeat count, including required RTF limits and copyable JSON plan export.
+- Made the LateMic reference video/audio selector follow the saved `/library` ordering, including WER ordering when that library sort is active.
+- Added a shared library-sort change event/hook so `/benchmark/mic`, `/benchmark/latemic`, and `/transcript` source menus refresh their library-order menus whenever `/library` sorting changes.
+
+### Impact
+- Operators can now configure and inspect a LateMic test plan separately from live MIC streaming.
+- Actual segment capture/transcription is intentionally not wired yet; the Start button remains disabled until the backend LateMic runner and authoritative segment storage are implemented.
+
+---
+
+## Session 2026-04-27T22:54:21Z (latemic-authoritative-segment-api)
+
+### Summary
+- Added `POST /api/latemic/segments` and `GET /api/latemic/segments/{segment_id}`.
+- Added `runtime/late_mic` storage for authoritative LateMic artifacts: `segment.wav`, `manifest.json`, and `result.json`.
+- Added public helper `transcribe_latemic_segment(...)` so LateMic transcribes the stored mic WAV through the existing STT runner without reading reference, history, snapshot, or simulated text.
+- Wired `/benchmark/latemic` Start to record one browser mic PCM segment and submit it to selected models.
+- Added unit tests for successful retention/deletion policy and failure behavior with empty authoritative results.
+
+### Impact
+- LateMic pilot results now come only from a real uploaded mic segment and are marked with `transcript_source=latemic_segment`.
+- Full multi-segment orchestration and automated lag-budget sweeps still remain a later LM milestone.
+
+---
+
+## Session 2026-04-27T23:24:41Z (latemic-full-run-loop)
+
+### Summary
+- Replaced the one-segment LateMic pilot with a planned run loop: repeat count x lag-budget variants x selected STT models.
+- Browser capture now records real mic PCM segments with pause-aware ending after the configured minimum segment length, or hard-caps at `segment + max pause wait`.
+- Each model receives the same captured segment for a fair per-segment comparison; the request records run id, repeat, lag budget, capture metrics, and source metadata.
+- Added `queue_wait_s` to the backend contract and included it in `max_visible_lag_s`.
+- Added after-run WAV cleanup via `DELETE /api/latemic/segments/{segment_id}/wav`; `result.json` is updated after cleanup.
+- Added progress, stop-after-current-step, per-model summary, detailed result rows, and cleanup status in `/benchmark/latemic`.
+
+### Impact
+- LateMic can now run the configured automated series without substituting reference/history/simulated text.
+- Physical validation is still required to judge real microphone quality against the chosen external audio source.
+
+---
+
+## Session 2026-04-28T02:02:42Z (global-workflow-guide-ui)
+
+### Summary
+- Added a shared frontend `WorkflowGuide` component for compact step-by-step page orientation.
+- Added workflow guides to Library, Benchmark, Results, Tuning, Transcript, Models, HW Flow, and Dashboard.
+- Benchmark now shows a workflow matching the selected tab: classic benchmark, live microphone, or Little late Mic.
+
+### Impact
+- Main application sections now expose a consistent operator workflow without changing STT runtime behavior, API contracts, or result storage.
+- This is a UI organization pass only; deeper component refactoring remains a separate follow-up.
+
+---
+
+## Session 2026-04-28T02:18:58Z (global-tooltip-action-ui)
+
+### Summary
+- Added shared frontend UI primitives for hover help labels and unified action buttons.
+- Expanded model parameter help with defaults, ranges, select options, and per-control titles.
+- Added hover explanations to the main operator settings in mic sequence testing, LateMic, benchmark, transcript job setup, tuning, and live job stop controls.
+- Standardized the primary START/STOP style across the main test workflows.
+
+### Impact
+- Operators get consistent hover help for important settings and clearer START/STOP affordances without changing STT runtime behavior, API contracts, or result storage.
+- Build validation passed for the updated frontend.
+
+---
+
+## Session 2026-04-28T02:38:47Z (portability-runtime-path-refactor)
+
+### Summary
+- Refactored key backend/script runtime paths to use shared path helpers and made backend config honor `ASTT_RUNTIME_ROOT`.
+- Replaced Unix web wrapper process handling with calls through `scripts/webctl.py`, avoiding broad port-kill behavior.
+- Added `scripts/portability_audit.py` to detect hardcoded local paths, direct runtime-root bypasses, and unsafe port-kill patterns in source files.
+- Removed a machine-specific Windows example path from the Library audio-folder UI.
+- Added portability audit report triplet: `docs/reports/portability_refactor_2026-04-28.md`, `.json`, and `.jsonl`.
+
+### Impact
+- Source-level portability checks now pass for the refactored install/runtime surface.
+- Verified locally: portability audit, Python compileall, targeted tests, full tests with explicit pytest basetemp, frontend build, PowerShell installer parse, runtime override smoke, health check, and `/benchmark/mic` HTTP smoke.
+- Not verified physically: clean install on a second Windows PC or macOS host; macOS shell syntax check was blocked because `bash` is not installed on this Windows environment.
+
+---
+
+## Session 2026-04-28T02:55:36Z (install-portability-test-suite)
+
+### Summary
+- Added noninteractive install dry-run validation to Windows and macOS installers.
+- Added `.github/workflows/install-portability.yml` with a `windows-latest` and `macos-latest` matrix.
+- Added `scripts/install_portability_smoke.py` with `static`, `ci`, and `post-install` levels plus optional model/transcribe smoke hooks.
+- Added unit guards in `tests/unit/test_install_portability.py`.
+- Added install portability test plan/report triplet under `docs/reports/install_portability_test_plan_2026-04-28.*`.
+- Registered the install portability validation plan in `docs/PLAN_TRACKER.md`.
+
+### Impact
+- Windows/macOS install validation is now reproducible in CI and manually on clean machines.
+- Local Windows evidence: installer dry-run passed; static smoke passed; CI-level smoke passed with `131 passed`; post-install web smoke passed and restored the web server.
+- Remaining release gate: execute GitHub Actions and a real clean Windows/macOS VM or host install, especially for model binaries and OS audio/runtime behavior.
+
+---
+
+## Session 2026-04-28T03:04:41Z (tooltip-effect-summaries)
+
+### Summary
+- Extended the shared `FieldHintLabel` helper so existing hover descriptions end with a short `Co to je/dělá:` explanation.
+- Added centralized setting-effect summaries for model selection, microphone input, sequence timing, tuning ranges, audio plan fields, benchmark setup, mic proof metrics, and model parameters.
+- Made the custom tooltip box preserve line breaks so the added summary stays visually separate from the existing description.
+
+### Impact
+- Setting tooltips across the frontend are more explicit for non-expert operators without changing STT runtime behavior, API contracts, or result storage.
+- Frontend build validation passed; direct Codex in-app browser inspection was unavailable, so visual verification should still be checked in the running browser after reload.
+
+---
+
+## Session 2026-04-28T03:16:23Z (transcribe-resize-diagnostics)
+
+### Summary
+- Made `/transcript` split resizing use global pointer move/up handling instead of relying on mouse movement inside the layout container.
+- Added a live first-visible-text latency estimate while a transcript job is running.
+- Changed the diagnostics latency row to `Latence ms (s)` and displays milliseconds plus seconds in parentheses.
+- Added a short diagnostics note explaining that WER and P50/P95 RTF are final-run metrics and appear after the result is available.
+
+### Impact
+- Dragging the transcript/editor separator should remain responsive even when the cursor moves over nested panel content.
+- The diagnostics panel is clearer during long-running transcription jobs without changing backend STT processing or stored run results.
+
+---
+
+## Session 2026-04-28T03:22:13Z (tooltip-detail-and-resize-fallback)
+
+### Summary
+- Expanded the shared `Co to je/dělá:` tooltip summaries so model parameters and test settings are explained in less technical language.
+- Made the `/transcript` separator easier to grab and added mouse-event fallback in addition to pointer events.
+- Changed the split layout to use fixed `flex-basis` for the resized panel and flex fill for the other panel.
+
+### Impact
+- Tooltip explanations should be clearer for non-expert users without changing runtime behavior.
+- `/transcript` resize handling is more robust in browsers where the previous pointer-only path or narrow separator was unreliable.
+
+---
+
+## Session 2026-04-28T05:07:45Z (v7-health-and-pytest-acl)
+
+### Summary
+- Separated legacy client events, diagnostic sequence tokens, and incomplete sequence reports in MIC Orchestrator V7 health.
+- Added Dashboard visibility for ignored legacy/diagnostic events and incomplete/ignored reports.
+- Added a Windows pytest workaround so tmp directories are not created with a mode that becomes unreadable in this environment.
+- Isolated V7 mic unit tests from real runtime logs and sequence reports.
+
+### Impact
+- Dashboard V7 health no longer reports old legacy client events as current invalid contract failures.
+- Unit and full test runs no longer depend on the broken user TEMP ACL path.
+- Verified locally: targeted V7/LateMic/source tests, full `tests/unit`, full `tests`, frontend build, web restart, V7 health API, and Dashboard in Codex in-app browser.

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { WorkflowGuide } from '../components/WorkflowGuide'
 import { formatDateTimeMedium } from '../lib/time'
 
 const R = '#dc2626'
@@ -46,6 +47,16 @@ export function HWFlowPage() {
           Nestačí jen model a parametry. Rozhoduje i celý tok: {red('mikrofon')}, OS, CPU/{red('RAM')} rozpočet a akustika.
         </p>
       </div>
+
+      <WorkflowGuide
+        title="Workflow HW ověření"
+        steps={[
+          { label: 'Vstup', detail: 'Mikrofon, OS audio a akustika.' },
+          { label: 'Budget', detail: 'RTF, first token, drop a queue debt.' },
+          { label: 'Ladění', detail: 'Zmenšit kvalitu nebo model podle limitu.' },
+          { label: 'Potvrzení', detail: 'Opakování a soak test finalisty.' },
+        ]}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-white rounded border border-gray-200 p-4">

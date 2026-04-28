@@ -1,12 +1,11 @@
-#!/bin/bash
-# web-up-build.sh - build frontendu + spustí backend (Mac / Linux)
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
+
 cd "$(dirname "$0")"
-if [ ! -d ".venv" ]; then
-  echo "[web] chyba: .venv neexistuje. Spusť: python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt"
-  exit 1
+if [[ ! -x ".venv/bin/python" ]]; then
+  echo "[web] chyba: .venv/bin/python neexistuje"
+  echo "[web] spusť: python3 -m venv .venv && .venv/bin/python -m pip install -r backend/requirements.txt"
+  exit 2
 fi
-echo "[web] frontend build..."
-npm --prefix frontend install && npm --prefix frontend run build
-echo "[web] start: http://127.0.0.1:8012"
-.venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8012
+
+exec .venv/bin/python -X utf8 scripts/webctl.py up-build "$@"

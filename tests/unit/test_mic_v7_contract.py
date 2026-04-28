@@ -11,6 +11,12 @@ from backend.app.services.mic_v7_contract import (
 )
 
 
+def _isolate_mic_runtime(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(mic_service, "MIC_EVENTS_LOG_PATH", tmp_path / "logs" / "mic_sequence_events.jsonl")
+    monkeypatch.setattr(mic_service, "MIC_SEQUENCES_ROOT", tmp_path / "mic_sequences")
+    monkeypatch.setattr(mic_service, "MIC_SESSIONS_ROOT", tmp_path / "mic_sessions")
+
+
 def test_apply_v7_event_contract_detects_missing_required_fields() -> None:
     payload = apply_v7_event_contract(
         {
@@ -82,7 +88,8 @@ def test_kpi_summary_and_readiness_flags_hard_latency_violation() -> None:
     assert "latency_hard_limit" in readiness["failed_checks"]
 
 
-def test_mic_session_preflight_blocks_batch_only_model() -> None:
+def test_mic_session_preflight_blocks_batch_only_model(monkeypatch, tmp_path) -> None:
+    _isolate_mic_runtime(monkeypatch, tmp_path)
     session_id = mic_service.create_session(
         "qwen_asr_0_6b",
         {"mic_orchestrator_mode": "v7_cs_online"},
@@ -95,7 +102,8 @@ def test_mic_session_preflight_blocks_batch_only_model() -> None:
         mic_service.start_recording(session_id)
 
 
-def test_sequence_trial_entry_preserves_tuning_metadata() -> None:
+def test_sequence_trial_entry_preserves_tuning_metadata(monkeypatch, tmp_path) -> None:
+    _isolate_mic_runtime(monkeypatch, tmp_path)
     session_id = mic_service.create_session(
         "whisper_cpp_base",
         {

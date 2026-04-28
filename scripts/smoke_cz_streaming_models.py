@@ -34,6 +34,7 @@ from packages.adapters.whisper_cpp_runner import (
 from packages.benchmarks.ground_truth.vtt_reference import extract_vtt_clip_text
 from packages.benchmarks.metrics.text_metrics import char_error_rate, word_error_rate, word_error_rate_soft
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 from packages.ingest.source_resolver import SourceEntry
 
 configure_console_io()
@@ -92,7 +93,7 @@ def main() -> int:
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--include-sherpa", action="store_true", help="Include sherpa parakeet run (can fail on incompatible runtime/model).")
     parser.add_argument("--include-vosk", action="store_true", help="Include VOSK fallback baseline.")
-    parser.add_argument("--out-dir", default=str(ROOT / "runtime" / "mic_smoke"))
+    parser.add_argument("--out-dir", default=str(runtime_subpath("mic_smoke")))
     args = parser.parse_args()
 
     video_id = str(args.video_id).strip()

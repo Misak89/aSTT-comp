@@ -4,6 +4,7 @@ import {
 } from 'recharts'
 import { api } from '../api/client'
 import type { BenchmarkJobStatus, HwSample, LibraryItem } from '../types'
+import { ActionButton } from './UiPrimitives'
 
 interface Props {
   job: BenchmarkJobStatus
@@ -179,7 +180,7 @@ export function LiveJobPanel({ job, onCancel }: Props) {
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
           {isActive && (
-            <button
+            <ActionButton
               onClick={async () => {
                 setCancelling(true)
                 try {
@@ -188,10 +189,12 @@ export function LiveJobPanel({ job, onCancel }: Props) {
                 } catch { setCancelling(false) }
               }}
               disabled={cancelling}
-              className="px-2 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200 font-medium disabled:opacity-50"
+              variant="stop"
+              className="px-2 py-0.5 text-xs"
+              title="Zastaví běžící benchmark job."
             >
-              {cancelling ? 'Zastavuji...' : '⏹ Zastavit'}
-            </button>
+              {cancelling ? 'Zastavuji...' : 'Zastavit'}
+            </ActionButton>
           )}
           {!isActive && job.run_id && (
             <a href={`/results?run=${job.run_id}`} className="text-green-600 hover:underline font-medium">

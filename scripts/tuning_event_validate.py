@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 from packages.common.tuning_event_store import get_event_stats, read_events, summarize_event_sequence
 
 configure_console_io()
@@ -19,7 +20,7 @@ configure_console_io()
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate tuning event-store sequence integrity.")
     parser.add_argument("--job-id", required=True, help="Tuning job id.")
-    parser.add_argument("--tuning-root", default=str(ROOT / "runtime" / "tuning"), help="Path to runtime/tuning.")
+    parser.add_argument("--tuning-root", default=str(runtime_subpath("tuning")), help="Path to runtime/tuning.")
     parser.add_argument("--after-seq", type=int, default=0, help="Read events with seq > after-seq.")
     parser.add_argument("--limit", type=int, default=2000, help="Max events to read.")
     parser.add_argument("--expect-terminal", default="", help="Expected terminal event type.")
@@ -89,4 +90,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

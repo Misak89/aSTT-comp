@@ -4,6 +4,7 @@ import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Responsive
 import { api } from '../api/client'
 import type { RunDetail, RunResult, SourceMetric, ChunkMetric } from '../types'
 import { WerBadge } from '../components/WerBadge'
+import { WorkflowGuide } from '../components/WorkflowGuide'
 import { formatDateTimeDayMonthHm } from '../lib/time'
 
 type RunSummary = { run_id: string; created_at_utc: string; sample_seconds: number; result_count: number; label?: string }
@@ -65,6 +66,17 @@ export function ResultsPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold">Výsledky</h1>
+
+      <WorkflowGuide
+        title="Workflow výsledků"
+        steps={[
+          { label: 'Vybrat run', detail: 'Historie nebo ruční Run ID.' },
+          { label: 'Souhrn', detail: 'Zdroje, modely a základní metriky.' },
+          { label: 'Porovnat', detail: 'WER, RTF, latence a RAM.' },
+          { label: 'Detail', detail: 'Texty, chunky a chyby triálů.' },
+          { label: 'Doporučení', detail: 'Top kandidáti pro další test.' },
+        ]}
+      />
 
       {/* Načtení runu */}
       <div className="space-y-2">

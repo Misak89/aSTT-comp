@@ -26,8 +26,10 @@ import type {
 } from '../types'
 import { api } from '../api/client'
 import { ModelParamsForm, ParamInput } from './ModelParamsForm'
+import { ActionButton, FieldHintLabel } from './UiPrimitives'
 import { videoLabel } from '../utils'
 import { formatDateTimeMedium } from '../lib/time'
+import { sortLibraryItemsLikeLibraryPage, useLibrarySortRevision, usesLibraryWerSort } from '../lib/librarySort'
 
 interface Props {
   /** Modely které podporují mic (supports_microphone: true) */
@@ -168,98 +170,6 @@ type ActiveSessionLoopConfig = {
 
 type HistoryModeFilter = 'all' | 'free_speech' | 'reference_video'
 type HistorySortKey = 'saved_at' | 'model_id' | 'mic_test_mode' | 'reference_label' | 'rtf' | 'drop_rate'
-type LibrarySortKey =
-  | 'title'
-  | 'language'
-  | 'duration'
-  | 'genre'
-  | 'view_count'
-  | 'subtitle_languages'
-  | 'subtitles'
-  | 'audio'
-  | 'visible_in_menus'
-  | 'added_at'
-  | 'wer'
-
-const LIB_SETTINGS_KEY = 'astt_library_settings_v1'
-const LIB_SORT_DEFAULT_DIR: Record<LibrarySortKey, 'asc' | 'desc'> = {
-  title: 'asc',
-  language: 'asc',
-  duration: 'asc',
-  genre: 'asc',
-  view_count: 'desc',
-  subtitle_languages: 'asc',
-  subtitles: 'desc',
-  audio: 'desc',
-  visible_in_menus: 'desc',
-  added_at: 'desc',
-  wer: 'asc',
-}
-
-function isLibrarySortKey(value: unknown): value is LibrarySortKey {
-  return (
-    value === 'title' ||
-    value === 'language' ||
-    value === 'duration' ||
-    value === 'genre' ||
-    value === 'view_count' ||
-    value === 'subtitle_languages' ||
-    value === 'subtitles' ||
-    value === 'audio' ||
-    value === 'visible_in_menus' ||
-    value === 'added_at' ||
-    value === 'wer'
-  )
-}
-
-function loadLibrarySortSettings(): {
-  sortOrder: LibrarySortKey[]
-  sortDirMap: Record<LibrarySortKey, 'asc' | 'desc'>
-} {
-  try {
-    const raw = window.localStorage.getItem(LIB_SETTINGS_KEY)
-    const parsed = raw ? JSON.parse(raw) : {}
-    const rawOrder = Array.isArray(parsed?.sortOrder) ? parsed.sortOrder : []
-    const sortOrder = rawOrder.filter(isLibrarySortKey)
-    const rawDirMap = parsed?.sortDirMap && typeof parsed.sortDirMap === 'object' ? parsed.sortDirMap : {}
-    const sortDirMap = { ...LIB_SORT_DEFAULT_DIR }
-    for (const key of Object.keys(rawDirMap)) {
-      if (!isLibrarySortKey(key)) continue
-      const dir = rawDirMap[key]
-      if (dir === 'asc' || dir === 'desc') sortDirMap[key] = dir
-    }
-    return { sortOrder: sortOrder.length > 0 ? sortOrder : ['added_at'], sortDirMap }
-  } catch {
-    return { sortOrder: ['added_at'], sortDirMap: { ...LIB_SORT_DEFAULT_DIR } }
-  }
-}
-
-function sortLikeLibraryPage(items: LibraryItem[], werByVideoId: Record<string, number | null> = {}): LibraryItem[] {
-  const { sortOrder, sortDirMap } = loadLibrarySortSettings()
-  return [...items].sort((a, b) => {
-    for (const key of sortOrder) {
-      let va: string | number = ''
-      let vb: string | number = ''
-      if (key === 'title') { va = (a.title || '').toLowerCase(); vb = (b.title || '').toLowerCase() }
-      else if (key === 'language') { va = a.language || ''; vb = b.language || '' }
-      else if (key === 'duration') { va = a.duration_seconds ?? -1; vb = b.duration_seconds ?? -1 }
-      else if (key === 'genre') { va = (a.genre || '').toLowerCase(); vb = (b.genre || '').toLowerCase() }
-      else if (key === 'view_count') { va = a.view_count ?? -1; vb = b.view_count ?? -1 }
-      else if (key === 'subtitle_languages') {
-        va = (a.subtitle_languages || []).join(',').toLowerCase()
-        vb = (b.subtitle_languages || []).join(',').toLowerCase()
-      }
-      else if (key === 'subtitles') { va = a.subtitles_local ? 1 : 0; vb = b.subtitles_local ? 1 : 0 }
-      else if (key === 'audio') { va = a.audio_cached ? 1 : 0; vb = b.audio_cached ? 1 : 0 }
-      else if (key === 'visible_in_menus') { va = a.visible_in_menus !== false ? 1 : 0; vb = b.visible_in_menus !== false ? 1 : 0 }
-      else if (key === 'added_at') { va = a.upload_date ?? a.added_at ?? ''; vb = b.upload_date ?? b.added_at ?? '' }
-      else if (key === 'wer') { va = werByVideoId[a.video_id] ?? 999; vb = werByVideoId[b.video_id] ?? 999 }
-      const cmp = va < vb ? -1 : va > vb ? 1 : 0
-      if (cmp !== 0) return sortDirMap[key] === 'asc' ? cmp : -cmp
-    }
-    return 0
-  })
-}
 
 function computeTrialStatus(
   drop: number | undefined,
@@ -1775,15 +1685,16 @@ export function MicSession({ availableModels, library }: Props) {
   const mobileLoopPackageRef = useRef<MicMobileLoopPackageResponse | null>(null)
   const micInputProofRef = useRef<MicInputProof | null>(null)
   const micInputProofUiUpdatedAtRef = useRef(0)
+  const librarySortRevision = useLibrarySortRevision()
 
   const selectedModel = availableModels.find(m => m.model_id === modelId)
   const referenceLibrary = useMemo(
     () =>
-      sortLikeLibraryPage(
+      sortLibraryItemsLikeLibraryPage(
         (library ?? []).filter(v => !!v.video_id && v.visible_in_menus !== false),
         libraryWerByVideoId,
       ),
-    [library, libraryWerByVideoId],
+    [library, librarySortRevision, libraryWerByVideoId],
   )
   const selectedReferenceVideo = referenceLibrary.find(v => v.video_id === referenceVideoId)
   const selectedAudioDevice = deviceIndex !== null
@@ -2559,8 +2470,7 @@ export function MicSession({ availableModels, library }: Props) {
 
   useEffect(() => {
     const visible = (library ?? []).filter(v => !!v.video_id && v.visible_in_menus !== false)
-    const { sortOrder } = loadLibrarySortSettings()
-    if (!sortOrder.includes('wer') || visible.length === 0) {
+    if (!usesLibraryWerSort() || visible.length === 0) {
       setLibraryWerByVideoId({})
       return
     }
@@ -2579,7 +2489,7 @@ export function MicSession({ availableModels, library }: Props) {
       setLibraryWerByVideoId(Object.fromEntries(rows))
     })
     return () => { cancelled = true }
-  }, [library])
+  }, [library, librarySortRevision])
 
   useEffect(() => {
     setAutoModelSelectedIds((prev) => {
@@ -4562,7 +4472,9 @@ export function MicSession({ availableModels, library }: Props) {
         </div>
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,1fr)_minmax(240px,0.9fr)_minmax(380px,1.6fr)] gap-3 items-start">
         <div className="min-w-0">
-          <label className="block text-xs text-gray-400 mb-1">Model</label>
+          <FieldHintLabel tone="dark" className="mb-1 text-xs" hint="Aktuální model pro ruční mic test. V auto sekvenci se používají modely vybrané níže v části Auto sekvence.">
+            Model
+          </FieldHintLabel>
           <select
             value={modelId}
             onChange={e => {
@@ -4572,6 +4484,7 @@ export function MicSession({ availableModels, library }: Props) {
               setParams(buildMicParamsWithSaved(nextModel, paramsByModel[nextModelId]))
             }}
             disabled={uiLocked}
+            title="Vybraný STT model pro ruční mikrofonní přepis a editaci jeho parametrů."
             className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
           >
             {availableModels.map(m => (
@@ -4586,12 +4499,15 @@ export function MicSession({ availableModels, library }: Props) {
         </div>
 
         <div className="min-w-0">
-          <label className="block text-xs text-gray-400 mb-1">Mikrofon</label>
+          <FieldHintLabel tone="dark" className="mb-1 text-xs" hint="Zařízení, ze kterého prohlížeč čte reálný mikrofonní vstup. Volba výchozí použije systémový mikrofon.">
+            Mikrofon
+          </FieldHintLabel>
           {devices.length > 0 ? (
             <select
               value={deviceIndex ?? ''}
               onChange={e => setDeviceIndex(e.target.value === '' ? null : Number(e.target.value))}
               disabled={uiLocked}
+              title="Vybraný fyzický nebo systémový mikrofon."
               className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-white"
             >
               <option value="">výchozí</option>
@@ -4932,17 +4848,21 @@ export function MicSession({ availableModels, library }: Props) {
                 Jen aktuální
               </button>
               {autoModelSequenceActive && (
-                <button
+                <ActionButton
                   type="button"
                   onClick={stop}
-                  className="px-2 py-1 border border-red-700 rounded text-[11px] text-red-300 hover:text-red-200"
+                  variant="stop"
+                  title="Zastaví auto sekvenci včetně aktuálního mic trialu."
+                  className="px-2 py-1 text-[11px]"
                 >
                   Zastavit sekvenci
-                </button>
+                </ActionButton>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <label className="text-[11px] text-gray-400">Max doběh po stop (s)</label>
+              <FieldHintLabel tone="dark" className="text-[11px]" hint="Kolik sekund smí model ještě doběhnout po stopu. Po překročení se trial přeskočí, aby se nezdržela další sekvence.">
+                Max doběh po stop (s)
+              </FieldHintLabel>
               <input
                 type="number"
                 min={5}
@@ -4951,10 +4871,13 @@ export function MicSession({ availableModels, library }: Props) {
                 value={autoModelGraceSeconds}
                 onChange={(e) => setAutoModelGraceSeconds(Math.max(5, Math.min(60, Math.floor(Number(e.target.value) || 15))))}
                 disabled={uiLocked}
+                title="Maximální doběh modelu po stopu."
                 className="w-20 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-[11px] text-white disabled:opacity-60"
               />
               <span className="text-[11px] text-gray-500">po překročení se model přeskočí</span>
-              <label className="text-[11px] text-gray-400">Stop při mezeře (s)</label>
+              <FieldHintLabel tone="dark" className="text-[11px]" hint="Když po této době nepřijde nový text, systém může trial ukončit. Nejdřív ale až po minimální části audia.">
+                Stop při mezeře (s)
+              </FieldHintLabel>
               <input
                 type="number"
                 min={2}
@@ -4963,6 +4886,7 @@ export function MicSession({ availableModels, library }: Props) {
                 value={autoModelSilenceStopSeconds}
                 onChange={(e) => setAutoModelSilenceStopSeconds(Math.max(2, Math.min(60, Math.floor(Number(e.target.value) || 15))))}
                 disabled={uiLocked}
+                title="Doba bez nového přepisu, po které se trial může ukončit."
                 className="w-20 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-[11px] text-white disabled:opacity-60"
               />
               <span className="text-[11px] text-gray-500">
@@ -5010,7 +4934,7 @@ export function MicSession({ availableModels, library }: Props) {
               </summary>
               <div className="mt-2 space-y-2">
                 <div className="flex flex-wrap items-center gap-3">
-                  <label className="inline-flex items-center gap-2 text-gray-300">
+                  <label className="inline-flex items-center gap-2 text-gray-300" title="Zapne automatické vytvoření variant kolem aktuálního nastavení modelů. Používá se pro rychlé doladění, ne pro běžný jednorázový test.">
                     <input
                       type="checkbox"
                       checked={tuningSweepEnabled}
@@ -5018,7 +4942,9 @@ export function MicSession({ availableModels, library }: Props) {
                       disabled={uiLocked}
                       className="accent-emerald-500"
                     />
-                    Zapnout sweep kolem aktuálního nastavení
+                    <FieldHintLabel tone="dark" className="text-gray-300" hint="Zapne automatické vytvoření variant kolem aktuálního nastavení modelů. Používá se pro rychlé doladění, ne pro běžný jednorázový test.">
+                      Zapnout sweep kolem aktuálního nastavení
+                    </FieldHintLabel>
                   </label>
                   <label
                     className="inline-flex items-center gap-1 text-gray-400"
@@ -5036,8 +4962,10 @@ export function MicSession({ availableModels, library }: Props) {
                       ))}
                     </select>
                   </label>
-                  <label className="inline-flex items-center gap-1 text-gray-400">
-                    Režim
+                  <label className="inline-flex items-center gap-1 text-gray-400" title="Úzké doladění mění malé okolí baseline. Širší ověření zkouší větší rozptyl hodnot.">
+                    <FieldHintLabel tone="dark" className="text-gray-400" hint="Úzké doladění mění malé okolí baseline. Širší ověření zkouší větší rozptyl hodnot.">
+                      Režim
+                    </FieldHintLabel>
                     <select
                       value={tuningSweepMode}
                       onChange={(e) => setTuningSweepMode(normalizeTuningSweepMode(e.target.value))}
@@ -5049,8 +4977,10 @@ export function MicSession({ availableModels, library }: Props) {
                       ))}
                     </select>
                   </label>
-                  <label className="inline-flex items-center gap-1 text-gray-400">
-                    Velikost kroku
+                  <label className="inline-flex items-center gap-1 text-gray-400" title="Násobí doporučený posun parametru. Menší krok je jemnější, větší rychleji ověří širší okolí.">
+                    <FieldHintLabel tone="dark" className="text-gray-400" hint="Násobí doporučený posun parametru. Menší krok je jemnější, větší rychleji ověří širší okolí.">
+                      Velikost kroku
+                    </FieldHintLabel>
                     <input
                       type="number"
                       min={0.25}
@@ -5110,7 +5040,9 @@ export function MicSession({ availableModels, library }: Props) {
                         disabled={uiLocked}
                         className="accent-emerald-500"
                       />
-                      Vlastní rozsahy parametrů
+                      <FieldHintLabel tone="dark" className="text-gray-300" hint="Místo pevných předvoleb vybereš přesné parametry a rozsahy hodnot. Každý model použije jen parametry, které podporuje.">
+                        Vlastní rozsahy parametrů
+                      </FieldHintLabel>
                     </label>
                     <button
                       type="button"
@@ -5364,11 +5296,14 @@ export function MicSession({ availableModels, library }: Props) {
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2 items-end">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Video ř. dle knihovny</label>
+                <FieldHintLabel tone="dark" className="mb-1 text-xs" hint="Referenční video/audio z knihovny. Pořadí odpovídá aktuálnímu řazení v Knihovně.">
+                  Video ř. dle knihovny
+                </FieldHintLabel>
                 <select
                   value={referenceVideoId}
                   onChange={e => setReferenceVideoId(e.target.value)}
                   disabled={uiLocked}
+                  title="Vybrané referenční video pro řízený mic test."
                   className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-white min-w-[280px]"
                 >
                   <option value="">vyber video</option>
@@ -5380,7 +5315,9 @@ export function MicSession({ availableModels, library }: Props) {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Od (s)</label>
+                <FieldHintLabel tone="dark" className="mb-1 text-xs" hint="Začátek úseku referenčního videa, který má hrát z externího zdroje do mikrofonu.">
+                  Od (s)
+                </FieldHintLabel>
                 <input
                   type="number"
                   min={0}
@@ -5391,11 +5328,14 @@ export function MicSession({ availableModels, library }: Props) {
                     setReferenceClipFromS(Math.max(0, Number(e.target.value) || 0))
                   }}
                   disabled={uiLocked}
+                  title="Začátek přehrávané pasáže."
                   className="w-24 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-white"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Do (s)</label>
+                <FieldHintLabel tone="dark" className="mb-1 text-xs" hint="Konec úseku referenčního videa. Délka audia je Do minus Od.">
+                  Do (s)
+                </FieldHintLabel>
                 <input
                   type="number"
                   min={1}
@@ -5406,11 +5346,14 @@ export function MicSession({ availableModels, library }: Props) {
                     setReferenceClipToS(Math.max(1, Number(e.target.value) || 1))
                   }}
                   disabled={uiLocked}
+                  title="Konec přehrávané pasáže."
                   className="w-24 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-white"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Délka (s)</label>
+                <FieldHintLabel tone="dark" className="mb-1 text-xs" hint="Délka testované části audia. Při změně se podle kotvy posune buď Od, nebo Do.">
+                  Délka (s)
+                </FieldHintLabel>
                 <input
                   type="number"
                   min={1}
@@ -5418,6 +5361,7 @@ export function MicSession({ availableModels, library }: Props) {
                   value={clipDurationS.toFixed(1)}
                   onChange={e => applyClipDuration(Number(e.target.value))}
                   disabled={uiLocked}
+                  title="Délka pasáže v sekundách."
                   className="w-24 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-white"
                 />
                 <div className="mt-1 text-[10px] text-gray-500">
@@ -5465,7 +5409,9 @@ export function MicSession({ availableModels, library }: Props) {
                   <div className="text-xs text-gray-200">{clipFromS.toFixed(1)}s → {clipToS.toFixed(1)}s</div>
                 </div>
                 <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Konec dříve (s)</label>
+                  <FieldHintLabel tone="dark" className="mb-1 text-[11px]" hint="O kolik sekund se sběr mikrofonu ukončí dřív než samotný přehrávaný úsek. Pomáhá skončit před pauzou nebo před dalším kolem.">
+                    Konec dříve (s)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={0}
@@ -5474,11 +5420,14 @@ export function MicSession({ availableModels, library }: Props) {
                     value={mobileLoopEarlyStopSeconds}
                     onChange={e => setMobileLoopEarlyStopSeconds(Math.max(0, Math.min(loopEarlyStopMaxS, Number(e.target.value) || 0)))}
                     disabled={!mobileLoopEnabled || uiLocked}
+                    title="Dřívější ukončení sběru audia."
                     className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-60"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Pauza (s)</label>
+                  <FieldHintLabel tone="dark" className="mb-1 text-[11px]" hint="Délka ticha mezi dvěma koly audia. Musí odpovídat tomu, jak dlouhá pauza reálně hraje z mobilu nebo reproduktoru.">
+                    Pauza (s)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={0}
@@ -5486,11 +5435,14 @@ export function MicSession({ availableModels, library }: Props) {
                     value={mobileLoopPauseSeconds}
                     onChange={e => setMobileLoopPauseSeconds(Math.max(0, Math.min(3600, Number(e.target.value) || 15)))}
                     disabled={!mobileLoopEnabled || uiLocked}
+                    title="Pauza mezi koly audio loopu."
                     className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-60"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Start audia + (s)</label>
+                  <FieldHintLabel tone="dark" className="mb-1 text-[11px]" hint="Zpoždění mezi kliknutím na Start sekvenci a okamžikem, kdy audio reálně začne hrát. Pokud audio spouštíš ručně včas, nech 0.">
+                    Start audia + (s)
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={0}
@@ -5499,6 +5451,7 @@ export function MicSession({ availableModels, library }: Props) {
                     value={mobileLoopAudioStartDelaySeconds}
                     onChange={e => applyMobileLoopAudioStartDelay(Number(e.target.value) || 0, 'manual_input')}
                     disabled={!mobileLoopEnabled || (uiLocked && status !== 'recording')}
+                    title="Offset reálného startu audia vůči startu testu."
                     className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-60"
                   />
                   <button
@@ -5512,7 +5465,9 @@ export function MicSession({ availableModels, library }: Props) {
                   </button>
                 </div>
                 <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">Opakování</label>
+                  <FieldHintLabel tone="dark" className="mb-1 text-[11px]" hint="Kolikrát se audio pasáž zopakuje. Počet kol by měl pokrýt počet plánovaných trialů sekvence nebo ladění.">
+                    Opakování
+                  </FieldHintLabel>
                   <input
                     type="number"
                     min={1}
@@ -5520,6 +5475,7 @@ export function MicSession({ availableModels, library }: Props) {
                     value={mobileLoopRepeatCount}
                     onChange={e => setMobileLoopRepeatCount(Math.max(1, Math.min(200, Math.floor(Number(e.target.value) || 1))))}
                     disabled={!mobileLoopEnabled || uiLocked}
+                    title="Počet audio kol v loop balíčku."
                     className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white disabled:opacity-60"
                   />
                 </div>
@@ -5545,39 +5501,46 @@ export function MicSession({ availableModels, library }: Props) {
                 </label>
               </div>
               <div className="flex flex-wrap gap-2 items-center">
-                <button
+                <ActionButton
                   type="button"
                   onClick={() => void createMobileLoopPackage()}
                   disabled={!mobileLoopEnabled || uiLocked || mobileLoopPackageLoading || !referenceVideoId}
-                  className="px-2 py-1 border border-blue-600 rounded text-xs text-blue-200 hover:text-white hover:border-blue-400 disabled:opacity-50"
+                  variant="secondary"
+                  title="Vytvoří ZIP/WAV balíček pro přehrání z mobilu podle aktuálního audio plánu."
+                  className="px-2 py-1 text-xs"
                 >
                   {mobileLoopPackageLoading ? 'Generuji...' : '⬇ Vytvořit soubor pro mobil'}
-                </button>
-                <button
+                </ActionButton>
+                <ActionButton
                   type="button"
                   onClick={() => void createMobileLoopPackageForCurrentTest()}
                   disabled={uiLocked || mobileLoopPackageLoading || !referenceVideoId || plannedAudioPackageTrialCount > 200}
-                  className="px-2 py-1 border border-amber-700 rounded text-xs text-amber-200 hover:text-white hover:border-amber-500 disabled:opacity-50"
+                  variant="secondary"
                   title={`Nastaví opakování na ${plannedAudioPackageTrialCount}x podle aktuální sekvence/ladění a vytvoří balíček bez názvů modelů.`}
+                  className="px-2 py-1 text-xs"
                 >
                   Balíček podle testu ({plannedAudioPackageTrialCount}x)
-                </button>
-                <button
+                </ActionButton>
+                <ActionButton
                   type="button"
                   onClick={() => void playMobileLoopAudioPlan('manual')}
                   disabled={!mobileLoopEnabled || mobileLoopPackageLoading || !referenceVideoId || status === 'connecting' || status === 'stopping'}
-                  className="px-2 py-1 border border-emerald-700 rounded text-xs text-emerald-200 hover:text-white hover:border-emerald-500 disabled:opacity-50"
+                  variant="start"
+                  title="Přehraje aktuální audio plán přímo z prohlížeče. Použij jen když má být zdroj zvuku z tohoto PC."
+                  className="px-2 py-1 text-xs"
                 >
-                  ▶ Přehrát audio plán
-                </button>
-                <button
+                  Přehrát audio plán
+                </ActionButton>
+                <ActionButton
                   type="button"
                   onClick={() => stopMobileLoopAudioPlayback()}
                   disabled={!mobileLoopAudioPlaying}
-                  className="px-2 py-1 border border-gray-600 rounded text-xs text-gray-200 hover:text-white hover:border-gray-400 disabled:opacity-50"
+                  variant="stop"
+                  title="Zastaví přehrávání audio plánu v prohlížeči."
+                  className="px-2 py-1 text-xs"
                 >
-                  ■ Zastavit audio
-                </button>
+                  Zastavit audio
+                </ActionButton>
                 <label
                   className="inline-flex items-center gap-2 text-xs text-gray-300"
                   title="Při kliknutí na Start sekvenci se přehraje aktuální audio plán z prohlížeče."
@@ -5833,28 +5796,32 @@ export function MicSession({ availableModels, library }: Props) {
         </div>
       <div className="flex gap-2 items-center">
         {status === 'idle' || status === 'done' || status === 'error' ? (
-          <button
+          <ActionButton
             onClick={start}
             disabled={autoModelSequenceActive}
-            className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 disabled:hover:bg-red-600 text-white rounded font-medium text-sm"
+            variant="start"
+            title="Spustí mic test podle všech výše nastavených částí: zdroj, audio plán, mikrofon, modely a případné ladění."
+            className="px-4 py-2"
           >
             {tuningSweepEnabled && autoModelCycleEnabled
-              ? (status === 'done' || status === 'error' ? '● Znovu ladění' : '● Start ladění')
+              ? (status === 'done' || status === 'error' ? 'Znovu ladění' : 'Start ladění')
               : autoModelCycleEnabled
-              ? (status === 'done' || status === 'error' ? '● Znovu sekvenci' : '● Start sekvenci')
-              : (status === 'done' || status === 'error' ? '● Znovu' : '● Start')}
-          </button>
+              ? (status === 'done' || status === 'error' ? 'Znovu sekvenci' : 'Start sekvenci')
+              : (status === 'done' || status === 'error' ? 'Znovu' : 'Start')}
+          </ActionButton>
         ) : status === 'recording' ? (
-          <button
+          <ActionButton
             onClick={stop}
-            className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded font-medium text-sm"
+            variant="stop"
+            title="Zastaví aktuální mic trial. U auto sekvence zastaví i běžící sekvenci."
+            className="px-4 py-2"
           >
-            {autoModelSequenceActive ? '■ Stop sekvenci' : '■ Stop'}
-          </button>
+            {autoModelSequenceActive ? 'Stop sekvenci' : 'Stop'}
+          </ActionButton>
         ) : (
-          <button disabled className="px-4 py-2 bg-gray-700 text-gray-500 rounded font-medium text-sm">
+          <ActionButton disabled variant="neutral" className="px-4 py-2">
             {status === 'connecting' ? 'Připojuji...' : 'Zastavuji...'}
-          </button>
+          </ActionButton>
         )}
 
         {/* Status indikátor */}

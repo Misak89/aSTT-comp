@@ -4,13 +4,13 @@ import json
 import os
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+
+from packages.common.runtime_paths import runtime_subpath
 
 
 _LOCK = threading.Lock()
-_ROOT = Path(__file__).resolve().parents[2]
-_RUNTIME_DIR = _ROOT / "runtime" / "network_access"
+_RUNTIME_DIR = runtime_subpath("network_access")
 _LOG_FILE = _RUNTIME_DIR / "network_access_log.jsonl"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}

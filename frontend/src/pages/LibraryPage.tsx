@@ -9,8 +9,10 @@ import type {
   SegmentBundlePreviewRequest,
 } from '../types'
 import { WerBadge } from '../components/WerBadge'
+import { WorkflowGuide } from '../components/WorkflowGuide'
 import { listTranscripts, deleteTranscript as deleteLsTranscript, type TranscriptEntry } from '../components/transcribe/useTranscribeStorage'
 import { formatDateTimeShort } from '../lib/time'
+import { notifyLibrarySortSettingsChanged } from '../lib/librarySort'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -128,6 +130,7 @@ function saveLibrarySettings(s: { sortOrder?: LibrarySortKey[]; sortDirMap?: Rec
   try {
     const cur = loadLibrarySettings()
     localStorage.setItem(LIB_SETTINGS_KEY, JSON.stringify({ ...cur, ...s }))
+    notifyLibrarySortSettingsChanged()
   } catch { /* ignore */ }
 }
 
@@ -557,12 +560,12 @@ function LocalImportPanel({ onImported }: { onImported: () => void }) {
 
       <div className="flex gap-2 items-end mb-3">
         <div className="flex flex-col gap-1 flex-1">
-          <label className="text-xs text-gray-500">Cesta ke složce (např. C:\Users\...)</label>
+          <label className="text-xs text-gray-500">Cesta ke složce s audio soubory</label>
           <input
             value={dirPath}
             onChange={e => setDirPath(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') void doScan() }}
-            placeholder="C:\Users\adamf\Záznamy"
+            placeholder="vložit absolutní cestu ke složce"
             className="border rounded px-2 py-1 text-sm font-mono"
           />
         </div>
@@ -1400,7 +1403,7 @@ export function LibraryPage() {
   }
 
   return (
-    <div>
+    <div className="space-y-4">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold">Knihovna videí</h1>
         <div className="flex items-center gap-2">
@@ -1457,6 +1460,17 @@ export function LibraryPage() {
           </button>
         </div>
       </div>
+
+      <WorkflowGuide
+        title="Workflow knihovny"
+        steps={[
+          { label: 'Přidat zdroj', detail: 'YouTube, lokální soubor nebo existující audio.' },
+          { label: 'Doplnit data', detail: 'Metadata, titulky, jazyk a viditelnost.' },
+          { label: 'Audio cache', detail: 'Stažené WAV/audio pro benchmarky.' },
+          { label: 'Segmenty', detail: 'Balíčky a reference pro testy.' },
+          { label: 'Použít v testu', detail: 'Stejné řazení se propíše do benchmark menu.' },
+        ]}
+      />
 
       {/* YouTube search panel */}
       {showSearch && <SearchPanel onAddVideo={load} />}

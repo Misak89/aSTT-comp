@@ -15,10 +15,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
 
-DEFAULT_TUNING_ROOT = ROOT / "runtime" / "tuning"
+DEFAULT_TUNING_ROOT = runtime_subpath("tuning")
 
 
 @dataclass

@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
-from ..config import TUNING_ROOT, ROOT
+from ..config import AUDIO_CACHE_ROOT, MODEL_STORE_ROOT, ROOT, SUBTITLES_ROOT, TUNING_ROOT
 from ..models.tuning import (
     TuningJobStatus,
     TuningTrialResult,
@@ -332,9 +332,9 @@ def create_job(req: TuningJobRequest) -> TuningJobStatus:
         "repeat_runs": repeat_runs,
         "baseline_params": req.baseline_params,
         "trials": trials,          # seznam dict s params + _chunk_seconds + _model_id
-        "subtitles_root": str(ROOT / "runtime" / "library" / "subtitles"),
-        "model_store_root": str(ROOT / "runtime" / "model_store"),
-        "audio_cache_dir": str(ROOT / "runtime" / "audio_cache"),
+        "subtitles_root": str(SUBTITLES_ROOT),
+        "model_store_root": str(MODEL_STORE_ROOT),
+        "audio_cache_dir": str(AUDIO_CACHE_ROOT),
     }
     (job_dir / "config.json").write_text(
         json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
 
@@ -70,7 +71,7 @@ def main() -> int:
     config = json.loads(config_file.read_text(encoding="utf-8"))
     runs_root = Path(config["runs_root"])
     subtitles_root = Path(config["subtitles_root"])
-    model_store_root = Path(config.get("model_store_root", str(ROOT / "runtime" / "model_store")))
+    model_store_root = Path(config.get("model_store_root", str(runtime_subpath("model_store"))))
 
     # Mapování clip_strategy (frontend) → clip_selection_strategy (runner)
     _STRATEGY_MAP = {"random": "deterministic_v1", "uniform": "start_zero"}
@@ -90,6 +91,13 @@ def main() -> int:
         )
         if not source_entries:
             raise ValueError(f"Žádné validní zdroje z: {config['sources']}")
+        missing_files = [
+            entry for entry in source_entries
+            if entry.origin_type == "local_file" and not entry.exists
+        ]
+        if missing_files:
+            missing = ", ".join(entry.value for entry in missing_files[:3])
+            raise FileNotFoundError(f"Lokální audio soubor neexistuje: {missing}")
 
         current_pct = [10]
         live_transcript = [""]

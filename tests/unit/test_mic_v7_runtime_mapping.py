@@ -95,6 +95,96 @@ def test_runtime_mapping_status_reads_events_and_sequence_reports(monkeypatch) -
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_runtime_mapping_status_separates_diagnostic_and_incomplete_artifacts(monkeypatch, tmp_path) -> None:
+    events_path = tmp_path / "logs" / "mic_sequence_events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    seq_root = tmp_path / "mic_sequences"
+    seq_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mic_service, "MIC_EVENTS_LOG_PATH", events_path)
+    monkeypatch.setattr(mic_service, "MIC_SEQUENCES_ROOT", seq_root)
+
+    rows = [
+        {
+            "ts": "2026-04-08T10:00:00+00:00",
+            "event": "client_sequence_event",
+            "client_event": True,
+            "orchestrator_mode": "v7_cs_online",
+            "contract_valid": False,
+            "contract_missing_fields": [],
+        },
+        {
+            "ts": "2026-04-08T10:00:01+00:00",
+            "event": "created",
+            "orchestrator_mode": "v7_cs_online",
+            "sequence_id": "seq_abc",
+            "contract_valid": False,
+            "contract_missing_fields": ["run_id"],
+        },
+        apply_v7_event_contract(
+            {
+                "ts": "2026-04-08T10:00:02+00:00",
+                "event": "started",
+                "session_id": "mic_real",
+                "model_id": "whisper_cpp_small",
+                "orchestrator_mode": "v7_cs_online",
+                "run_id": "run_real",
+                "sequence_id": "mic_real",
+                "sequence_index": 1,
+                "sequence_total": 1,
+                "global_timeline_ms": 100.0,
+            }
+        ),
+    ]
+    events_path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+
+    diagnostic = seq_root / "tok_tuning_unit"
+    diagnostic.mkdir()
+    (diagnostic / "report.json").write_text(
+        json.dumps({"sequence_token": "tok_tuning_unit", "sequence_total": 2, "trials_count": 1, "trials": []}),
+        encoding="utf-8",
+    )
+    incomplete = seq_root / "mic_incomplete"
+    incomplete.mkdir()
+    (incomplete / "report.json").write_text(
+        json.dumps(
+            {
+                "sequence_token": "mic_incomplete",
+                "sequence_total": 2,
+                "trials_count": 1,
+                "readiness": {"pass": False},
+                "trials": [{"seq_index": 1, "status": "idle"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    complete = seq_root / "mic_complete"
+    complete.mkdir()
+    (complete / "report.json").write_text(
+        json.dumps(
+            {
+                "sequence_token": "mic_complete",
+                "sequence_total": 1,
+                "trials_count": 1,
+                "readiness": {"pass": True},
+                "timeline_validation": {"ok": True},
+                "trials": [{"seq_index": 1, "status": "stopped", "started_at": "x", "stopped_at": "y"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = mic_service.get_v7_runtime_mapping_status(max_reports=10, max_events=100)
+
+    assert payload["status"] == "warn"
+    assert payload["invalid_contract_events"] == 0
+    assert payload["legacy_invalid_contract_events_ignored"] == 1
+    assert payload["diagnostic_events_ignored"] == 1
+    assert payload["diagnostic_sequence_reports_ignored"] == 1
+    assert payload["incomplete_sequence_reports"] == 1
+    assert payload["readiness_fail_reports"] == 1
+
+
 def test_client_sequence_event_logs_ui_stop_reason_and_loop_plan(monkeypatch) -> None:
     root = Path(__file__).resolve().parents[2] / "runtime" / "_test_mic_client_sequence_event"
     shutil.rmtree(root, ignore_errors=True)

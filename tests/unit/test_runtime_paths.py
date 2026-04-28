@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib
 import shutil
 import uuid
 
@@ -60,3 +61,20 @@ def test_first_existing_runtime_path_prefers_existing_candidate(monkeypatch):
     canonical_model.mkdir(parents=True, exist_ok=True)
     resolved_after = runtime_paths.first_existing_runtime_path("model_store", "test_model")
     assert resolved_after == canonical_model
+
+
+def test_backend_config_uses_runtime_root_override(monkeypatch):
+    override = _fresh_dir("config_override")
+    monkeypatch.setenv("ASTT_RUNTIME_ROOT", str(override))
+
+    import backend.app.config as config
+
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.RUNTIME_ROOT == override.resolve()
+        assert reloaded.MODEL_STORE_ROOT == override.resolve() / "model_store"
+        assert reloaded.AUDIO_CACHE_ROOT == override.resolve() / "audio_cache"
+        assert reloaded.LOGGER_LOGS_ROOT == override.resolve() / "logs"
+    finally:
+        monkeypatch.delenv("ASTT_RUNTIME_ROOT", raising=False)
+        importlib.reload(config)

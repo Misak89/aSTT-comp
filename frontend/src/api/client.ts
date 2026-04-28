@@ -22,6 +22,9 @@ import type {
   MicClientSequenceEventResponse,
   MicSequenceReport,
   MicSequenceReadinessResponse,
+  LateMicDeleteWavResponse,
+  LateMicSegmentRequest,
+  LateMicSegmentResponse,
   LocalFileEntry,
   SegmentBundle,
   SegmentBundlePreviewRequest,
@@ -265,5 +268,13 @@ export const api = {
       ),
     getContract: () =>
       get<{ schema: string; version: string; required_fields_v7: string[]; reason_codes: string[] }>('/mic/contract'),
+  },
+  latemic: {
+    createSegment: (req: LateMicSegmentRequest) =>
+      post<LateMicSegmentResponse>('/latemic/segments', req),
+    getSegment: (segmentId: string) =>
+      get<LateMicSegmentResponse>(`/latemic/segments/${encodeURIComponent(segmentId)}`),
+    deleteSegmentWav: (segmentId: string) =>
+      delJson<LateMicDeleteWavResponse>(`/latemic/segments/${encodeURIComponent(segmentId)}/wav`),
   },
 }

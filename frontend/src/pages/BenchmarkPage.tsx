@@ -7,9 +7,12 @@ import { StatusBadge } from '../components/StatusBadge'
 import { LiveJobPanel } from '../components/LiveJobPanel'
 import { MicSession } from '../components/MicSession'
 import { ModelParamsForm } from '../components/ModelParamsForm'
+import { ActionButton, FieldHintLabel } from '../components/UiPrimitives'
+import { WorkflowGuide, type WorkflowStep } from '../components/WorkflowGuide'
 import { formatDateTimeDayMonthHm } from '../lib/time'
+import { LateMicPage } from './LateMicPage'
 
-type Tab = 'benchmark' | 'mic'
+type Tab = 'benchmark' | 'mic' | 'latemic'
 type EvalMode = 'synthetic' | 'streaming' | 'real'
 type VideoSortKey = 'language' | 'duration' | 'title' | 'upload_date' | 'genre' | 'view_count'
 
@@ -31,8 +34,33 @@ const VIDEO_SORT_DEFAULT_DIR: Record<VideoSortKey, 'asc' | 'desc'> = {
   view_count: 'desc',
 }
 
+const BENCHMARK_WORKFLOWS: Record<Tab, WorkflowStep[]> = {
+  benchmark: [
+    { label: 'Zdroje', detail: 'Vyber videa a jejich pořadí.' },
+    { label: 'Modely', detail: 'Zvol STT modely a profil nastavení.' },
+    { label: 'Parametry', detail: 'Délka klipu, seed a režim evaluace.' },
+    { label: 'Start', detail: 'Spusť job a sleduj stav.' },
+    { label: 'Výsledky', detail: 'Otevři porovnání runu.' },
+  ],
+  mic: [
+    { label: 'Zdroj', detail: 'Volný mic nebo referenční video.' },
+    { label: 'Audio loop', detail: 'Pauza, opakování a párovací balíček.' },
+    { label: 'Mikrofon', detail: 'Zařízení, model a parametry.' },
+    { label: 'Sekvence', detail: 'Pořadí modelů a ladicí varianty.' },
+    { label: 'Start', detail: 'Spusť sekvenci nebo ladění.' },
+  ],
+  latemic: [
+    { label: 'Mic důkaz', detail: 'Ověř skutečný vstup z mikrofonu.' },
+    { label: 'Segmenty', detail: 'Zpoždění, délky a pauzy.' },
+    { label: 'Modely', detail: 'Vyber modely a jejich parametry.' },
+    { label: 'Plán', detail: 'Model × lag × opakování.' },
+    { label: 'Start', detail: 'Nahraj segmenty a vyhodnoť lag.' },
+  ],
+}
+
 function benchmarkTabFromPath(pathname: string): Tab {
   const normalized = pathname.replace(/\/+$/, '')
+  if (normalized === '/benchmark/latemic') return 'latemic'
   return normalized === '/benchmark/mic' ? 'mic' : 'benchmark'
 }
 
@@ -177,7 +205,7 @@ export function BenchmarkPage() {
   function switchTab(next: Tab) {
     setTab(next)
     setMsg('')
-    navigate(next === 'mic' ? '/benchmark/mic' : '/benchmark')
+    navigate(next === 'mic' ? '/benchmark/mic' : next === 'latemic' ? '/benchmark/latemic' : '/benchmark')
   }
 
   return (
@@ -206,6 +234,19 @@ export function BenchmarkPage() {
             </span>
             Mikrofon
           </button>
+          <button
+            onClick={() => switchTab('latemic')}
+            className={`px-3 py-1 rounded inline-flex items-center gap-1.5 ${tab === 'latemic' ? 'bg-white shadow text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            <span className="relative inline-flex">
+              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M12 7v5l3 2"/>
+              </svg>
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-amber-500"/>
+            </span>
+            Little late Mic
+          </button>
         </div>
         <Link
           to="/hwflow"
@@ -216,10 +257,19 @@ export function BenchmarkPage() {
         </Link>
       </div>
 
+      <WorkflowGuide
+        title={tab === 'benchmark' ? 'Workflow klasického benchmarku' : tab === 'mic' ? 'Workflow live mikrofonu' : 'Workflow Little late Mic'}
+        steps={BENCHMARK_WORKFLOWS[tab]}
+      />
+
       {tab === 'mic' && (
         micModels.length > 0
           ? <MicSession availableModels={micModels} library={visibleLibrary} />
           : <p className="text-sm text-gray-500">Žádný model nepodporuje mikrofon.</p>
+      )}
+
+      {tab === 'latemic' && (
+        <LateMicPage models={registry} library={visibleLibrary} />
       )}
 
       {tab === 'benchmark' && <><div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -300,8 +350,11 @@ export function BenchmarkPage() {
         <div className="bg-white rounded border border-gray-200 p-4 space-y-3">
           <h2 className="font-semibold text-sm mb-1 text-gray-700">Parametry</h2>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Mód evaluace</label>
+            <FieldHintLabel className="text-xs" hint="Určuje, jak se zdroj audio dat dostane do benchmarku. Streaming je nejbližší reálnému průběžnému zpracování.">
+              Mód evaluace
+            </FieldHintLabel>
             <select value={evalMode} onChange={e => setEvalMode(e.target.value as EvalMode)}
+              title="Syntetický je rychlý test, streaming simuluje průběžné zpracování, real použije lokální soubor."
               className="border rounded px-2 py-1 text-sm">
               <option value="synthetic">Syntetický (rychlý)</option>
               <option value="streaming">Streaming (yt-dlp pipe)</option>
@@ -309,27 +362,40 @@ export function BenchmarkPage() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Délka klipu (s)</label>
+            <FieldHintLabel className="text-xs" hint="Kolik sekund z každého zdroje se použije. Kratší test je rychlejší, delší je stabilnější pro porovnání kvality.">
+              Délka klipu (s)
+            </FieldHintLabel>
             <input type="number" value={clipSeconds} onChange={e => setClipSeconds(+e.target.value)}
+              title="Délka testovaného úseku v sekundách."
               className="border rounded px-2 py-1 text-sm w-24" min={10} max={3600} />
           </div>
           {evalMode === 'streaming' && (
             <p className="text-xs text-gray-400">Délka chunků je definována nastavením (Low latency = 15s, Balanced = 30s, High accuracy = 60s).</p>
           )}
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Seed (prázdné = náhodný)</label>
+            <FieldHintLabel className="text-xs" hint="Seed určuje opakovatelný výběr klipu. Když ho necháš prázdný, úsek se vybere náhodně.">
+              Seed
+            </FieldHintLabel>
             <input type="number" value={clipSeed} onChange={e => setClipSeed(e.target.value === '' ? '' : +e.target.value)}
-              placeholder="42" className="border rounded px-2 py-1 text-sm w-24" />
+              title="Stejný seed pomůže zopakovat stejný testovací výběr."
+              placeholder="prázdné = náhodný" className="border rounded px-2 py-1 text-sm w-32" />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Popis runu</label>
+            <FieldHintLabel className="text-xs" hint="Krátká poznámka, podle které později poznáš, proč byl test spuštěn.">
+              Popis runu
+            </FieldHintLabel>
             <input value={label} onChange={e => setLabel(e.target.value)}
+              title="Volitelný popis se zobrazí v historii jobů a výsledcích."
               placeholder="volitelný popis" className="border rounded px-2 py-1 text-sm" />
           </div>
-          <button onClick={startBenchmark}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded text-sm font-medium mt-2">
+          <ActionButton
+            onClick={startBenchmark}
+            variant="start"
+            title="Spustí klasický benchmark pro vybraná videa, modely a nastavení."
+            className="w-full py-2 mt-2"
+          >
             Spustit benchmark
-          </button>
+          </ActionButton>
           {msg && <p className="text-sm text-red-600">{msg}</p>}
         </div>
       </div>
@@ -419,8 +485,14 @@ export function BenchmarkPage() {
                 </td>
                 <td className="px-4 py-2">
                   {(job.status === 'pending' || job.status === 'running') && (
-                    <button onClick={() => cancelJob(job.job_id)}
-                      className="text-xs text-red-500 hover:underline">Zrušit</button>
+                    <ActionButton
+                      onClick={() => cancelJob(job.job_id)}
+                      variant="stop"
+                      title="Zruší běžící nebo čekající benchmark job."
+                      className="px-2 py-1 text-xs"
+                    >
+                      Zrušit
+                    </ActionButton>
                   )}
                   {job.status === 'completed' && job.run_id && (
                     <a href={`/results?run=${job.run_id}`} className="text-xs text-blue-600 hover:underline">

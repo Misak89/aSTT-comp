@@ -321,6 +321,9 @@ def run_job(job_id: str) -> None:
                 if t and t not in transcript_parts:
                     transcript_parts.append(t)
         job_transcript = "\n\n---\n\n".join(transcript_parts)
+        fatal_matrix_error = _all_source_metrics_failed(results_source)
+        if fatal_matrix_error:
+            raise RuntimeError(fatal_matrix_error)
 
         _update_job(job_id,
                     status="completed",
@@ -345,6 +348,22 @@ _subprocess_pids: dict[str, int] = {}
 # Cache psutil.Process objektů per job — cpu_percent(interval=None) vrací 0 na prvním volání
 # na novém objektu; musíme reusovat stejný objekt
 _job_hw_procs: dict = {}  # job_id -> psutil.Process (or None)
+
+
+def _all_source_metrics_failed(results_source: list[dict]) -> str | None:
+    source_metrics: list[dict] = []
+    for result in results_source or []:
+        metrics = result.get("source_metrics")
+        if isinstance(metrics, list):
+            source_metrics.extend(sm for sm in metrics if isinstance(sm, dict))
+    if not source_metrics:
+        return None
+    errored = [str(sm.get("error") or "").strip() for sm in source_metrics if str(sm.get("error") or "").strip()]
+    if len(errored) != len(source_metrics):
+        return None
+    unique_errors = list(dict.fromkeys(errored))
+    detail = "; ".join(unique_errors[:3])
+    return f"Všechny pokusy v jobu selhaly: {detail}"
 
 
 def _resolve_sources(req_data: dict) -> list[str]:

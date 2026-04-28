@@ -14,6 +14,7 @@ Výstup: dict se stejnou strukturou jako run_*_source() — wer, cer, latency_ms
 """
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -86,6 +87,64 @@ def run_streaming_benchmark(
         )
     else:
         raise ValueError(f"Neznámý adapter pro streaming: '{adapter}' (model_id={config.model_id})")
+
+
+def transcribe_latemic_segment(
+    *,
+    wav_path: str | Path,
+    model_id: str,
+    model_params: dict[str, Any] | None,
+    model_store_root: str | Path,
+    output_dir: str | Path,
+    source_id: str | None = None,
+    label: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Transcribe one authoritative LateMic WAV segment.
+
+    Public helper for delayed microphone mode. The input must be a real,
+    already-captured segment artifact; this function does not read reference
+    transcripts, old history, or simulated text.
+    """
+    segment_wav = Path(wav_path)
+    if not segment_wav.exists():
+        raise FileNotFoundError(f"LateMic segment WAV not found: {segment_wav}")
+    info = _read_wav_info(segment_wav)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sid = source_id or segment_wav.stem
+    source = SourceEntry(
+        source_id=sid,
+        label=label or segment_wav.name,
+        origin_type="late_mic_segment",
+        value=str(segment_wav),
+        exists=True,
+    )
+    config = StreamingRunConfig(
+        model_id=model_id,
+        model_params=dict(model_params or {}),
+        model_store_root=str(model_store_root),
+        output_dir=str(out_dir),
+        sample_seconds=max(1, int(math.ceil(float(info["duration_s"])))),
+        chunk_seconds=max(1, min(30, int(round(info["duration_s"])) or 1)),
+        progress_callback=progress_callback,
+        source_wav_path=str(segment_wav),
+    )
+    adapter = _get_adapter_key(model_id)
+    audio_generator = None if adapter in ("whisper_cpp", "qwen_asr") else _wav_f32_chunks(segment_wav)
+    result = run_streaming_benchmark(
+        source=source,
+        audio_generator=audio_generator,
+        config=config,
+    )
+    result["transcript_source"] = "latemic_segment"
+    result["source_authority"] = "real_mic_segment_wav"
+    result["reference_text_used"] = False
+    result["history_fallback_used"] = False
+    result["segment_wav_path"] = str(segment_wav)
+    result["segment_audio_s"] = round(float(info["duration_s"]), 3)
+    result["sample_rate"] = int(info["sample_rate"])
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +262,8 @@ def _run_buffered(
         # Přímá cesta k WAV — žádná double konverze int16→float32→int16
         src_wav = Path(config.source_wav_path)
         with wave.open(str(src_wav), "rb") as wf:
-            clip_duration = wf.getnframes() / max(1, wf.getframerate())
+            source_duration = wf.getnframes() / max(1, wf.getframerate())
+        clip_duration = min(source_duration, float(max(1, config.sample_seconds)))
         temp_wav = src_wav
         _cb(config.progress_callback,
             f"▶ Spouštím {adapter} batch přepis ({round(clip_duration, 1)}s audia)...")
@@ -261,7 +321,7 @@ def _run_buffered(
         while not _stop_heartbeat.wait(5.0):
             elapsed = round(time.perf_counter() - whisper_start, 0)
             _cb(config.progress_callback,
-                f"⏳ Přepisuji... ({int(elapsed)}s zprac. / ~{int(clip_duration)}s audia)")
+                f"⏳ Přepisuji... (běží {int(elapsed)}s, audio ~{int(clip_duration)}s)")
     threading.Thread(target=_heartbeat, daemon=True).start()
 
     try:
@@ -507,6 +567,48 @@ def _probe_whisper_online_latency(
             probe_wav.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+def _read_wav_info(path: Path) -> dict[str, float | int]:
+    with wave.open(str(path), "rb") as wf:
+        channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        sample_rate = wf.getframerate()
+        frames = wf.getnframes()
+    if channels != 1:
+        raise ValueError(f"LateMic WAV must be mono, got channels={channels}")
+    if sampwidth != 2:
+        raise ValueError(f"LateMic WAV must be 16-bit PCM, got sampwidth={sampwidth}")
+    if sample_rate <= 0:
+        raise ValueError(f"LateMic WAV has invalid sample_rate={sample_rate}")
+    return {
+        "channels": channels,
+        "sampwidth": sampwidth,
+        "sample_rate": sample_rate,
+        "frames": frames,
+        "duration_s": frames / max(1, sample_rate),
+    }
+
+
+def _wav_f32_chunks(path: Path, *, chunk_s: float = 0.5) -> Generator[tuple[list[float], int], None, None]:
+    with wave.open(str(path), "rb") as wf:
+        channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        sample_rate = wf.getframerate()
+        if channels != 1:
+            raise ValueError(f"LateMic WAV must be mono, got channels={channels}")
+        if sampwidth != 2:
+            raise ValueError(f"LateMic WAV must be 16-bit PCM, got sampwidth={sampwidth}")
+        frames_per_chunk = max(1, int(sample_rate * max(0.05, chunk_s)))
+        while True:
+            raw = wf.readframes(frames_per_chunk)
+            if not raw:
+                break
+            pcm = array("h")
+            pcm.frombytes(raw[: len(raw) - (len(raw) % 2)])
+            if not pcm:
+                continue
+            yield [max(-1.0, min(1.0, sample / 32768.0)) for sample in pcm], sample_rate
 
 
 # ---------------------------------------------------------------------------

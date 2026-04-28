@@ -12,10 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
 
-LOG_PATH = ROOT / "runtime" / "network_access" / "network_access_log.jsonl"
+LOG_PATH = runtime_subpath("network_access", "network_access_log.jsonl")
 
 
 def main() -> int:

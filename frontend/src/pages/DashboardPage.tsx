@@ -13,6 +13,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, Ca
 import { api } from '../api/client'
 import { listTranscripts } from '../components/transcribe/useTranscribeStorage'
 import { useProcessScanCadence } from '../components/dashboard/useProcessScanCadence'
+import { WorkflowGuide } from '../components/WorkflowGuide'
 import type { AppProcessInfo, AppProcessSnapshot, BenchmarkJobStatus, LibraryItem, MicOrchestratorV7Health, SpecstoryLiveStatus } from '../types'
 import { formatClockHms, formatDateTimeMedium } from '../lib/time'
 
@@ -900,6 +901,16 @@ export function DashboardPage() {
         )}
       </div>
 
+      <WorkflowGuide
+        title="Workflow diagnostiky"
+        steps={[
+          { label: 'Stav backendu', detail: 'Uptime, RAM a základní počty.' },
+          { label: 'Procesy', detail: 'Logger, CPU/RAM a běžící STT.' },
+          { label: 'Fronty/logy', detail: 'Mic, joby, sekvence a události.' },
+          { label: 'Závěr', detail: 'Najít limit HW nebo runtime chybu.' },
+        ]}
+      />
+
       <div className="bg-white rounded border border-gray-200 p-3 text-xs text-gray-600 space-y-1">
         <div className="font-semibold text-gray-700">Process logger</div>
         <div>
@@ -978,11 +989,16 @@ export function DashboardPage() {
               events: {micV7.events_v7_total ?? 0}/{micV7.events_total ?? 0}
               {` · invalid contract: ${micV7.invalid_contract_events ?? 0}`}
               {` · missing fields: ${micV7.missing_required_field_events ?? 0}`}
+              {(micV7.legacy_invalid_contract_events_ignored || micV7.diagnostic_events_ignored) ? (
+                ` · ignored: ${(micV7.legacy_invalid_contract_events_ignored ?? 0) + (micV7.diagnostic_events_ignored ?? 0)}`
+              ) : ''}
             </div>
             <div>
               reports: {micV7.sequence_reports_total ?? 0}
               {` · timeline fail: ${micV7.timeline_fail_reports ?? 0}`}
               {` · readiness fail: ${micV7.readiness_fail_reports ?? 0}`}
+              {micV7.incomplete_sequence_reports ? ` · incomplete: ${micV7.incomplete_sequence_reports}` : ''}
+              {micV7.diagnostic_sequence_reports_ignored ? ` · ignored: ${micV7.diagnostic_sequence_reports_ignored}` : ''}
             </div>
             <div>
               schema: {micV7.contract?.schema ?? 'n/a'}

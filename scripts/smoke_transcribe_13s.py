@@ -19,12 +19,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from packages.common.console_io import configure_console_io
+from packages.common.runtime_paths import runtime_subpath
 
 configure_console_io()
 
 BASE_URL = "http://127.0.0.1:8012"
-LOG_DIR = ROOT / "runtime" / "logs"
-RUNS_ROOT = ROOT / "runtime" / "runs"
+LOG_DIR = runtime_subpath("logs")
+RUNS_ROOT = runtime_subpath("runs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 

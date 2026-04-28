@@ -11,6 +11,7 @@ import { TranscribeJobPanel } from '../components/transcribe/TranscribeJobPanel'
 import { TranscribeAudioPlayer, type TranscribeAudioPlayerHandle } from '../components/transcribe/TranscribeAudioPlayer'
 import { TranscribeEditor } from '../components/transcribe/TranscribeEditor'
 import { TranscribePanelLayout } from '../components/transcribe/TranscribePanelLayout'
+import { WorkflowGuide } from '../components/WorkflowGuide'
 import {
   listTranscripts as listLocalTranscripts,
   saveTranscript,
@@ -45,6 +46,19 @@ function buildTranscriptTitle(sourceLabel: string, videoId: string): string {
   const clean = label.replace(/[<>:"/\\|?*]/g, '').trim().slice(0, 20).trim().replace(/\s+/g, '_')
   const ytPart = videoId ? `_${videoId}` : ''
   return clean ? `${ts}_${clean}${ytPart}` : `${ts}${ytPart}`
+}
+
+function hasRealTranscriptText(plainText: string): boolean {
+  return plainText
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .some(line => {
+      if (line.startsWith('α START')) return false
+      if (line.startsWith('Ω END')) return false
+      if (/^\[\d{2}:\d{2}\]$/.test(line)) return false
+      return true
+    })
 }
 
 export function TranscribePage() {
@@ -114,7 +128,7 @@ export function TranscribePage() {
 
   // Auto-save
   const doSave = useCallback((html: string, plainText: string) => {
-    if (!html || html === '<p></p>' || !plainText.trim()) return
+    if (!html || html === '<p></p>' || !plainText.trim() || !hasRealTranscriptText(plainText)) return
     setSaveStatus('saving')
     if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current)
     try {
@@ -368,6 +382,20 @@ export function TranscribePage() {
             📁 Archiv ({archiveList.length})
           </button>
         </div>
+      </div>
+
+      <div className="flex-shrink-0 bg-gray-50 px-4 py-2 border-b border-gray-200">
+        <WorkflowGuide
+          title="Workflow přepisu"
+          compact
+          steps={[
+            { label: 'Zdroj', detail: 'Vybrat video/audio a rozsah.' },
+            { label: 'Model', detail: 'Nastavit STT a segmentaci.' },
+            { label: 'Přepis', detail: 'Spustit a průběžně ukládat.' },
+            { label: 'Editor', detail: 'Kontrola textu a časů.' },
+            { label: 'Export', detail: 'Archiv, DOCX nebo další zpracování.' },
+          ]}
+        />
       </div>
 
       <TranscribePanelLayout

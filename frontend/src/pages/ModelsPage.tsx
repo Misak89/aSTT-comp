@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { ModelStatus, ModelEvent, ModelDescriptor, WebAppAutostartStatus } from '../types'
+import { WorkflowGuide } from '../components/WorkflowGuide'
 
 // Popis adaptérů — mapování adapter ID → info
 const ADAPTER_INFO: Record<string, { label: string; source: string; description: string }> = {
@@ -123,6 +124,16 @@ export function ModelsPage() {
         <h1 className="text-xl font-bold">Modely</h1>
         <button onClick={loadAll} className="text-xs text-blue-600 hover:underline">Obnovit</button>
       </div>
+
+      <WorkflowGuide
+        title="Workflow modelů"
+        steps={[
+          { label: 'Registry', detail: 'Co aplikace zná a podporuje.' },
+          { label: 'Instalace', detail: 'Stažení nebo označení modelu.' },
+          { label: 'Parametry', detail: 'Výchozí profily a limity modelu.' },
+          { label: 'Ověření', detail: 'Stav souborů, adaptéru a poznámky.' },
+        ]}
+      />
 
       {msg && <p className="text-sm text-red-600">{msg}</p>}
 

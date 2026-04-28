@@ -15,9 +15,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlparse
 
 from packages.common.network_access import ensure_online_allowed
+from packages.ingest.source_resolver import local_path_from_file_url
 
 from ..config import LIBRARY_ROOT, SUBTITLES_ROOT, RESULTS_ROOT, MODEL_STORE_ROOT, AUDIO_CACHE_ROOT
 from ..models.library import (
@@ -85,6 +85,8 @@ def list_items() -> list[LibraryItem]:
                 fallback_language=r.get("language"),
             )
         audio_path = _resolve_audio_cache_path(video_id, str(r.get("title") or ""), extensions=(".wav",))
+        if audio_path is None:
+            audio_path = _resolve_local_file_url(str(r.get("url") or ""))
         result.append(LibraryItem(
             video_id=video_id,
             title=r.get("title", ""),
@@ -156,6 +158,38 @@ def _find_prefixed_audio_cache_file(video_id: str, ext: str) -> Optional[Path]:
     return None
 
 
+def _find_audio_cache_file_by_original_name(original_name: str) -> Optional[Path]:
+    clean_name = Path(str(original_name or "")).name
+    if not clean_name:
+        return None
+    try:
+        for path in sorted(AUDIO_CACHE_ROOT.iterdir(), key=lambda p: p.name.lower()):
+            if not path.is_file():
+                continue
+            if path.name == clean_name or path.name.endswith(f"_{clean_name}"):
+                return path
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def _resolve_local_file_url(raw_url: str) -> Optional[Path]:
+    local_path = local_path_from_file_url(raw_url)
+    if local_path is None:
+        return None
+    if local_path.exists():
+        return local_path
+    try:
+        same_cache_dir = local_path.parent.resolve() == AUDIO_CACHE_ROOT.resolve()
+    except Exception:
+        same_cache_dir = local_path.parent.name == AUDIO_CACHE_ROOT.name
+    if same_cache_dir:
+        renamed = _find_audio_cache_file_by_original_name(local_path.name)
+        if renamed is not None and renamed.exists():
+            return renamed
+    return None
+
+
 def _resolve_audio_cache_path(
     video_id: str,
     title: str | None = None,
@@ -204,12 +238,7 @@ def resolve_audio_file_for_library_item(video_id: str) -> Optional[Path]:
         if not raw_url:
             return None
         if raw_url.startswith("file://"):
-            parsed = urlparse(raw_url)
-            path_str = unquote(parsed.path or "")
-            if re.match(r"^/[A-Za-z]:", path_str):
-                path_str = path_str[1:]
-            local_path = Path(path_str)
-            return local_path if local_path.exists() else None
+            return _resolve_local_file_url(raw_url)
         candidate = Path(raw_url)
         return candidate if candidate.exists() else None
     return None
